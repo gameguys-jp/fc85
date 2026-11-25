@@ -69,7 +69,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **ホスト**：日立 HD68000-8（8 MHz）、16-bitホストバス、big-endian。8-bit ICは上位バイトレーン、16-bitレジスタは偶数番地。未割当・不正幅アクセスは有限時間でバスエラー。
 - **異種IC**：HD63484-8 ACRTC（描画、2CLK 5.369318 MHz、VRAM 128 KiB）、TMS32010 DSP（プログラムRAM）、ES5503 DOC（子基板、8 MHz、波形RAM 64 KiB。子基板がないときは本体のDACでDSP合成の音を出す、DR-019）、MSM5205 ADPCM、HD6850 ACIA（MIDI）、CD22101系アナログマトリクス、漢字ROM 32 KiB（JIS78基準、JIS83は差分ROMイメージ）。
-- **クロック**：発振源は 16 MHz、21.47727 MHz、20 MHz、384 kHz の4つ（DR-003）。
+- **クロック**：発振源は 16 MHz、21.47727 MHz、20 MHz、384 kHz の4つ（DR-003）。DOC・MSM5205・音声クロック・DSP・映像系には外部クロックのジャンパがあり、ピッチの改造ができる。16 MHz にはない（DR-035）。評価用のテストピンとソケットは仕様書 §11 の「ベンド点」（DR-034）。
 - **各ICのローカルメモリは共有RAMではない**。CPUからVRAMへはACRTC経由、DSP内部RAMは直接アクセス不可。IC間のデータ移動は Data Fabric（独自DMA／FIFO、ポートID 0〜15）を通る。ポートごとに方向・幅・アクセス条件が異なる。
 - **Data Fabricの不変条件**：ゼロ時間の循環接続は禁止（フィードバックはRAM／FIFO経由）。Data Fabricの側はFIFOのfull/emptyで待機し、データを生成しない。待てないIC（DSP、MSM5205）の側は、ICごとのポートアダプタが空・満杯のときの動作を決める（DR-017）。DMA異常がホスト全体の停止に波及しない。
 - **通常モードとBendモードを分ける**。ベンディングは「実ICの外部ピンで可能」「専用グルーロジックで可能」「エミュレータ限定の内部介入」を区別し、仕様外の動作は近似と明記する（§11）。
