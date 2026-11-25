@@ -74,6 +74,13 @@ pub struct BusLog {
     /// 最後のバスエラーの番地と、書込みだったか。
     pub last_bus_error: Option<(u32, bool)>,
     pub iacks: u64,
+    /// DOC の窓の規約（DR-030）に反した命令の数と、最後の番地。1 命令の中で同じ番地を読んで
+    /// 書いた（読み書き一体）か、窓に 2 回以上触った（MOVEM、MOVEP など）ときに数える。
+    /// 通常モードの警告で、動作は変えない。
+    #[serde(default)]
+    pub doc_rule_warnings: u64,
+    #[serde(default)]
+    pub last_doc_rule: Option<u32>,
 }
 
 /// 68000 の外側：基板とメモリと I/O。`Bus` を実装する。
@@ -95,6 +102,9 @@ pub struct System {
     pub temporal_sync: bool,
     vblank_prev: bool,
     pub log: BusLog,
+    /// 今の命令の中の DOC の窓へのアクセス（番地、書込みか）。命令ごとに `Console` が見て消す。
+    #[serde(skip)]
+    doc_trace: Vec<(u32, bool)>,
     /// 音声の出力（L、R）。ホストが取り出す。保存には入れない。
     #[serde(skip)]
     pub audio_out: Vec<(i16, i16)>,
@@ -184,6 +194,7 @@ impl System {
             temporal_sync: false,
             vblank_prev: false,
             log: BusLog::default(),
+            doc_trace: Vec::new(),
             audio_out: Vec::new(),
             next_sample: 0,
             sample_period: fc85_core::time::UNITS_PER_SECOND / Time::from(AUDIO_RATE),
@@ -405,6 +416,9 @@ impl System {
     /// DOC のブリッジ（DR-051）。DTACK まで進め、時間切れならバスエラー。
     fn doc(&mut self, at: u64, addr: u32, size: Size, write: Option<u16>) -> Access {
         self.sync(at);
+        if self.doc_trace.len() < 8 {
+            self.doc_trace.push((addr, write.is_some()));
+        }
         let s0 = at * PERIOD_8M;
         let (uds, lds) = lanes(addr, size);
         let w = write.map(|v| match size {
@@ -851,20 +865,42 @@ impl Console {
     pub fn run_until(&mut self, clock: u64) {
         while self.cpu.clock < clock {
             self.cpu.step(&mut self.sys);
+            if !self.sys.doc_trace.is_empty() {
+                self.check_doc_rule();
+            }
         }
         self.sys.sync(clock);
     }
 
-    /// 次のフレーム（ACRTC のラスタが 0 に戻る）まで進める。表示が止まっていれば 1/60 秒。
+    /// DR-030 の規約を 1 命令ごとに確かめる。TST・BTST・CMP で 0xE0・0xE2 を読む違反は、
+    /// 1 回の読みなので見分けない [V]。
+    fn check_doc_rule(&mut self) {
+        let t = std::mem::take(&mut self.sys.doc_trace);
+        let rmw = t
+            .iter()
+            .any(|&(a, w)| !w && t.iter().any(|&(b, w2)| w2 && a == b));
+        if rmw || t.len() > 1 {
+            self.sys.log.doc_rule_warnings += 1;
+            self.sys.log.last_doc_rule = Some(t[0].0);
+        }
+    }
+
+    /// 次のフレーム（ACRTC のラスタが 0 に戻る）まで進める。上限は 2 フレーム分。
+    /// 表示が止まっていれば約 1/60 秒。
     pub fn run_frame(&mut self) {
+        const FRAME: u64 = 8_000_000 / 60;
         let f = self.sys.ports.acrtc.video.frames;
-        let limit = self.cpu.clock + 8_000_000 / 30;
-        while self.sys.ports.acrtc.video.frames == f && self.cpu.clock < limit {
-            let target = self.cpu.clock + 64;
-            self.run_until(target);
-            if !self.sys.ports.acrtc.acrtc.display_running() && self.cpu.clock >= limit / 2 {
+        let start = self.cpu.clock;
+        while self.sys.ports.acrtc.video.frames == f {
+            let limit = if self.sys.ports.acrtc.acrtc.display_running() {
+                start + 2 * FRAME
+            } else {
+                start + FRAME
+            };
+            if self.cpu.clock >= limit {
                 break;
             }
+            self.run_until((self.cpu.clock + 64).min(limit));
         }
     }
 }
