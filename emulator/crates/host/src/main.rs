@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
 use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
+use fc85_chips::hd68000::RunState;
 use fc85_core::time::{Time, UNITS_PER_SECOND};
 
 /// 窓に出す範囲（ドット、ライン）。案B の表示（64〜319 ドット、43〜234 ライン）を真ん中に置く。
@@ -366,8 +367,16 @@ fn trace(c: &mut Console, n: u64) {
 }
 
 /// バスの警告が増えたら出す（ホストの表示。仮想機は変えない）。
-fn report(c: &Console, seen: &mut (u64, u64)) {
+fn report(c: &Console, seen: &mut (u64, u64, bool)) {
     let l = &c.sys.log;
+    let halted = c.cpu.state == RunState::Halted;
+    if halted && !seen.2 {
+        eprintln!(
+            "68000 が止まった（二重バスフォルト。PC {:06X}）。リセットまで動かない",
+            c.cpu.pc
+        );
+    }
+    seen.2 = halted;
     if l.bus_errors != seen.0 {
         if let Some((addr, w)) = l.last_bus_error {
             eprintln!(
@@ -392,7 +401,7 @@ fn report(c: &Console, seen: &mut (u64, u64)) {
 fn main() {
     let a = parse_args();
     let mut c = build_console(&a);
-    let mut seen = (0, 0);
+    let mut seen = (0, 0, false);
     if a.trace > 0 {
         trace(&mut c, a.trace);
     }
