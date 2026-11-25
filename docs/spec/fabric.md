@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.6**  
+**v0.7**  
 2026年11月25日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)
 
 ## 01　前提と範囲
 
@@ -224,7 +224,7 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 | SEQ（20R8A） | 判断を登録する。DBCH の交互の切替え（HOLD の間は切り替えない）、動いている要素（INF）、CPU への許可 | GO、次の AOP、次のアクセス、HREQ、OPDN、TOUT、再設定の要求（ch0・1）、ERROR、HOLD | DBCH、INF、AOP（3）、アクセス（2）、HGNT |
 | AFC0・1（20L8A） | AOP と CPU の番地を、A ファイルの番地（4）、/WE、/CS、Cin、B ファイルの選択と番地（3）、SL・U12–U13 の出力の許可、PS・PD・U7–U8 の取込みの信号に直す | AOP、DBCH、HA6、HA3、HA2、R/W、q0・q1 | 15 本 |
 
-- 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。port 1 は、エミュレータの模型（ブリッジの同期化の時刻。[emulator.md](../impl/emulator.md) §03）で、DACK を出してから戻すまで 3 スロット、1 語は 6〜8 スロットになる（OI-051）。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
+- 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。port 1 は、エミュレータの模型（ブリッジの同期化の時刻。[emulator.md](../impl/emulator.md) §03）で、DACK を出してから戻すまで 3 スロット、1 語は 6〜8 スロットになる（OI-051）。DOC の port 2 は、P2A の模型（同期化した E の立下りを見て次の窓を取る）で 1 回のアクセスが 5〜9 スロット、Staging RAM からの書込みは 1 byte が 8 か 12 スロットになる（OI-054）。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
 - 優先は、CPU のアクセス、動いている要素の W、その COUNT の更新、再設定、新しい要素の順（DR-046 (2)）。
 
 ### チャネルの状態（CHS、STS）
@@ -251,7 +251,7 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 |---|---|---|
 | 0、1、9 | U45–U47（74LS245×3）：FD の上位・下位と、FD の下位を上位の線へ入れ替える 1 個。port 0 の 8-bit のアクセスの偶数番地（DR-046 (3)）と、port 9（文字 ROM は上位バイトレーン。仕様書 §05）は、上位の線を使う。PA の 16 本と、STB の要求・向き・バイトの信号 | A 基板：Staging RAM の調停、ACRTC のブリッジ、文字 ROM |
 | 1 | P1A（PAL16R4A-2）：ACRTC の DACK を出し、DONE を受けて CHS に渡す（DR-022）。DREQ は A 基板のブリッジで同期化したもの（DR-016） | ACRTC |
-| 2 | P2A（PAL16R4A-2）：DOC の E を 2 段で同期化し、窓を待つ（DR-035）。U48–U49（番地）、U50（データ）。DOC 子基板がなければ、FD を本体 DAC の FIFO（67401×4）に書く | DOC 子基板、本体 DAC の FIFO |
+| 2 | P2A（PAL16R4A-2）：DOC の E を 2 段で同期化し、窓を待つ（DR-035）。U48–U49（番地）、U50（データ）。読出しの値を保持するラッチは未定（OI-054）。DOC 子基板がなければ、FD を本体 DAC の FIFO（67401×4）に書く | DOC 子基板、本体 DAC の FIFO |
 | 3、5 | FIFO（67401×4、×2）の入力は FD に直結。SI は STB から | DSP、MSM5205 のアダプタ |
 | 4 | FIFO（67401×4）の出力を U51–U52（74LS244）で FD へ。67401 は出力を切れないため | DSP のアダプタ |
 | 6、7 | U56（74LS245）で Temporal RAM のデータとつなぐ。ポインタは Temporal RAM のカウンタ | Temporal RAM |

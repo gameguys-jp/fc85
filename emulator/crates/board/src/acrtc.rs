@@ -24,7 +24,7 @@ use fc85_core::time::{Clock, PERIOD_2CLK, PERIOD_16M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 /// Fabric の出力の遅れ（20 ns）。
-const T_OUT: Time = 302;
+pub(crate) const T_OUT: Time = 302;
 /// tDAKS（40 ns）。
 const T_DAKS: Time = 605;
 /// tDRQD2（50 ns）。
@@ -34,7 +34,7 @@ const T_DDTZL: Time = 1058;
 /// tDND（50 ns）。
 const T_DND: Time = 756;
 /// 同期化の FF のセットアップ（10 ns）。
-const T_SETUP: Time = 151;
+pub(crate) const T_SETUP: Time = 151;
 
 /// ACRTC の VRAM：128 KiB（64K 語。HM4864A×16、仕様書 §05）。ACRTC の 20 bit の語番地のうち
 /// 下位 16 bit を使い、上は折り返す [V]。

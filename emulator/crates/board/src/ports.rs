@@ -14,13 +14,14 @@
 //! - 音声クロック（TRIGGER 3）と、DOC 子基板がないときの本体 DAC（port 2 の FIFO を読む）。`audio`。
 //! - ADPCM のアダプタ（port 5 の FIFO を MSM5205 へ。TRIGGER 5 の V̄C̄K̄）。`adpcm`。
 //! - DSP のアダプタ（port 3・4 の FIFO と TMS32010、プログラム RAM）。`dsp`。
+//! - DOC 子基板（`doc` が true のとき）：ES5503 と波形 RAM、port 2 のアダプタ P2A。`doc`（`DocBoard`）。
 //!
-//! まだないもの（`ready` は 0、アクセスは何もしない）：DOC 子基板の port 2、port 8（Capture RAM、[O]）、
-//! port 11〜15（拡張）。
+//! まだないもの（`ready` は 0、アクセスは何もしない）：port 8（Capture RAM、[O]）、port 11〜15（拡張）。
 
 use crate::acrtc::AcrtcBridge;
 use crate::adpcm::AdpcmPort;
 use crate::audio::{AudioClock, MainDac};
+use crate::doc::DocBoard;
 use crate::dsp::DspPort;
 use crate::fabric::{Access, Dir, PortReply, Ports};
 use crate::fifo::Fifo;
@@ -97,6 +98,8 @@ pub struct FabricPorts {
     pub adpcm_port: AdpcmPort,
     /// DSP のアダプタ（port 3・4 の FIFO の向こう）。
     pub dsp: DspPort,
+    /// DOC 子基板（`doc` が true のとき port 2）。
+    pub doc_board: DocBoard,
     /// 次のスロットの頭の時刻。
     now: Time,
 }
@@ -120,6 +123,7 @@ impl FabricPorts {
             main_dac: MainDac::new(),
             adpcm_port: AdpcmPort::new(),
             dsp: DspPort::new(),
+            doc_board: DocBoard::new(),
             now: 0,
         }
     }
@@ -169,6 +173,10 @@ impl Ports for FabricPorts {
         self.adpcm_port.run(end, &mut self.adpcm);
         self.dsp
             .run(end, &mut self.dsp_in, &mut self.dsp_out, &self.audio);
+        if self.doc {
+            self.doc_board
+                .run_slot(t0, starting.filter(|a| a.port == 2));
+        }
         self.now = end;
     }
 
@@ -199,7 +207,8 @@ impl Ports for FabricPorts {
                 self.staging_write(a.addr, a.word, a.data);
                 0
             }
-            (2, _) if self.doc => return PortReply::Wait,
+            // DOC の port 2 は窓まで延びる（ラッチは `run_slot` でしている）。
+            (2, _) if self.doc => return self.doc_board.port_reply(),
             (2, Dir::Write) => {
                 self.dac.shift_in(a.data);
                 0
@@ -228,16 +237,18 @@ impl Ports for FabricPorts {
     }
 
     fn continue_access(&mut self, port: u8) -> PortReply {
-        if port == 1 {
-            self.acrtc.port_reply()
-        } else {
-            PortReply::Wait
+        match port {
+            1 => self.acrtc.port_reply(),
+            2 if self.doc => self.doc_board.port_reply(),
+            _ => PortReply::Wait,
         }
     }
 
     fn abort_access(&mut self, port: u8) {
-        if port == 1 {
-            self.acrtc.abort();
+        match port {
+            1 => self.acrtc.abort(),
+            2 if self.doc => self.doc_board.abort(),
+            _ => {}
         }
     }
 
