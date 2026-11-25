@@ -70,3 +70,28 @@ fn the_boot_rom_runs_with_the_doc_board() {
 fn the_boot_rom_runs_without_the_doc_board() {
     check(false);
 }
+
+#[test]
+fn a_snapshot_of_the_running_bios_resumes_identically() {
+    // 動いている BIOS（DOC あり）を保存して戻し、同じ入力で 10 フレーム進めると、元と同じ状態になる
+    let Some(mut a) = boot(true) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    for _ in 0..10 {
+        a.run_frame();
+    }
+    a.sys.audio_out.clear();
+    let json = serde_json::to_string(&a).unwrap();
+    let mut b: Console = serde_json::from_str(&json).unwrap();
+    for i in 0..10 {
+        let pad = if i == 3 { 0x0010 } else { 0 };
+        a.sys.set_ports(pad, 0);
+        b.sys.set_ports(pad, 0);
+        a.run_frame();
+        b.run_frame();
+    }
+    assert_eq!(a.cpu, b.cpu);
+    assert_eq!(a.sys.audio_out, b.sys.audio_out);
+    assert!(a == b, "保存して戻した後の状態が違う");
+}
