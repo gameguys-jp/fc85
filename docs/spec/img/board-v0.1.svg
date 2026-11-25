@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 1000" width="880" height="1000" font-family="'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', sans-serif">
+<rect x="0" y="0" width="880" height="1000" fill="#ffffff"/>
+<rect x="20" y="60" width="400" height="280" rx="0" fill="none" stroke="#111" stroke-width="1.6"/>
+<text x="20" y="44.0" font-size="11" text-anchor="start" font-weight="bold" fill="#222">最終試作機　基板 A（下段）400×280 mm</text>
+<text x="420" y="44.0" font-size="7.5" text-anchor="end" font-weight="normal" fill="#666">上辺＝背面　下辺＝前面</text>
+<rect x="20" y="60" width="150" height="185" rx="0" fill="#d3ecd0" stroke="#555" stroke-width="0.6"/>
+<text x="95.0" y="144.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">映像</text>
+<text x="95.0" y="155.7" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">ACRTC・VRAM 16・パレット</text>
+<text x="95.0" y="166.4" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">エンコーダ・RF</text>
+<rect x="170" y="60" width="110" height="80" rx="0" fill="#fbe1c4" stroke="#555" stroke-width="0.6"/>
+<text x="225.0" y="97.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">アナログ音声</text>
+<text x="225.0" y="108.5" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">CD22101・ミキサ</text>
+<rect x="280" y="60" width="140" height="75" rx="0" fill="#e4e4e4" stroke="#555" stroke-width="0.6"/>
+<text x="350.0" y="95.2" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">入出力</text>
+<text x="350.0" y="106.0" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">ACIA・MIDI・ADC・入力</text>
+<rect x="170" y="140" width="250" height="100" rx="0" fill="#cfe0f5" stroke="#555" stroke-width="0.6"/>
+<text x="295.0" y="187.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">CPU・Main RAM 16・Boot ROM 2</text>
+<text x="295.0" y="198.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">デコード・割込み・バスエラー</text>
+<rect x="170" y="240" width="150" height="100" rx="0" fill="#cfe0f5" stroke="#555" stroke-width="0.6"/>
+<text x="245.0" y="287.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Staging RAM 8</text>
+<text x="245.0" y="298.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">文字 ROM・調停</text>
+<rect x="20" y="245" width="150" height="95" rx="0" fill="#f6f6f6" stroke="#555" stroke-width="0.6"/>
+<text x="95.0" y="290.2" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">カートリッジ</text>
+<text x="95.0" y="301.1" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">（差す向きは未定）</text>
+<rect x="320" y="240" width="100" height="100" rx="0" fill="#f6f6f6" stroke="#555" stroke-width="0.6"/>
+<text x="370.0" y="288.0" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">16 MHz・リセット</text>
+<text x="370.0" y="297.6" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">電源の分配</text>
+<rect x="32" y="60" width="14" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="39.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">映像OUT</text>
+<rect x="58" y="60" width="34" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="75.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">RF OUT</text>
+<rect x="180" y="60" width="36" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="198.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">音声OUT</text>
+<rect x="224" y="60" width="36" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="242.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">音声IN（拡張）</text>
+<rect x="298" y="60" width="30" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="313.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">MIDI IN</text>
+<rect x="338" y="60" width="30" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="353.0" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">MIDI OUT</text>
+<rect x="378" y="60" width="30" height="5" rx="0" fill="none" stroke="#222" stroke-width="0.5" stroke-dasharray="2,1.5"/>
+<text x="393" y="57.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">THRU候補</text>
+<rect x="50" y="328" width="100" height="8" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="100.0" y="344.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">カートリッジの接続</text>
+<rect x="185" y="335" width="26" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="198.0" y="348.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<rect x="220" y="335" width="26" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="233.0" y="348.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<text x="216" y="350.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">コントローラ A・B</text>
+<rect x="20" y="255" width="5" height="75" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="17" y="292.5" font-size="6.5" text-anchor="end" font-weight="normal" fill="#222">拡張</text>
+<rect x="408" y="80" width="7" height="80" rx="0" fill="#fff" stroke="#555" stroke-width="0.6" stroke-dasharray="3,2"/>
+<rect x="408" y="180" width="7" height="80" rx="0" fill="#fff" stroke="#555" stroke-width="0.6" stroke-dasharray="3,2"/>
+<text x="404" y="168.0" font-size="6.5" text-anchor="end" font-weight="normal" fill="#222">B への接続</text>
+<rect x="28" y="90" width="60" height="40" rx="0" fill="none" stroke="#777" stroke-width="0.6" stroke-dasharray="3,2"/>
+<text x="58" y="109.1" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#555">映像入力基板</text>
+<text x="58" y="116.9" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#555">（拡張・差込み）</text>
+<rect x="140" y="72" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="143.5" y="87.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">映像CLK</text>
+<rect x="460" y="60" width="400" height="280" rx="0" fill="none" stroke="#111" stroke-width="1.6"/>
+<text x="460" y="44.0" font-size="11" text-anchor="start" font-weight="bold" fill="#222">最終試作機　基板 B（上段、A の約40 mm 上）</text>
+<text x="860" y="44.0" font-size="7.5" text-anchor="end" font-weight="normal" fill="#666">上辺＝背面　下辺＝前面</text>
+<rect x="460" y="60" width="200" height="128" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="560.0" y="121.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Data Fabric ch0</text>
+<text x="560.0" y="132.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TTL・PAL 約60</text>
+<rect x="660" y="60" width="200" height="128" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="760.0" y="121.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Data Fabric ch1</text>
+<text x="760.0" y="132.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TTL・PAL 約60</text>
+<rect x="460" y="188" width="125" height="152" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="522.5" y="256.3" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Data Fabric</text>
+<text x="522.5" y="267.1" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">共通部</text>
+<text x="522.5" y="277.9" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TTL 約30〜50</text>
+<rect x="585" y="188" width="75" height="152" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="622.5" y="261.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Temporal</text>
+<text x="622.5" y="272.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">RAM 8</text>
+<rect x="660" y="188" width="60" height="105" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="690.0" y="233.7" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">FIFO</text>
+<text x="690.0" y="243.3" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">67401</text>
+<text x="690.0" y="252.9" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">×14</text>
+<rect x="720" y="188" width="140" height="105" rx="0" fill="#fbe1c4" stroke="#555" stroke-width="0.6"/>
+<text x="790.0" y="243.7" font-size="9" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<text x="778" y="287.0" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">DSP（TMS32010・RAM 4）</text>
+<rect x="660" y="293" width="200" height="47" rx="0" fill="#fbe1c4" stroke="#555" stroke-width="0.6"/>
+<text x="785" y="320.0" font-size="8" text-anchor="middle" font-weight="normal" fill="#222">ADPCM・本体 DAC・音声クロック</text>
+<rect x="722" y="194" width="120" height="80" rx="0" fill="#fff7ee" stroke="#8a5a00" stroke-width="1.0" stroke-dasharray="5,3"/>
+<text x="782" y="228.9" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">DOC 子基板</text>
+<text x="782" y="239.1" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">120×80（B の上に載る）</text>
+<rect x="830" y="198" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="833.5" y="213.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">DOC</text>
+<rect x="846" y="274" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="849.5" y="289.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b"></text>
+<text x="843" y="290.0" font-size="6" text-anchor="end" font-weight="normal" fill="#c0392b">DSP</text>
+<rect x="667" y="300" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="670.5" y="315.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">ADPCM</text>
+<rect x="692" y="300" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="695.5" y="315.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">音声</text>
+<rect x="848" y="80" width="7" height="80" rx="0" fill="none" stroke="#555" stroke-width="0.6" stroke-dasharray="3,2"/>
+<rect x="848" y="180" width="7" height="80" rx="0" fill="none" stroke="#555" stroke-width="0.6" stroke-dasharray="3,2"/>
+<text x="844" y="168.0" font-size="6.5" text-anchor="end" font-weight="normal" fill="#555">A への接続（裏面）</text>
+<text x="20" y="398.0" font-size="11" text-anchor="start" font-weight="bold" fill="#222">別の基板と電源（試作機）</text>
+<rect x="20" y="410" width="150" height="100" rx="0" fill="#d3ecd0" stroke="#555" stroke-width="0.8"/>
+<text x="95" y="449.8" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">映像入力基板（拡張）</text>
+<text x="95" y="460.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">約150×100</text>
+<text x="95" y="470.2" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">TDC1048・−5.2 V</text>
+<rect x="190" y="410" width="200" height="110" rx="0" fill="#f6f6f6" stroke="#555" stroke-width="0.8"/>
+<text x="290" y="454.8" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">電源ユニット</text>
+<text x="290" y="465.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">60 W 級（+5 V 10 A、±12 V）</text>
+<text x="290" y="475.2" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">約200×110×50</text>
+<rect x="410" y="410" width="120" height="80" rx="0" fill="#fff7ee" stroke="#8a5a00" stroke-width="0.8"/>
+<text x="470" y="439.8" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">DOC 子基板</text>
+<text x="470" y="450.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">120×80</text>
+<text x="470" y="460.2" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">ES5503・波形RAM 8</text>
+<rect x="20" y="600" width="400" height="280" rx="0" fill="none" stroke="#111" stroke-width="1.6"/>
+<text x="20" y="584.0" font-size="11" text-anchor="start" font-weight="bold" fill="#222">量産計画　基板 1 枚（ゲートアレイ化）400×280 mm</text>
+<text x="420" y="584.0" font-size="7.5" text-anchor="end" font-weight="normal" fill="#666">上辺＝背面　下辺＝前面</text>
+<rect x="20" y="600" width="135" height="180" rx="0" fill="#d3ecd0" stroke="#555" stroke-width="0.6"/>
+<text x="87.5" y="682.4" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">映像</text>
+<text x="87.5" y="693.1" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">ACRTC・VRAM</text>
+<text x="87.5" y="704.0" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">パレット・エンコーダ</text>
+<rect x="155" y="600" width="155" height="200" rx="0" fill="#fbe1c4" stroke="#555" stroke-width="0.6"/>
+<text x="232.5" y="703.1" font-size="9" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<text x="232" y="764.8" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">音声</text>
+<text x="232" y="775.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">DSP・ADPCM・本体 DAC</text>
+<text x="232" y="785.2" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">アナログ</text>
+<rect x="170" y="640" width="120" height="80" rx="0" fill="#fff7ee" stroke="#8a5a00" stroke-width="1.0" stroke-dasharray="5,3"/>
+<text x="230" y="674.9" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">DOC 子基板</text>
+<text x="230" y="685.1" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">（上に載る）</text>
+<rect x="310" y="600" width="110" height="70" rx="0" fill="#e4e4e4" stroke="#555" stroke-width="0.6"/>
+<text x="365.0" y="632.8" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">入出力</text>
+<text x="365.0" y="643.5" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">ACIA・MIDI・ADC</text>
+<rect x="310" y="670" width="110" height="210" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="365.0" y="761.9" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Data Fabric</text>
+<text x="365.0" y="772.7" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">ゲートアレイ</text>
+<text x="365.0" y="783.5" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">FIFO</text>
+<text x="365.0" y="794.3" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Temporal RAM</text>
+<rect x="20" y="780" width="135" height="100" rx="0" fill="#cfe0f5" stroke="#555" stroke-width="0.6"/>
+<rect x="155" y="800" width="155" height="80" rx="0" fill="#cfe0f5" stroke="#555" stroke-width="0.6"/>
+<rect x="21" y="781" width="133" height="98" rx="0" fill="#cfe0f5" stroke="none" stroke-width="0"/>
+<text x="165" y="839.6" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">CPU・メモリ</text>
+<text x="165" y="850.4" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Staging・文字 ROM</text>
+<rect x="32" y="600" width="14" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="39.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">映像OUT</text>
+<rect x="58" y="600" width="34" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="75.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">RF OUT</text>
+<rect x="170" y="600" width="36" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="188.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">音声OUT</text>
+<rect x="216" y="600" width="36" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="234.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">音声IN（拡張）</text>
+<rect x="316" y="600" width="30" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="331.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">MIDI IN</text>
+<rect x="356" y="600" width="30" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="371.0" y="597.5" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">MIDI OUT</text>
+<rect x="40" y="868" width="100" height="8" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="90.0" y="884.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">カートリッジの接続</text>
+<rect x="320" y="875" width="26" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="333.0" y="888.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<rect x="355" y="875" width="26" height="5" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="368.0" y="888.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222"></text>
+<text x="351" y="890.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">コントローラ A・B</text>
+<rect x="20" y="795" width="5" height="75" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="17" y="832.5" font-size="6.5" text-anchor="end" font-weight="normal" fill="#222">拡張</text>
+<rect x="130" y="612" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="133.5" y="627.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">映像CLK</text>
+<rect x="278" y="644" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="281.5" y="659.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">DOC</text>
+<rect x="165" y="740" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="168.5" y="755.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">DSP</text>
+<rect x="205" y="740" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="208.5" y="755.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">ADPCM</text>
+<rect x="245" y="740" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="248.5" y="755.0" font-size="6" text-anchor="middle" font-weight="normal" fill="#c0392b">音声</text>
+<rect x="460" y="600" width="160" height="100" rx="0" fill="#f6f6f6" stroke="#555" stroke-width="0.8"/>
+<text x="540" y="639.8" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">電源ユニット</text>
+<text x="540" y="650.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">30〜40 W 級</text>
+<text x="540" y="660.2" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">約160×100×45</text>
+<text x="650" y="596.0" font-size="10" text-anchor="start" font-weight="bold" fill="#222">凡例</text>
+<rect x="650" y="606" width="16" height="11" rx="0" fill="#cfe0f5" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="615.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">CPU・メモリ</text>
+<rect x="650" y="623" width="16" height="11" rx="0" fill="#d3ecd0" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="632.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">映像</text>
+<rect x="650" y="640" width="16" height="11" rx="0" fill="#fbe1c4" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="649.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">音声</text>
+<rect x="650" y="657" width="16" height="11" rx="0" fill="#e2d6f2" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="666.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">Data Fabric</text>
+<rect x="650" y="674" width="16" height="11" rx="0" fill="#e4e4e4" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="683.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">入出力</text>
+<rect x="650" y="691" width="16" height="11" rx="0" fill="#f6f6f6" stroke="#555" stroke-width="0.6"/>
+<text x="672" y="700.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">その他</text>
+<rect x="650" y="708" width="7" height="7" rx="0" fill="#fff" stroke="#c0392b" stroke-width="1.0"/>
+<text x="672" y="715.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">クロックのジャンパ（DR-035）</text>
+<rect x="650" y="724" width="16" height="9" rx="0" fill="#555" stroke="#222" stroke-width="0.5"/>
+<text x="672" y="732.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">端子・コネクタ</text>
+<rect x="650" y="740" width="16" height="10" rx="0" fill="none" stroke="#555" stroke-width="0.8" stroke-dasharray="3,2"/>
+<text x="672" y="749.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#222">上に載る基板・裏面の接続</text>
+<line x1="650" y1="772" x2="750" y2="772" stroke="#222" stroke-width="1.2"/>
+<line x1="650" y1="768" x2="650" y2="776" stroke="#222" stroke-width="1"/>
+<line x1="700" y1="768" x2="700" y2="776" stroke="#222" stroke-width="1"/>
+<line x1="750" y1="768" x2="750" y2="776" stroke="#222" stroke-width="1"/>
+<text x="700" y="788.0" font-size="8.5" text-anchor="middle" font-weight="normal" fill="#222">100 mm</text>
+<text x="20" y="950.0" font-size="9" text-anchor="start" font-weight="normal" fill="#444">寸法は v0.1 の見積り。ブロックの面積は部品の数から推定し、配置は案 [P]。端子の位置は基板側の案で、筐体はまだ決めていない。</text>
+<text x="20" y="966.0" font-size="9" text-anchor="start" font-weight="normal" fill="#444">数字は部品の個数（例：VRAM 16 は 16 個）。詳細は board.md。</text>
+</svg>
