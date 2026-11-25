@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - fc85は、Fictional Machinesの第一世代（1985年）架空コンソールの実装プロジェクト。
 - 現時点ではコードはなく、仕様書のみ。ビルド・テスト・lintのコマンドはまだない。実装を始めたらこのファイルに追記する。
 - このリポジトリの外（親ディレクトリ）に関連文書がある。
-  - `../Fictional_Machines_v0.6.md`：全体の基本構想・分類体系（最上位文書。分類記号の定義はここ）
+  - `../fictional-machines/Fictional_Machines.md`：全体の基本構想・分類体系（最上位文書。分類記号の定義はここ。公開版は https://github.com/gameguys-jp/fictional-machines ）
   - `../Fictional_Console_Hardware_v0.1.md`：旧版（1989〜93年想定）。第二世代の資産。**fc85へICやクロックを移植しない**。2つの仕様はIC構成もアドレスマップも異なる（例：Data Fabricは旧版がDMA 4ch、1985年版は初期2ch実装＋4ch分の窓を予約）
 
 ## リポジトリ
