@@ -572,3 +572,4 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | CPU で起動 | `the_cpu_boots_from_rom_and_counts_vblanks` | リセットで SSP と PC を読み、ACRTC の案B を設定し、VBlank ごとにレベル 6 のオートベクタで数える（数はフレームの数 ±1、IACK と同じ） | 合格 |
 | CPU のバスエラー | `an_unassigned_address_takes_the_bus_error_vector` | 割り当てのない番地でベクタ 2 へ。7 語のフレーム | 合格 |
 | DR-030 の警告 | `doc_read_modify_write_is_warned` | CLR.B で DOC の窓を読んで書くと 1 回数え、MOVE.B の書込みは数えない | 合格 |
+| 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定） |
