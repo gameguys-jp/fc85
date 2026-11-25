@@ -11,6 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `../Fictional_Machines_v0.6.md`：全体の基本構想・分類体系（最上位文書。分類記号の定義はここ）
   - `../Fictional_Console_Hardware_v0.1.md`：旧版（1989〜93年想定）。第二世代の資産。**fc85へICやクロックを移植しない**。2つの仕様はIC構成もアドレスマップも異なる（例：Data Fabricは旧版がDMA 4ch、1985年版は初期2ch実装＋4ch分の窓を予約）
 
+## リポジトリ
+
+- GitHub の公開リポジトリ `gameguys-jp/fc85`。コミットの作成者は gameguys-jp（noreply アドレス）で、このリポジトリのローカル設定に入っている。
+- push には、このリポジトリのローカル設定にある資格情報ヘルパーを使う。gh のキーリングから gameguys-jp のトークンを取り出すので、gh の有効なアカウントは切り替えない。
+- 公開されるので、ローカルの絶対パス、ユーザー名、メールアドレスなどの個人情報を書かない。リポジトリ外の作業用一時フォルダは `<scratchpad>` と書く。
+- 資料のPDFはリポジトリに入れない。台帳には書誌とURLを書く。
+
 ## 正となる仕様
 
 `docs/Fictional_Console_1985_Hardware_v0.1.md`（以下「仕様書」）。
