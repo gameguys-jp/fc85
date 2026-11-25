@@ -1,0 +1,783 @@
+//! HD63484 ACRTC の単体試験（仕様書 §12 段階 1：描画・COPY・FIFO）。
+//! 期待値は台帳 `docs/parts/HD63484.md` の追補 2（U85 の記述と実行例）から取る。「(n)」は追補 2 の節。
+
+use fc85_chips::hd63484::{Hd63484, SR_ARD, SR_CED, SR_CER, SR_RFF, SR_RFR, SR_WFE, SR_WFR, Vram};
+
+// ---- コマンド（(9) の表、U85 p.173） ----
+
+const ORG: u16 = 0x0400;
+const WPR: u16 = 0x0800;
+const RPR: u16 = 0x0C00;
+const WPTN: u16 = 0x1800;
+const RPTN: u16 = 0x1C00;
+const DRD: u16 = 0x2400;
+const DWT: u16 = 0x2800;
+const DMOD: u16 = 0x2C00;
+const RD: u16 = 0x4400;
+const WT: u16 = 0x4800;
+const MOD: u16 = 0x4C00;
+const CLR: u16 = 0x5800;
+const SCLR: u16 = 0x5C00;
+const CPY: u16 = 0x6000;
+const AMOVE: u16 = 0x8000;
+const RMOVE: u16 = 0x8400;
+const ALINE: u16 = 0x8800;
+const ARCT: u16 = 0x9000;
+const APLL: u16 = 0x9800;
+const RPLL: u16 = 0x9C00;
+const APLG: u16 = 0xA000;
+const AFRCT: u16 = 0xC000;
+const RFRCT: u16 = 0xC400;
+const DOT: u16 = 0xCC00;
+const AGCPY: u16 = 0xE000;
+const RGCPY: u16 = 0xF000;
+
+// 描画パラメータレジスタの番号（(2)）
+const CL0: u16 = 0x00;
+const CL1: u16 = 0x01;
+const CCMP: u16 = 0x02;
+const MASK: u16 = 0x04;
+const PRC0: u16 = 0x05;
+const PRC2: u16 = 0x07;
+const XMIN: u16 = 0x08;
+const RWPH: u16 = 0x0C;
+const RWPL: u16 = 0x0D;
+
+// コマンド語の下位 8 bit（AREA、COL、OPM）
+const COL01: u16 = 0x08;
+const COL10: u16 = 0x10;
+const COL11: u16 = 0x18;
+
+fn neg(v: i16) -> u16 {
+    v as u16
+}
+
+/// 1 M 語のフレームバッファ。
+struct Mem(Vec<u16>);
+
+impl Vram for Mem {
+    fn read(&mut self, addr: u32) -> u16 {
+        self.0[addr as usize]
+    }
+    fn write(&mut self, addr: u32, data: u16) {
+        self.0[addr as usize] = data;
+    }
+}
+
+struct Rig {
+    a: Hd63484,
+    m: Mem,
+    mw: u32,
+    org: u32,
+}
+
+impl Rig {
+    /// 4 bit/画素、画面 0 の MW、STR＝1。
+    fn new(mw: u16) -> Rig {
+        let mut r = Rig {
+            a: Hd63484::new(),
+            m: Mem(vec![0; 1 << 20]),
+            mw: u32::from(mw),
+            org: 0,
+        };
+        r.reg(0x02, 0x0200); // CCR：ABT＝0、GBM＝010（4 bit/画素）
+        r.reg(0xC2, mw); // MWR0（上画面）
+        r.reg(0x04, 0xC000); // OMR：M/S＝1、STR＝1
+        r
+    }
+
+    /// 原点を語 `org` の画素 0 に置いた描画用の構成。
+    fn drawing(mw: u16, org: u32) -> Rig {
+        let mut r = Rig::new(mw);
+        r.run(&[ORG, (org >> 12) as u16, ((org & 0xFFF) << 4) as u16]);
+        r.org = org;
+        r
+    }
+
+    fn reg(&mut self, ar: u16, v: u16) {
+        self.a.write(false, ar);
+        self.a.write(true, v);
+    }
+
+    /// 書込み FIFO に書く。満杯なら空くまで進める。
+    fn put(&mut self, words: &[u16]) {
+        self.a.write(false, 0);
+        for &w in words {
+            while self.a.status() & SR_WFR == 0 {
+                self.a.tick(&mut self.m);
+            }
+            self.a.write(true, w);
+        }
+    }
+
+    fn finish(&mut self) {
+        for _ in 0..10_000_000 {
+            if self.a.idle() {
+                return;
+            }
+            self.a.tick(&mut self.m);
+        }
+        panic!("コマンドが終わらない");
+    }
+
+    /// コマンドを書き、終わるまで進めて、かかった 2CLK の数を返す。
+    fn run(&mut self, words: &[u16]) -> u64 {
+        let start = self.a.cycles();
+        self.put(words);
+        self.finish();
+        self.a.cycles() - start
+    }
+
+    fn wpr(&mut self, rn: u16, v: u16) {
+        self.run(&[WPR | rn, v]);
+    }
+
+    fn set_rwp(&mut self, dn: u16, addr: u32) {
+        self.wpr(RWPH, (dn << 14) | (addr >> 12) as u16);
+        self.wpr(RWPL, ((addr & 0xFFF) << 4) as u16);
+    }
+
+    fn fifo(&mut self) -> u16 {
+        self.a.write(false, 0);
+        self.a.read(true)
+    }
+
+    /// 論理座標の画素（原点は語 `org` の画素 0、4 bit/画素）。
+    fn pix(&self, x: i32, y: i32) -> u16 {
+        let addr = self.org as i64 + i64::from(x.div_euclid(4)) - i64::from(y) * i64::from(self.mw);
+        (self.m.0[addr as usize] >> (x.rem_euclid(4) * 4)) & 0xF
+    }
+
+    fn set_pix(&mut self, x: i32, y: i32, v: u16) {
+        let addr = (self.org as i64 + i64::from(x.div_euclid(4))
+            - i64::from(y) * i64::from(self.mw)) as usize;
+        let sh = x.rem_euclid(4) * 4;
+        self.m.0[addr] = (self.m.0[addr] & !(0xF << sh)) | (v << sh);
+    }
+
+    /// 0 でない画素の座標を数える。
+    fn lit(&self, xs: std::ops::RangeInclusive<i32>, ys: std::ops::RangeInclusive<i32>) -> usize {
+        ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+            .filter(|&(x, y)| self.pix(x, y) != 0)
+            .count()
+    }
+}
+
+// ---- ホストとのやり取り（(1)） ----
+
+#[test]
+fn reset_state() {
+    let mut a = Hd63484::new();
+    assert_eq!(a.status(), SR_CED | SR_WFR | SR_WFE, "RES の後は $23");
+    assert_eq!(a.read(false), 0xFF23);
+    a.write(false, 0x02);
+    assert_eq!(a.read(true), 0x8000, "CCR は ABT＝1");
+}
+
+#[test]
+fn address_register_increments_only_from_r80() {
+    let mut r = Rig::new(0x10);
+    r.a.write(false, 0x82);
+    for v in [0xAA0D, 0x127F, 0x0106] {
+        r.a.write(true, v);
+    }
+    r.a.write(false, 0x82);
+    let back: Vec<u16> = (0..3).map(|_| r.a.read(true)).collect();
+    assert_eq!(back, [0xAA0D, 0x127F, 0x0106]);
+    // r00〜r7F では進まない
+    r.a.write(false, 0x06);
+    r.a.write(true, 0x1234);
+    r.a.write(true, 0x5678);
+    assert_eq!(r.a.read(true), 0x5678);
+    assert_eq!(r.a.read(true), 0x5678);
+}
+
+#[test]
+fn fifo_flags_follow_the_contents() {
+    let mut r = Rig::new(0x10);
+    r.reg(0x04, 0x8000); // STR＝0：コマンドを実行しない
+    r.a.write(false, 0);
+    r.a.write(true, WPR);
+    assert_eq!(r.a.status(), SR_WFR, "書込みで WFE と CED が 0");
+    for _ in 0..7 {
+        r.a.write(true, 0);
+    }
+    assert_eq!(r.a.status(), 0, "8 語で WFR も 0");
+    r.a.write(true, 0);
+    assert_eq!(r.a.error_counts().0, 1, "満杯の FIFO に書いた");
+}
+
+#[test]
+fn abort_clears_the_fifos_and_sets_sr_23() {
+    let mut r = Rig::new(0x10);
+    r.reg(0x04, 0x8000);
+    r.put(&[WPR | CL0, 0x1234, RPR]);
+    r.reg(0x02, 0x8200);
+    assert_eq!(r.a.status(), 0x23);
+    r.reg(0x02, 0x0200);
+    r.reg(0x04, 0xC000);
+    r.finish();
+    assert_eq!(r.a.param(0), 0, "打ち切ったコマンドは実行しない");
+}
+
+#[test]
+fn str_zero_and_pause_hold_the_command() {
+    let mut r = Rig::new(0x10);
+    r.reg(0x04, 0x8000);
+    r.put(&[WPR | CL0, 0x1234]);
+    for _ in 0..50 {
+        r.a.tick(&mut r.m);
+    }
+    assert_eq!(r.a.param(0), 0, "STR＝0 では描画も止まる（U85 p.70）");
+    r.reg(0x02, 0x4200); // PSE＝1
+    r.reg(0x04, 0xC000);
+    for _ in 0..50 {
+        r.a.tick(&mut r.m);
+    }
+    assert_eq!(r.a.param(0), 0, "PSE＝1 の間は止まる（U85 p.66）");
+    r.reg(0x02, 0x0200);
+    r.finish();
+    assert_eq!(r.a.param(0), 0x1234);
+}
+
+#[test]
+fn undefined_command_sets_cer_until_abort() {
+    let mut r = Rig::new(0x10);
+    r.reg(0x02, 0x0280); // CRE＝1
+    r.put(&[0x0000, WPR | CL0, 0x1234]);
+    for _ in 0..50 {
+        r.a.tick(&mut r.m);
+    }
+    assert_eq!(r.a.status() & SR_CER, SR_CER);
+    assert!(r.a.irq());
+    assert_eq!(r.a.param(0), 0, "CER の後は実行しない [V]");
+    r.reg(0x02, 0x8200);
+    assert_eq!(r.a.status(), 0x23, "CER は ABT で 0");
+    assert!(!r.a.irq());
+}
+
+#[test]
+fn command_end_interrupt() {
+    let mut r = Rig::new(0x10);
+    r.reg(0x02, 0x0220); // CEE＝1
+    assert!(r.a.irq(), "RES の後は CED＝1");
+    r.put(&[WPR | CL0, 0x1234]);
+    assert!(!r.a.irq(), "コマンドを書くと CED＝0");
+    r.finish();
+    assert!(r.a.irq());
+}
+
+// ---- レジスタのコマンド（(2)、(4)） ----
+
+#[test]
+fn wpr_and_rpr_take_6_cycles() {
+    // U85 p.178、p.180 の例：CL1 に $1111
+    let mut r = Rig::new(0x10);
+    assert_eq!(r.run(&[WPR | CL1, 0x1111]), 6);
+    assert_eq!(r.run(&[RPR | CL1]), 6);
+    assert_eq!(r.a.status() & SR_RFR, SR_RFR);
+    assert_eq!(r.fifo(), 0x1111);
+    assert_eq!(r.a.status() & SR_RFR, 0);
+}
+
+#[test]
+fn wptn_and_rptn_example() {
+    // U85 p.182、p.184 の例：番地 $B から $2314、$5713
+    let mut r = Rig::new(0x10);
+    assert_eq!(r.run(&[WPTN | 0xB, 2, 0x2314, 0x5713]), 4 * 2 + 8);
+    assert_eq!((r.a.pattern(11), r.a.pattern(12)), (0x2314, 0x5713));
+    assert_eq!(r.run(&[RPTN | 0xB, 2]), 4 * 2 + 10);
+    assert_eq!((r.fifo(), r.fifo()), (0x2314, 0x5713));
+}
+
+#[test]
+fn read_fifo_full_makes_the_command_wait() {
+    let mut r = Rig::new(0x10);
+    r.wpr(CL0, 0x0A0A);
+    for _ in 0..8 {
+        r.run(&[RPR | CL0]);
+    }
+    assert_eq!(r.a.status() & SR_RFF, SR_RFF);
+    r.put(&[RPR | CL0]);
+    for _ in 0..100 {
+        r.a.tick(&mut r.m);
+    }
+    assert!(!r.a.idle(), "読出し FIFO が空くまで待つ");
+    r.fifo();
+    r.finish();
+    let rest: Vec<u16> = (0..8).map(|_| r.fifo()).collect();
+    assert_eq!(rest, [0x0A0A; 8]);
+}
+
+#[test]
+fn org_example_sets_the_origin_and_clears_cp() {
+    // U85 p.176 の例：語 $25 の bit 7–4（4 bit/画素、MW＝$10）
+    let mut r = Rig::new(0x10);
+    r.run(&[AMOVE, 5, 5]);
+    assert_eq!(r.run(&[ORG, 0x0000, 0x0254]), 8);
+    assert_eq!(r.a.cp(), (0, 0));
+    assert_eq!((r.a.param(0x10), r.a.param(0x11)), (0x0000, 0x0254));
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[DOT]);
+    assert_eq!(r.m.0[0x25], 0x00F0);
+    // 1 画素右は同じ語の bit 11–8、1 画素上は MW だけ前の語
+    r.run(&[AMOVE, 1, 1]);
+    assert_eq!((r.a.param(0x10), r.a.param(0x11)), (0x0000, 0x0158));
+}
+
+// ---- データ転送（(4)、(7)） ----
+
+#[test]
+fn rd_wt_mod_step_rwp() {
+    // U85 p.192 の例：上画面の番地 $56 の $5555
+    let mut r = Rig::new(0x10);
+    r.m.0[0x56] = 0x5555;
+    r.set_rwp(0, 0x56);
+    assert_eq!(r.run(&[RD]), 12);
+    assert_eq!(r.fifo(), 0x5555);
+    assert_eq!(r.a.rwp(), (0, 0x57));
+    assert_eq!(r.run(&[WT, 0x1234]), 8);
+    assert_eq!(r.m.0[0x57], 0x1234);
+    r.wpr(MASK, 0xF0F0);
+    r.m.0[0x58] = 0x2222;
+    assert_eq!(r.run(&[MOD | 1, 0x1111]), 8, "MM＝01（OR）");
+    assert_eq!(r.m.0[0x58], 0x3232, "MASK が 0 のビットは変えない");
+    assert_eq!(r.a.rwp(), (0, 0x59));
+}
+
+#[test]
+fn clr_example() {
+    // U85 p.203–204 の例：$52〜$56 の 5 語×7 行（行 5〜B）
+    let mut r = Rig::new(0x10);
+    r.set_rwp(0, 0x56);
+    let cycles = r.run(&[CLR, 0x1111, 0xFFFC, 0xFFFA]);
+    assert_eq!(cycles, (2 * 5 + 8) * 7 + 12);
+    for row in 0..16u32 {
+        for col in 0..16u32 {
+            let inside = (5..=0xB).contains(&row) && (2..=6).contains(&col);
+            let want = if inside { 0x1111 } else { 0 };
+            assert_eq!(
+                r.m.0[(row * 16 + col) as usize],
+                want,
+                "行 {row:X}、列 {col:X}"
+            );
+        }
+    }
+    // 終了後の RWP は最後の行の 1 つ先（図の位置。ラベルの $B6 との食い違いは [V]）
+    assert_eq!(r.a.rwp(), (0, 0xC6));
+}
+
+#[test]
+fn sclr_modifies_only_mask_bits() {
+    // U85 p.207 の例と同じ MASK＝$F0F0
+    let mut r = Rig::new(0x10);
+    r.wpr(MASK, 0xF0F0);
+    for a in 0x50..0x60 {
+        r.m.0[a] = 0x2222;
+    }
+    r.set_rwp(0, 0x50);
+    let cycles = r.run(&[SCLR | 3, 0xFFFF, 3, 0]);
+    assert_eq!(cycles, (4 * 4 + 6) + 12);
+    assert_eq!(
+        r.m.0[0x50..0x55],
+        [0xD2D2, 0xD2D2, 0xD2D2, 0xD2D2, 0x2222],
+        "EOR"
+    );
+    assert_eq!(r.a.rwp(), (0, 0x40), "AY＝0 の 1 行。+Y の向きへ 1 行先");
+}
+
+#[test]
+fn cpy_example_rotates_columns_into_rows() {
+    // U85 p.213–215 の例：Pss＝$89、RWP＝$B0、S＝1、DSD＝000、AX＝3、AY＝6
+    let (dark, light) = (0xEEEE, 0x1111);
+    let mut r = Rig::new(0x10);
+    for (a, v) in [
+        (0x48, dark),
+        (0x49, dark),
+        (0x4A, light),
+        (0x58, dark),
+        (0x59, dark),
+        (0x5A, light),
+        (0x5B, light),
+        (0x68, dark),
+        (0x69, dark),
+        (0x6A, light),
+    ] {
+        r.m.0[a] = v;
+    }
+    r.set_rwp(0, 0xB0);
+    let cycles = r.run(&[CPY | 0x0800, 0x0000, 0x0890, 3, 6]);
+    assert_eq!(cycles, (6 * 4 + 10) * 7 + 12);
+    assert_eq!(r.a.rwp(), (0, 0x70), "RWPe");
+    let row = |r: &Rig, base: usize| r.m.0[base..base + 7].to_vec();
+    assert_eq!(row(&r, 0xB0), [0, 0, dark, dark, dark, 0, 0]);
+    assert_eq!(row(&r, 0xA0), [0, 0, light, light, light, 0, 0]);
+    assert_eq!(row(&r, 0x90), [0, 0, 0, light, 0, 0, 0]);
+    assert_eq!(row(&r, 0x80), [0; 7]);
+    assert_eq!(r.m.0[0x59], dark, "転送元は変わらない");
+}
+
+#[test]
+fn dwt_program_transfer_and_rwpe() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    // AX＝1、AY＝−1：2 語×2 行、下へ
+    let cycles = r.run(&[DWT, 1, neg(-1), 0xA, 0xB, 0xC, 0xD]);
+    assert_eq!(cycles, (4 * 2 + 8) * 2 + 16 + 34);
+    assert_eq!(r.m.0[0x100..0x102], [0xA, 0xB]);
+    assert_eq!(r.m.0[0x140..0x142], [0xC, 0xD]);
+    assert_eq!(r.a.rwp(), (0, 0x180));
+}
+
+#[test]
+fn dmod_applies_mm_and_mask() {
+    let mut r = Rig::new(0x40);
+    r.wpr(MASK, 0x00FF);
+    r.m.0[0x200] = 0x1234;
+    r.m.0[0x1FF] = 0x5678;
+    r.set_rwp(0, 0x200);
+    // AX＝−1：左へ 2 語。MM＝10（AND）
+    r.run(&[DMOD | 2, neg(-1), 0, 0x0F0F, 0x0F0F]);
+    assert_eq!((r.m.0[0x200], r.m.0[0x1FF]), (0x1204, 0x5608));
+}
+
+#[test]
+fn drd_hangs_after_the_last_word_until_abort() {
+    let mut r = Rig::new(0x40);
+    r.m.0[0x300] = 0x1111;
+    r.m.0[0x301] = 0x2222;
+    r.set_rwp(0, 0x300);
+    r.put(&[DRD, 1, 0]);
+    for _ in 0..1000 {
+        r.a.tick(&mut r.m);
+    }
+    assert_eq!((r.fifo(), r.fifo()), (0x1111, 0x2222));
+    assert!(!r.a.idle(), "最後の語の後も待ち続ける（U85 p.128）");
+    assert_eq!(r.a.status() & SR_CED, 0);
+    r.reg(0x02, 0x8200);
+    r.reg(0x02, 0x0200);
+    assert_eq!(
+        r.run(&[WPR | CL0, 0x5A5A]),
+        6,
+        "ABT の後は次のコマンドを実行する"
+    );
+}
+
+#[test]
+fn parameters_arriving_late_add_wait_cycles() {
+    let mut r = Rig::new(0x10);
+    let start = r.a.cycles();
+    r.put(&[WPR | CL0]);
+    for _ in 0..10 {
+        r.a.tick(&mut r.m);
+    }
+    r.put(&[0x4321]);
+    r.finish();
+    // 10 サイクルのうち最初の 1 つはコマンド語の取り出しで、6 サイクルに含まれる。待ちは 9
+    assert_eq!(r.a.cycles() - start, 6 + 9);
+    assert_eq!(r.a.param(0), 0x4321);
+}
+
+// ---- 演算モードと色モード（(4)） ----
+
+#[test]
+fn operation_modes() {
+    // 語 $7654 の画素 1（値 5）に色データ 3 または 9 を描く
+    let cases = [
+        (0, 0x3333, 0x0000, 0x7634),
+        (1, 0x3333, 0x0000, 0x7674),
+        (2, 0x3333, 0x0000, 0x7614),
+        (3, 0x3333, 0x0000, 0x7664),
+        (4, 0x3333, 0x0050, 0x7634), // P＝CCMP：同じ位置の画素と比べる
+        (4, 0x3333, 0x5505, 0x7654),
+        (5, 0x3333, 0x0050, 0x7654),
+        (5, 0x3333, 0x5505, 0x7634),
+        (6, 0x3333, 0x0000, 0x7654), // P＜CL：5＜3 ではない
+        (6, 0x9999, 0x0000, 0x7694),
+        (7, 0x3333, 0x0000, 0x7634), // P＞CL：5＞3
+        (7, 0x9999, 0x0000, 0x7654),
+    ];
+    for (opm, color, ccmp, want) in cases {
+        let mut r = Rig::drawing(0x10, 0x100);
+        r.m.0[0x100] = 0x7654;
+        r.wpr(CL0, color);
+        r.wpr(CCMP, ccmp);
+        r.run(&[AMOVE, 1, 0]);
+        assert_eq!(r.run(&[DOT | opm]), 8);
+        assert_eq!(
+            r.m.0[0x100], want,
+            "OPM＝{opm:03b}、色 {color:04X}、CCMP {ccmp:04X}"
+        );
+    }
+}
+
+#[test]
+fn color_modes() {
+    let mut r = Rig::drawing(0x10, 0x100);
+    r.wpr(CL0, 0x2222);
+    r.wpr(CL1, 0x7777);
+    // パターンの点 (0, 0) が 1、(1, 0) が 0
+    r.run(&[WPTN, 1, 0x0001]);
+    r.wpr(PRC2, 0x0010); // PEX＝1
+    for (op, want) in [(0, [7, 2]), (COL01, [7, 0]), (COL10, [0, 2])] {
+        r.m.0[0x100] = 0;
+        r.run(&[ORG, 0, 0x1000]);
+        r.run(&[ALINE | op, 2, 0]);
+        assert_eq!([r.pix(0, 0), r.pix(1, 0)], want, "COL＝{:02b}", op >> 3);
+    }
+    // COL＝11：パターン RAM の語 4×PPY＋PPX を色データにする
+    r.run(&[WPTN | 5, 1, 0xABCD]);
+    r.wpr(PRC0, 0x1010); // PPY＝1、PPX＝1
+    r.run(&[ORG, 0, 0x1000]);
+    r.run(&[DOT | COL11]);
+    assert_eq!(r.pix(0, 0), 0xD);
+}
+
+// ---- 線と図形（(5)、(8)） ----
+
+#[test]
+fn aline_example() {
+    // U85 p.229 の例：CP＝(−13, −10) から (10, 2) へ
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, neg(-13), neg(-10)]);
+    assert_eq!(r.run(&[ALINE, 10, 2]), 4 * 23 + 18, "L＝23");
+    assert_eq!(r.a.cp(), (10, 2));
+    assert_eq!(r.lit(-20..=20, -20..=20), 23);
+    assert_eq!(r.pix(-13, -10), 0xF, "始点は描く");
+    assert_eq!(r.pix(10, 2), 0, "終点は描かない");
+    for x in -13..=9 {
+        assert_eq!(r.lit(x..=x, -10..=2), 1, "X ごとに 1 画素");
+    }
+}
+
+#[test]
+fn arct_example() {
+    // U85 p.233 の例：CP＝(6, −6)、対角 (−16, 10)
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 6, neg(-6)]);
+    assert_eq!(r.run(&[ARCT, neg(-16), 10]), 2 * 4 * (22 + 16) + 54);
+    assert_eq!(r.a.cp(), (6, -6));
+    assert_eq!(r.lit(-30..=30, -30..=30), 2 * (22 + 16));
+    for (x, y) in [(6, -6), (-16, -6), (-16, 10), (6, 10)] {
+        assert_eq!(r.pix(x, y), 0xF, "角 ({x}, {y})");
+    }
+}
+
+#[test]
+fn apll_example() {
+    // U85 p.238 の例：CP＝(−8, −6)、(−4, 4)、(8, 6)、(16, −8)
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, neg(-8), neg(-6)]);
+    let cycles = r.run(&[APLL, 3, neg(-4), 4, 8, 6, 16, neg(-8)]);
+    assert_eq!(cycles, (4 * 10 + 16) + (4 * 12 + 16) + (4 * 14 + 16) + 8);
+    assert_eq!(r.a.cp(), (16, -8));
+    assert_eq!(r.pix(16, -8), 0);
+    for (x, y) in [(-8, -6), (-4, 4), (8, 6)] {
+        assert_eq!(r.pix(x, y), 0xF);
+    }
+}
+
+#[test]
+fn relative_polyline_matches_absolute() {
+    let mut a = Rig::drawing(0x40, 0x8020);
+    let mut b = Rig::drawing(0x40, 0x8020);
+    for r in [&mut a, &mut b] {
+        r.wpr(CL0, 0xFFFF);
+        r.run(&[AMOVE, neg(-8), neg(-6)]);
+    }
+    a.run(&[APLL, 3, neg(-4), 4, 8, 6, 16, neg(-8)]);
+    b.run(&[RPLL, 3, 4, 10, 12, 2, 8, neg(-14)]);
+    assert_eq!(a.a.cp(), b.a.cp());
+    assert!(a.m.0 == b.m.0);
+}
+
+#[test]
+fn aplg_closes_back_to_cp() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    let cycles = r.run(&[APLG, 2, 4, 0, 4, 4]);
+    assert_eq!(cycles, (4 * 4 + 16) * 2 + 4 * 4 + 20, "閉じる線 Lo＝4");
+    assert_eq!(r.a.cp(), (0, 0));
+    assert_eq!(r.lit(-5..=10, -5..=10), 12);
+    assert_eq!(r.pix(2, 2), 0xF, "斜めの辺");
+}
+
+#[test]
+fn line_pattern_with_zoom() {
+    // U85 p.168：'1111101010' を PZX＝1 で '11111111110011001100'
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL1, 0xFFFF);
+    r.run(&[WPTN, 1, 0b01_0101_1111]);
+    r.wpr(PRC2, 0x0091); // PEX＝9、PZX＝1
+    r.run(&[ALINE, 20, 0]);
+    let got: String = (0..20)
+        .map(|x| if r.pix(x, 0) != 0 { '1' } else { '0' })
+        .collect();
+    assert_eq!(got, "11111111110011001100");
+    assert_eq!(r.a.param(5), 0x0000, "20 画素で PPX が PSX に戻る");
+}
+
+#[test]
+fn filled_rectangle_example() {
+    // U85 p.170 の図 6.17(b)：パターン 6×7、PPX＝2、PPY＝1、11×10 画素
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL1, 0xFFFF);
+    r.run(&[WPTN, 7, 0x00, 0x04, 0x0A, 0x11, 0x11, 0x0A, 0x04]);
+    r.wpr(PRC0, 0x1020); // PPY＝1、PPX＝2
+    r.wpr(PRC2, 0x6050); // PEY＝6、PEX＝5
+    let cycles = r.run(&[AFRCT, 10, 9]);
+    assert_eq!(cycles, (4 * 11 + 8) * 10 + 18);
+    let want = [
+        "10000010000",
+        "01000101000",
+        "00101000101",
+        "00101000101",
+        "01000101000",
+        "10000010000",
+        "00000000000",
+        "10000010000",
+        "01000101000",
+        "00101000101",
+    ];
+    for (y, row) in want.iter().enumerate() {
+        let got: String = (0..11)
+            .map(|x| if r.pix(x, y as i32) != 0 { '1' } else { '0' })
+            .collect();
+        assert_eq!(&got, row, "下から {y} 行目");
+    }
+    assert_eq!(r.a.cp(), (0, 10), "Pe は CP の列で最後の行の 1 つ先");
+}
+
+#[test]
+fn rfrct_paints_toward_negative_corner() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x3333);
+    r.run(&[AMOVE, 5, 5]);
+    r.run(&[RFRCT, neg(-2), neg(-3)]);
+    assert_eq!(r.lit(0..=10, 0..=10), 3 * 4);
+    assert_eq!((r.pix(3, 2), r.pix(5, 5)), (3, 3));
+    assert_eq!(r.a.cp(), (5, 1));
+}
+
+#[test]
+fn moves_take_56_cycles() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    assert_eq!(r.run(&[AMOVE, 3, 4]), 56);
+    assert_eq!(r.run(&[RMOVE, neg(-5), 2]), 56);
+    assert_eq!(r.a.cp(), (-2, 6));
+}
+
+// ---- 領域モード（(6)） ----
+
+/// (AREA, 線の始点の X, 終点の X, 描いた画素, 終了後の CP, ARD)
+type AreaCase = (u16, i16, i16, &'static str, (i16, i16), bool);
+
+#[test]
+fn area_modes() {
+    // 領域は (0, 0)〜(4, 4)。y＝2 の横線
+    let cases: [AreaCase; 7] = [
+        (0x80, 0, 10, "1111111111", (10, 2), false),
+        (0x20, 0, 10, "1111100000", (5, 2), true),
+        (0x40, 0, 10, "1111100000", (10, 2), false),
+        (0x60, 0, 10, "1111100000", (10, 2), true),
+        (0xA0, 9, -1, "0000011111", (4, 2), true),
+        (0xC0, 0, 10, "0000011111", (10, 2), false),
+        (0xE0, 0, 10, "0000011111", (10, 2), true),
+    ];
+    for (area, from, to, want, cp, ard) in cases {
+        let mut r = Rig::drawing(0x40, 0x8020);
+        r.wpr(CL0, 0xFFFF);
+        for (i, v) in [0, 0, 4, 4].into_iter().enumerate() {
+            r.wpr(XMIN + i as u16, v);
+        }
+        r.run(&[AMOVE, neg(from), 2]);
+        r.run(&[ALINE | area, neg(to), 2]);
+        let got: String = (0..10)
+            .map(|x| if r.pix(x, 2) != 0 { '1' } else { '0' })
+            .collect();
+        assert_eq!(got, want, "AREA＝{:03b}", area >> 5);
+        assert_eq!(r.a.cp(), cp, "AREA＝{:03b}", area >> 5);
+        assert_eq!(r.a.status() & SR_ARD != 0, ard, "AREA＝{:03b}", area >> 5);
+        assert_eq!(r.a.status() & SR_CED, SR_CED);
+        if ard {
+            r.run(&[RPR | CL0]);
+            assert_eq!(r.a.status() & SR_ARD, 0, "RPR で ARD は 0");
+        }
+    }
+}
+
+// ---- 図形コピー（(8)） ----
+
+#[test]
+fn agcpy_example() {
+    // U85 p.296–297 の例：CP＝(4, 2)、Pss＝(18, 2)、DX＝13、DY＝7、S＝1、DSD＝000
+    let mut r = Rig::drawing(0x40, 0x8020);
+    let src = |x: i32, y: i32| ((x * 3 + y * 5) & 0xF) as u16 | 1;
+    for y in 2..=9 {
+        for x in 18..=31 {
+            r.set_pix(x, y, src(x, y));
+        }
+    }
+    r.run(&[AMOVE, 4, 2]);
+    let cycles = r.run(&[AGCPY | 0x0800, 18, 2, 13, 7]);
+    assert_eq!(cycles, ((4 + 2) * 8 + 10) * 14 + 70, "A＝8、B＝14");
+    assert_eq!(r.a.cp(), (4, 16));
+    for j in 0..14 {
+        for i in 0..8 {
+            assert_eq!(
+                r.pix(4 + i, 2 + j),
+                src(18 + j, 2 + i),
+                "転送先 ({}, {})",
+                4 + i,
+                2 + j
+            );
+        }
+    }
+    assert_eq!(r.pix(12, 2), 0);
+    assert_eq!(r.pix(4, 16), 0);
+}
+
+#[test]
+fn rgcpy_mirrors_with_dsd() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    for x in 0..4 {
+        r.set_pix(10 + x, 0, x as u16 + 1);
+    }
+    r.run(&[AMOVE, 3, 5]);
+    // S＝0、DSD＝010（X は負の向き）：左右を反転して写す
+    r.run(&[RGCPY | 0x0200, 7, neg(-5), 3, 0]);
+    let got: Vec<u16> = (0..4).map(|x| r.pix(x, 5)).collect();
+    assert_eq!(got, [4, 3, 2, 1]);
+    assert_eq!(r.a.cp(), (3, 6));
+}
+
+// ---- 保存 ----
+
+#[test]
+fn snapshot_round_trip_mid_transfer() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    r.put(&[DWT, 3, 0, 1, 2]);
+    for _ in 0..40 {
+        r.a.tick(&mut r.m);
+    }
+    let json = serde_json::to_string(&r.a).unwrap();
+    let back: Hd63484 = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, r.a);
+    let mut s = Rig {
+        a: back,
+        m: Mem(r.m.0.clone()),
+        mw: r.mw,
+        org: r.org,
+    };
+    for rig in [&mut r, &mut s] {
+        rig.put(&[3, 4]);
+        rig.finish();
+    }
+    assert_eq!(r.a, s.a);
+    assert_eq!(r.m.0[0x100..0x104], [1, 2, 3, 4]);
+    assert!(r.m.0 == s.m.0);
+}
