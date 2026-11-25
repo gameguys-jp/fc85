@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 複数の人が、それぞれエージェント（Claude Code など）を使ってこのリポジトリで作業する。一般のルールは `../fictional-machines/Documentation_Rules.md` §11。このリポジトリでは次のとおり。
 
-- **始める前と push の前に `git pull --rebase`。** 作業は小さく区切り、こまめに push する。push した履歴は書き換えない（force push をしない）。
+- **始める前と push の前に `git pull --rebase`。** 作業は小さく区切り、こまめに push する。push した履歴は書き換えない（force push をしない）。master は GitHub の ruleset（`protect-master`）で force push と削除を禁じている。
 - **DR・OI の番号**は、push の直前に取り込んだ最新の次の番号にする。rebase で番号がぶつかったら、まだ push していない側が自分の番号を振り直し、参照（仕様書、台帳、`CLAUDE.md`、コミットメッセージ）も直す。push 済みの番号は変えない。
 - **衝突しやすいファイル**：`docs/decisions.md` と `docs/open-issues.md`（末尾に追記し、既存の行を並べ替えない）、`CLAUDE.md`、`README.md`、仕様書 `docs/spec/hardware.md`、外形（`docs/spec/board.md`、`docs/design/enclosure.md`）、字形（`docs/design/glyphs-v0.1.tsv`）、`docs/impl/emulator.md`。これらで節の組み替え、表の作り直し、全体の置換をするときは、ブランチを切ってプルリクエストにし、相手に知らせる。
 - **自分の変更と関係のない行を整形しない**（表の幅、句読点、改行）。コードの整形は `cargo fmt --all` だけ。
