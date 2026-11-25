@@ -1,0 +1,12 @@
+[package]
+name = "fc85-board"
+description = "fc85 の基板の回路（仕様書 §12 の board 層）：Data Fabric とポートアダプタ"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,16 +1,16 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.1**  
+**v0.2**  
 2026年11月25日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[OI-050](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)
 
 ## 01　前提と範囲
 
 - 対象は B 基板の Data Fabric のブロック（board.md §02 の「Data Fabric」の行）。A 基板の Staging RAM の調停、ACRTC とのブリッジ（DR-016 の同期化の FF）、DSP・ADPCM・本体 DAC のポートアダプタ、Temporal RAM のカウンタは、それぞれのブロックに数える。FIFO の 67401×14 は数だけを書く。
 - 量産計画のゲートアレイ（DR-010）は対象にしない。
 - 式は PALASM の書き方（`/` は否定、`*` は AND、`+` は OR、`:=` は登録出力）。L 型の PAL は出力が反転するので、左辺を `/X` と書き、項に入力の否定を入れて、ピンの論理を正にする。
-- 変換部（ROT、MSK、ANX）と準備の信号（RDY）の式、ポートの属性の PROM（ATR）の中身は、[tools/fabric/fabric_logic.py](../../tools/fabric/fabric_logic.py) で作り、仕様の定義と突き合わせた [P]。順序と状態の PAL（SEQ、ELG、AFC、CHS、STS、STB、HDEC、HACK、TIM、P1A、P2A、PRST）は、入出力と働きまでを決めた。式は、段階 2 のエミュレータのスロットの模型と突き合わせて書く [V]（OI-050）。
+- 変換部（ROT、MSK、ANX）と準備の信号（RDY）の式、ポートの属性の PROM（ATR）の中身は、[tools/fabric/fabric_logic.py](../../tools/fabric/fabric_logic.py) で作り、仕様の定義と突き合わせた [P]。順序と状態の PAL（SEQ、ELG、AFC、CHS、STS、STB、HDEC、HACK、TIM、P1A、P2A、PRST）は、入出力と働きまでを決めた。式は、段階 2 のエミュレータのスロットの模型（`emulator/crates/board/src/fabric.rs`、[emulator.md](../impl/emulator.md) §03）と突き合わせて書く [V]（OI-050）。
 - 部品の型番は MMI の 1983年の PAL ハンドブックと 1985年のデータブック（[review-digital.md](../parts/review-digital.md) の MMIPAL83、MMI85）と、74LS・74S の標準品から選んだ。日立の同等品の有無は [V]（09）。
 
 ## 02　構成
@@ -224,7 +224,7 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 | SEQ（20R8A） | 判断を登録する。DBCH の交互の切替え、動いている要素（INF）、CPU への許可 | GO、次の AOP、次のアクセス、HREQ、OPDN、TOUT、再設定の要求（ch0・1）、ERROR | DBCH、INF、AOP（3）、アクセス（2）、HGNT |
 | AFC0・1（20L8A） | AOP と CPU の番地を、A ファイルの番地（4）、/WE、/CS、Cin、B ファイルの選択と番地（3）、SL・U12–U13 の出力の許可、PS・PD・U7–U8 の取込みの信号に直す | AOP、DBCH、HA6、HA3、HA2、R/W、q0・q1 | 15 本 |
 
-- 長いアクセス（port 9 の 2 スロット、port 1、DOC の port 2）の間は、新しいアクセスを決めない。終わりは STB・P1A・P2A の OPDN で知る。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
+- 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
 - 優先は、CPU のアクセス、動いている要素の W、その COUNT の更新、再設定、新しい要素の順（DR-046 (2)）。
 
 ### チャネルの状態（CHS、STS）
@@ -352,7 +352,7 @@ board.md v0.4 の見積り（約 840 cm²）より約 16 cm² 小さい。B 基�
 
 - 中央の見積りでは、B は枠の約 98% に収まる。2 枚の合計は、A（約 910 cm²＋カートリッジの場所 約 70 cm²）と合わせて約 2,042 cm²（枠 2,160 cm² の約 95%）。
 - 4 層の係数が 0.9 のときは、B が約 44 cm²、2 枚の合計が約 34 cm² あふれる。B の手当て ②（Temporal RAM を A へ）は、A に空きがあるときだけ使える（board.md §09）。係数が 0.9 なら A もほぼいっぱいで、② は使えない。
-- 1 個あたりの面積が大きめに外れると、2 枚の合計で 100 cm² 以上あふれ、中の手当てでは足りない。これは部品表ではなく実装密度の仮定の問題で、OI-049 (1)(6) で確かめる。
+- 1 個あたりの面積が大きめに外れると、2 枚の合計で 100 cm² 以上あふれる。外寸は変えず（DR-047）、基板を筐体の中で広げるか、B の上に子基板を足して吸収する（board.md §09）。これは部品表ではなく実装密度の仮定の問題で、OI-049 (1)(6) で確かめる。
 
 ### 消費電流（+5 V）
 

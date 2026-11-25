@@ -1,17 +1,17 @@
 # エミュレータ
 
-**v0.5**  
+**v0.6**  
 2026年11月25日
 
-> 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。
+> 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
 
 ## 01　概要
 
 | 項目 | 内容 |
 |---|---|
 | M（実装媒体） | M1（PC 上のソフト） |
-| S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
-| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。全体は V0→V2、その後 V3（独立実装との比較） |
+| S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
+| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型（ACRTC と DOC のポートを除く）も V2。全体は V0→V2、その後 V3（独立実装との比較） |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -20,9 +20,9 @@
 
 | 層（仕様書 §12） | crate | 状況 |
 |---|---|---|
-| core | 未作成 | 段階 2 で作る（クロック領域ごとの時刻、イベント、trace、snapshot） |
+| core | 未作成 | 段階 2 の後半で作る（クロック領域ごとの時刻、イベント、trace、snapshot）。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（表示はまだ） |
-| board | 未作成 | 段階 2（Data Fabric、ポートアダプタ）から |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）。ACRTC と DOC のポート、ポートアダプタはまだ |
 | host | 未作成 | 表示・音声・操作 UI のライブラリは未定（SDL3、egui が候補） |
 
 ### 約束
@@ -39,7 +39,7 @@
 | 目的 | コマンド |
 |---|---|
 | 全部の試験 | `cargo test` |
-| 1 件だけ | `cargo test -p fc85-chips --test <IC の名前> <試験の名前>`（例：`--test tms32010`） |
+| 1 件だけ | `cargo test -p fc85-chips --test <IC の名前> <試験の名前>`（例：`--test tms32010`）。board 層は `cargo test -p fc85-board --test fabric <試験の名前>` |
 | 書式 | `cargo fmt --all` |
 | lint | `cargo clippy --all-targets -- -D warnings` |
 
@@ -52,6 +52,13 @@
 | TMS32010 | 乗算・FIR・外部 I/O。サイクル数は TI の資料どおり | 実装した。試験 33 件 |
 | ES5503 | 発音と停止 | 実装した。試験 20 件 |
 | HD68000、HD6850 | 段階 1 の対象外 | 段階 3 で |
+
+### 基板の回路の状況
+
+| 回路 | 段階 2 の範囲（仕様書 §12） | 状況 |
+|---|---|---|
+| Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 の DMA のハンドシェイクと DONE の照合、DOC 子基板の port 2 はまだ |
+| ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。FIFO の向こう側のアダプタ（DSP、MSM5205、本体 DAC）と、Temporal RAM の CPU 側のレジスタはまだ |
 
 ## 03　仕様との差
 
@@ -186,6 +193,29 @@
 | 円・楕円・弧・PAINT を MAME で | — | MAME は浮動小数点で近似し、ELPS は別のパラメータを dX に使い、PAINT は FIFO に出さない（追補 3 の (4)） | V3 の比較は、PTN だけが使える |
 | 表示（同期、表示アドレス、カーソル、ライトペン） | まだない。タイミング・表示制御のレジスタ（r80〜rFE）は値を保つだけ。RCR は 0 を返す。LPAR を読むと LPD を 0 にする | 段階 1 の後半で作る | — |
 
+### Data Fabric
+
+コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fifo.rs`（67401）、`ports.rs`（ポートの側）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
+
+ポートの外側（ポート、モジュールの /PRES、PORT_RESET と AUDIO_N の書込みの信号）は `Ports` トレイトの向こう側に置き、board 層（または試験）が実装する。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 時間の単位（DR-046 (1)） | `step_slot` の 1 回を 1 スロット（8 MHz の 2 クロック、250 ns）にする。スロット 0 を S にする | スロットの中の時刻（q0〜q3）は、順序（頭の判断、中ほどの準備の取込み、アクセス、4 分の 3 の A ファイルの操作、終わり）としてだけ扱う（fabric.md §03） | CPU やほかの IC との時刻の合わせ方は core を作るときに決める |
+| 判断と A ファイル（DR-046 (2)、fabric.md §05） | 各スロットの頭で、このスロットの A ファイルの操作と、次のスロットのアクセスを決める。COUNT の更新は、逐次の読出し元なら R の判断、番地を持つ読出し元と逐次の書込み先なら W の判断、両方が番地を持てば W のスロットに置く | fabric.md §05 [P] | `SlotRecord` の列が、PAL の式を書くときの基準になる |
+| 2 スロット以上のアクセス | port 9 の読出しは、2 スロット目の頭で次のアクセスを決める。port 1 と DOC の port 2 は、答えたスロットの次の頭で決める（答えが早くても 2 スロット） | port 9 は終わりが分かっている。fabric.md §06 の「長いアクセスの間は決めない」を、この形に詳しくした（fabric.md v0.2）[P] | port 9 から読む要素は 3 スロットに 1 つ |
+| 満杯・空の信号を持つポート（DR-046 (2)） | アクセスのスロットと、その次のスロットの頭では、新しい要素を始めない。port 2 は DOC 子基板があっても対象 | ATR の FLAG は port 2 の両方の中身で 1 | DOC への書込みの後も 1 スロット空く |
+| 動作中の書換え（DR-046 (4)） | 設定のレジスタは、使うスロットの値を使う。R と W の間に SHIFT・MASK・XOR・FORMAT・DST を書き換えると、その要素の W から効く | 回路では、設定のレジスタが変換部と判断バスに直接つながる（fabric.md §02）。仕様書の「次の要素から効く」はおおよその言い方 [P] | 動作中の書換えは Bend の操作 |
+| トリガ（DR-046 (8)） | 2 段の同期化と立上りの検出はスロット単位で、入力の立上りから 2〜3 スロットで保留になる。チャネルが止まっている間の立上りは数えない。保留は START で消す | 同期化の FF のクロックは fabric.md で決めていない [V]。止まっている間に MISS が立つのを避けた [P] | — |
+| START と状態のビット | START は DONE・ERROR・MISS を変えない（W1C でだけ消える） | 仕様書に書いてない [P] | ソフトは START の前に消す |
+| LOOP で COUNT の設定値が 0 | 再設定のたびに DONE にし、また再設定する（3 スロットごと） | 回路の動きをそのまま [V] | 動作中に COUNT を 0 に書き換える Bend |
+| 時間切れ（DR-046 (9)） | 延びたアクセスが 16 スロット（32 クロック）で終わらなければ、そのスロットの終わりに ERROR にし、アクセスを打ち切る | DR-046 (9) | — |
+| CPU のアクセス（fabric.md §07） | A ファイルの語は、次のスロットの頭で許可し、許可のスロットの後に結果を返す（`HostReply::Wait` と `host_poll`）。68000 のクロック単位のウェイトは数えない | 68000 をまだつないでいない | 段階 3 でウェイトのクロック数を決める [V] |
+| 電源投入時 | A ファイルの値と設定のレジスタは 0。MASK は 0xFFFF、XOR は 0 | 資料にない [V]。MASK・XOR は DR-046 (4) | — |
+| MODULES への書込み | 捨てる（DTACK は返す） | 読出し専用 [P] | — |
+| 67401 の FIFO（review-digital.md 付録 A.1） | 通り抜けの時間を扱わない。書いた次のスロットの中ほどで準備の信号に出る。空の読出しは前の値、満杯の書込みは捨てる。4 個を並べた FIFO を 1 つとして扱う | 通り抜けの時間を資料で確かめていない [V] | 空の FIFO に書いてすぐ読む転送が、実機より早い可能性 |
+| まだないポート | port 1（ACRTC）は準備が 0 で、アクセスに答えない（時間切れで ERROR）。DOC 子基板の port 2 も答えない。port 8・11〜15 は読むと 0 | 段階 2 の後半で足す | — |
+
 ## 04　テストと判定基準
 
 ### MSM5205
@@ -267,3 +297,20 @@
 | 保存 | `snapshot_round_trip_mid_transfer` | DWT の途中で保存して戻すと、同じ VRAM と状態になる | 合格 |
 
 期待値は U85 の例・記述と手計算で、実チップの測定ではない。曲線の画素は、曲線への近さと対称性だけを見ている（選び方は §03 の [V]）。直線の画素は、画素の数と列ごとに 1 画素であることだけを見ている（選び方は §03 の [V]）。MAME と比べるとき（V3）は、演算モード 110・111、パターンの位置、色レジスタの位置、COL＝11、領域モード、CED の時期、円・楕円・弧・PAINT が既知の差になる（§03）。
+
+### Data Fabric
+
+試験は `emulator/crates/board/tests/fabric.rs`。期待値は仕様書 §06、DR-046、fabric.md の記述と、そこからの手計算で取る。
+
+| 分野 | テスト | 判定基準 | 状況 |
+|---|---|---|---|
+| 変換とポートの表 | `transform_follows_dr046`、`port_table_matches_fabric_md` | FORMAT 0〜6、SHIFT の正負と −16、MASK・XOR、8 bit の出力の FD の上位（DR-046 (5)、fabric.md §04）。番地を持つポートは 0・2・8・9、満杯・空の信号は 1〜5・10〜15。向きと幅（fabric.md §06） | 合格 |
+| レジスタ | `registers_read_zero_and_bad_addresses_get_no_dtack`、`register_file_access_waits_for_the_next_slot`、`start_copies_the_settings_in_three_slots`、`count_zero_is_done_without_a_transfer`、`start_checks_the_ports_and_the_format` | 書込み専用のレジスタは 0、MODULES、バスエラーの番地（DR-046 (10)）。A ファイルは次のスロットで許可。再設定は 3 スロットで、COUNT の作業値は残りの数−1。COUNT＝0 は転送せずに DONE。START の検査で ERROR になる 5 通り（DR-046 (9)） | 合格 |
+| 転送の時間 | `staging_to_temporal_moves_one_byte_every_two_slots`、`staging_to_staging_takes_four_slots_per_element`、`count_update_goes_where_the_address_file_is_free`、`fifo_reads_take_three_slots_and_fifo_writes_four`、`char_rom_reads_take_two_slots_and_ignore_bit_15`、`candidate_alternates_while_both_channels_run` | 2 スロットに 1 要素（4 MB/s）、port 0 どうしは 4 スロット、FIFO から読むと 3、FIFO へ書くと 4（仕様書 §06）。port 0 は S のスロットだけ。COUNT の更新の置き場所 4 通り（fabric.md §05）。port 9 は 2 スロット。2 チャネルが交互に候補になり、交互に要素を始める | 合格 |
+| 待ちとトリガ | `empty_source_fifo_stalls_and_resumes`、`each_trigger_moves_one_element`、`block_trigger_with_loop_keeps_one_pending_and_counts_a_miss`、`loop_restarts_from_the_settings`、`stop_discards_the_element_not_yet_written` | STALL と再開。EACH＝1 は 1 回で 1 要素。EACH＝0 と LOOP：ブロックの途中の 1 回は保留、2 回目は MISS。LOOP は設定値から。STOP は書いていない要素を捨て、DONE にしない（DR-046 (6)〜(8)） | 合格 |
+| 延びるアクセス | `a_long_access_times_out_after_32_clocks`、`doc_writes_wait_for_the_answer` | 答えない port 1 は 16 スロットで ERROR と IRQ になり、打ち切りは 1 回。DOC への書込みは答えまで延び、終わった次の頭は満杯・空の信号の規則で空く（DR-046 (1)(2)(9)） | 合格 |
+| CPU と割込み | `cpu_access_to_the_register_file_takes_a_slot_from_the_transfer`、`irq_follows_done_and_irq_en` | 転送中の COUNT の読出しが 1 スロットを取り、転送は正しく終わる。IRQ は IRQ_EN∧DONE で、W1C で消える | 合格 |
+| ポートの細部 | `port0_byte_lanes_and_word_alignment`、`mask_xor_and_shift_apply_on_the_way`、`port_reset_clears_fifos_and_pointers` | 8 bit の偶数番地は上位バイト、16 bit は bit 0 を無視（DR-046 (3)）。0x1234 を 8 回して MASK・XOR で 0x3403。PORT_RESET | 合格 |
+| 保存 | `snapshot_round_trip_mid_transfer` | 2 チャネルの転送の途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
+
+期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。fabric.md の順序と状態の PAL の式ができたら、この試験のスロットの列と突き合わせる（OI-050 (1)）。
