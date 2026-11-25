@@ -328,6 +328,27 @@ fn open_audio(ring: Ring) -> Option<cpal::Stream> {
     Some(stream)
 }
 
+/// 実時間に合わせて待つ。音声の装置があれば、リングに残る標本が 3 フレーム分を切るまで待つ
+/// （仮想機の音声の速さに合わせるので、リングがあふれも尽きもしない）。なければ 1/59.92 秒ごと。
+fn pace(audio: bool, ring: &Ring, next: &mut std::time::Instant) {
+    use std::time::{Duration, Instant};
+    if audio {
+        let target = 3 * AUDIO_RATE as usize / 60;
+        let start = Instant::now();
+        while ring.lock().unwrap().len() > target && start.elapsed() < Duration::from_millis(100) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    } else {
+        *next += Duration::from_secs_f64(1.0 / 59.92);
+        let now = Instant::now();
+        if *next > now {
+            std::thread::sleep(*next - now);
+        } else {
+            *next = now;
+        }
+    }
+}
+
 /// 仮想機の音声をリングに入れる。遅れすぎたら古いものを捨てる（ホストの安全層。仮想機は変えない）。
 fn push_audio(c: &mut Console, ring: &Ring) {
     let mut q = ring.lock().unwrap();
@@ -492,7 +513,7 @@ fn main() {
     }
 
     let ring: Ring = Arc::new(Mutex::new(VecDeque::new()));
-    let _audio = open_audio(ring.clone());
+    let audio = open_audio(ring.clone());
     let scale = match a.scale {
         1 => minifb::Scale::X1,
         2 => minifb::Scale::X2,
@@ -513,7 +534,9 @@ fn main() {
         eprintln!("窓を開けない: {e}");
         std::process::exit(1);
     });
-    w.set_target_fps(60);
+    // 速さはホストが合わせる（pace）。minifb の 60 fps の制限は仮想機の約 59.92 Hz とずれる。
+    w.set_target_fps(0);
+    let mut next = std::time::Instant::now();
     let mut frames = 0u64;
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
         if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
@@ -525,6 +548,7 @@ fn main() {
         c.sys.set_ports(pad(&w), 0);
         c.run_frame();
         push_audio(&mut c, &ring);
+        pace(audio.is_some(), &ring, &mut next);
         view(&c, &mut buf);
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {
             break;
