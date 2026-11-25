@@ -186,6 +186,20 @@ DSP_RESPONSE    EQU     $220006
 DSP_PROGRAM     EQU     $280000         ; 4K 語。DSP をリセットし PRGBUS＝1 の間だけ（語アクセス）
 DSP_CTRL_RESET  EQU     $0001
 DSP_CTRL_IRQ_EN EQU     $0008
+; CTRL の BIOSEL（bit 2–1）：DSP の BIO に出す条件（DR-029 (3)、DR-049）
+DSP_CTRL_BIO_INPUT EQU  $0000           ; 入力 FIFO が空でない（既定）
+DSP_CTRL_BIO_SPACE EQU  $0002           ; 出力 FIFO に空き
+DSP_CTRL_BIO_MAIL EQU   $0004           ; メールボックスに着信
+DSP_CTRL_BIO_TICK EQU   $0006           ; 音声クロックの拍のラッチ
+; STATUS のビット番号（BTST 用。MOVE.W で読んでから調べる。バイトのアクセスはバスエラー）
+DSP_ST_PRGBUS_B EQU     0
+DSP_ST_INPUT_B  EQU     1
+DSP_ST_SPACE_B  EQU     2
+DSP_ST_COMMAND_B EQU    3
+DSP_ST_RESPONSE_B EQU   4
+DSP_ST_UNDERRUN EQU     $0020           ; W1C
+DSP_ST_OVERRUN  EQU     $0040           ; W1C
+DSP_PROGRAM_WORDS EQU   4096
 
 ; ------------------------------------------------------------------ ADPCM bridge と本体 DAC（DR-017、DR-019、DR-053）
 
