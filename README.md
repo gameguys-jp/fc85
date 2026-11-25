@@ -46,4 +46,4 @@
 
 ## ライセンス
 
-[MIT](LICENSE)。外部の GPL のコードを組み込む部分と、ハードウェアの設計データ（PCB・FPGA・機構）のライセンスは未定です（[OI-014](docs/open-issues.md)、[DR-044](docs/decisions.md)）。
+ソフトウェアと文書は [MIT](LICENSE)、ハードウェアの設計データ（PCB、FPGA の HDL、機構）は CERN-OHL-P v2（`hardware/` を作るときに `hardware/LICENSE` を置きます）です。外部のコードは元のライセンスのままで、GPL のコアを組み込んだ成果物は GPL に従います（[DR-045](docs/decisions.md)）。

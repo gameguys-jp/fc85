@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 共同作業者は、自分の GitHub アカウント（リポジトリの collaborator）でコミットし、push する。作成者の名前は公開の履歴に残る。
 - 公開されるので、ローカルの絶対パス、ユーザー名、メールアドレスなどの個人情報を書かない。リポジトリ外の作業用一時フォルダは `<scratchpad>` と書く。
 - 資料のPDFはリポジトリに入れない。台帳には書誌とURLを書く。
-- ライセンスは MIT が基本（`LICENSE`、DR-044）。外部の GPL のコード（fx68k、MiSTer の es5503.v、jt5205 など）を組み込む成果物と、ハードウェアの設計データ（`hardware/` の PCB・FPGA・機構）のライセンスは未定（OI-014）。GPL のコードは `third_party/` に元のライセンスのまま置き、MIT の部分に組み込む前に OI-014 で扱いを決める。
+- ライセンスはハイブリッド（DR-044、DR-045）。ソフトと文書は MIT（ルートの `LICENSE`）。ハードウェアの設計データ（`hardware/` の PCB、FPGA の HDL と制約、機構）は CERN-OHL-P v2 で、`hardware/` を作るときに `hardware/LICENSE` を置く。外部のコードは `third_party/` に元のライセンスのまま置く。GPL のコア（fx68k、MiSTer の es5503.v、jt5205 など）を組み込んだ成果物を配るときは GPL に従う。組み合わせの条件の確認は OI-014。
 
 ## 共同作業
 
@@ -60,13 +60,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `emulator/` | §12 の core・chips・board・host と、その単体テスト |
 | `firmware/` | Boot ROM（BIOS）、漢字 ROM の生成元。作中の機械に載る中身 |
 | `sdk/` | §12 の SDK：m68k・DSP のアセンブラ設定、リンカ、ROM builder、MMIO ヘッダ、BIOS ABI の文書、サンプル |
-| `hardware/fpga/`・`hardware/pcb/` | 段階5以降。PCB は基板ごと（メイン、DOC 子基板、映像入力基板など）に分ける |
+| `hardware/fpga/`・`hardware/pcb/` | 段階5以降。PCB は基板ごと（メイン、DOC 子基板、映像入力基板など）に分ける。ライセンスは CERN-OHL-P v2（DR-045） |
 | `tests/` | §12 の独立参照モデル・ゴールデンデータ・テスト ROM。エミュレータと FPGA で共通に使う |
 | `tools/`・`third_party/` | 補助スクリプト。外部のコード（MAME、fx68k など）は元のライセンスのまま置く |
 
 - アドレスマップとレジスタ表は、機械が読める形で `docs/spec/` に1か所置き、エミュレータ・SDK・ハードウェアはそこから生成する（置き場所と形式は実装を始めるときに決める）。
 - 実装ごとに `docs/impl/<名前>.md` を置く。
-- ライセンスは「リポジトリ」の節のとおり（MIT が基本。GPL のコードとハードウェアは OI-014）。
+- ライセンスは「リポジトリ」の節のとおり（ソフトと文書は MIT、ハードウェアは CERN-OHL-P v2、外部のコードは元のライセンス）。
 
 ## 仕様書を書くときのルール
 
