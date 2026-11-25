@@ -22,6 +22,7 @@
 | 03 | Commodore の日本での生産 | 日本に VIC-20 の組立拠点があり、ドライブも日本で設計した。基板は1982年に香港で作っていた。1983年末にも日本の製造施設があった | 要修正：開始年（1979→1980）、「工場を持ち」の表現、香港移転と取引終了の書き方 |
 | 04 | シャープ X1 の重ね合わせ | 1982年11月16日発売。ASC 回路によるスーパーインポーズを当時の記事と広告で確認 | 矛盾なし。baseline-1985 の根拠を当時資料に替えられる |
 | 05 | 市販 IC とつなぎ回路で組む設計 | その方針を書いた資料は見つからない。類例はある | 物語では [架空] の設計文化として書く |
+| 06 | 文字表示と字形（他機種・規格） | 字形の試案 v0.1 が引用した史実を移した。一次資料では未確認 | `design/main.md` の根拠。カシオ PV-1000 の前例は本筋では使わない |
 
 ---
 
@@ -177,7 +178,42 @@
 
 ---
 
-## 06　未確認の事項
+## 06　文字表示と字形（他機種・規格）
+
+字形の試案 v0.1（[design/main.md](design/main.md)）が引用した史実。元資料の出典をそのまま移したもので、本台帳では一次資料を確かめていない [V]（[OI-048](open-issues.md)）。
+
+### 事実
+
+| # | 事実 | 根拠 |
+|---|---|---|
+| 6-1 | 印字用 24 ドット字形の JIS は1983年、表示用 16 ドット字形の JIS（JIS C 6232）は1984年11月1日の制定 | [D CINII16]（書誌）、[D WPJISL]（Wikipedia） |
+| 6-2 | 規格の一部だけを実装したものは、互換とみなされない | [D WPKUTEN]（Wikipedia） |
+| 6-3 | ファミコンの字は、ソフトごとにカセットの ROM（パターンテーブル）に置く | [D NESDEV]（後年） |
+| 6-4 | ゲーム1本の容量は、スーパーマリオブラザーズが 40 KB、ドラゴンクエストが 64 KB | [D NLAB]、[D INSIDE]（後年） |
+| 6-5 | SG-1000 系は、本体に BIOS も BASIC も持たない | [D CMODS]（後年） |
+| 6-6 | MSX は本体に英数・カタカナ・ひらがな、少数の漢字と図形記号を持つ。漢字 ROM は周辺機器 | [D WPMSXCS]（Wikipedia）、[D MSXORG]（後年） |
+| 6-7 | ナショナルの MSX 周辺機器などに、12×12 の漢字の例がある | [D MSXM8511]（当時）[V] |
+| 6-8 | ナショナルは1985年の MSX ワープロパソコンの広告で、テレビがワープロ画面になると字が大きく見やすく、RGB でつなげば鮮やかに見える、と映り方を売りにした | [D MSXM8511]（当時） |
+| 6-9 | PC エンジン CD-ROM² のシステムカード（1988年）は、12×12 の漢字を持つ | [D TCRF]（後年。1985年より後の製品） |
+| 6-10 | 1976年の Atari『Quiz Show』の 8×8 の書体が、ビデオゲームでいちばん使われた書体になった。日本ではナムコが多用したため「ナムコフォント」と呼ばれる。セガは大きく派手な字をほぼ全作で使い、字だけで会社がわかったという | [D DWAGT]、[D NEATO]（後年） |
+| 6-11 | 任天堂のゲーム開発では、大きな方眼紙にドット絵を描いていた（『パンチアウト!!』のとき） | [D NINT]（後年。開発者の証言） |
+| 6-12 | 東芝の JW-10（1978年）の字は 24×24 の明朝体で 6,802字。Rupo JW-R10 は 24×24 | [D IPSJ49]、[D IPSJ55]（後年） |
+| 6-13 | トミーのぴゅう太は子どもを狙った玩具メーカーの家庭用コンピュータで、BASIC の命令まで日本語にした（GOTO が「ニイケ」） | [D MYNAVI]（後年） |
+| 6-14 | 美咲フォントは後年の個人作で、もとはポケコン PC-E500 向け。ほとんどの字を 7×7 で描いている | [D MADO]（後年） |
+| 6-15 | カシオ PV-1000 は予定より1年以上遅れて発売され、約9,000台で、短期間のうちに市場から引き上げられたとされる | [D CCHPV]（後年）[V] |
+| 6-16 | 学年別漢字配当表の1年生の字は80字 | [D WIKTK]（現行の表）。1983年当時の表の字数は未確認 [V] |
+| 6-17 | JIS C 6226 の1983年改正で、16-19（鰺／鯵）など、第1水準と第2水準の字の組が入れ替わった。このほか254字で字形・字体が変わった | [D JIS83A]、[D JIS83B]、[D OGATA]（後年）、[D SUIRO85]（当時）。字数は §01 の約300字・294字と食い違う [V] |
+
+### 物語との照合
+
+| 物語・仕様の記述 | 照合 | 案 |
+|---|---|---|
+| `design/main.md` 01〜04 | 矛盾なし。6-7、6-15〜6-17 は未確認 | 一次資料で確かめる（OI-048） |
+| 元資料の「焼き直しのあいだに年末商戦を逃し、発売中止」 | `story/main.md` の延期（1983-09）と異なる | 本筋に合わせ、`design/main.md` 05 に対応を書いた。6-15 は本筋では使わない |
+
+---
+
+## 07　未確認の事項
 
 1. JIS C 6226-1983 の規格票と、野村（1984、標準化ジャーナル 14(3)）の原文。22組の区点の一覧と、字形を変えた字の数（約300字・294字）を原典で確かめる。
 2. 1983〜85年に JIS83 へ移ったワープロ専用機と業務用端末の例。1985年中に JIS83 の漢字 ROM を載せた国産パソコンの有無。
@@ -185,6 +221,7 @@
 4. Commodore の日本の組立が終わった年月と、香港の新工場の開設時期。1985年以前の資料にある日本の下請けの名前。CIHS21 の典拠。
 5. X1 の記事・広告の頁番号と、CZ-800D の仕様表の数値（原本の画像で確認）。
 6. 中堅メーカーの設計の方針を書いた当時の資料（社史、技術誌の記事など）。
+7. §06 の各項目の一次資料。とくに MSX 周辺機器の 12×12 の機種名（6-7）、JIS83 で字形・字体が変わった字の数（6-17 と §01）、1983年当時の学年別漢字配当表の字数（6-16）。
 
 ---
 
@@ -228,3 +265,26 @@
 | WPIKE | Wikipedia | Wikipedia "Ikegami Tsushinki"（典拠は2005年の書籍『それは「ポン」から始まった』） | 参照日の版 | https://en.wikipedia.org/wiki/Ikegami_Tsushinki |
 | MAME-DKONG | 後年 | MAME `src/mame/nintendo/dkong.cpp`（冒頭のコメント：TRS-02、TKG-2〜4 の基板） | 参照日の版 | https://github.com/mamedev/mame/blob/master/src/mame/nintendo/dkong.cpp |
 | MAME-SG1000 | 後年 | MAME `src/mame/sega/sg1000.cpp`（冒頭のコメント：基板 171-5046 REV. A の部品表） | 参照日の版 | https://github.com/mamedev/mame/blob/master/src/mame/sega/sg1000.cpp |
+| CINII16 | 後年 | CiNii Books「表示装置用16ドット字形」（JIS C 6232、1984年11月1日制定）の書誌 | 参照日の版 | https://ci.nii.ac.jp/ncid/BA47746496?l=en |
+| WPJISL | Wikipedia | Wikipedia "Japanese Industrial Standards"（JIS の一覧。IPFS の写し） | 参照日の版 | https://en.wikipedia-on-ipfs.org/wiki/Japanese_Industrial_Standards |
+| WPKUTEN | Wikipedia | Wikipedia "Kuten"（JIS X 0208 の一部実装と互換性） | 参照日の版 | https://en.wikipedia.org/wiki/Kuten |
+| NESDEV | 後年 | NESdev Wiki "Blargg PPU" と "nesgfx.txt"（PPU のパターンテーブル） | 参照日の版 | https://nesdev.org/wiki/Blargg_PPU 、https://www.nesdev.org/nesgfx.txt |
+| NLAB | 後年 | ねとらぼ「カタカナは20文字だけ」 | 参照日の版 | https://nlab.itmedia.co.jp/cont/articles/3274704/ |
+| INSIDE | 後年 | インサイド（ドラゴンクエストのカタカナ） | 2025-10-29 | https://www.inside-games.jp/article/2025/10/29/173420.html |
+| CMODS | 後年 | ConsoleMods Wiki "SG-1000 Model Differences" | 参照日の版 | https://consolemods.org/wiki/SG-1000:SG-1000_Model_Differences |
+| WPMSXCS | Wikipedia | Wikipedia "MSX character set" | 参照日の版 | https://en.wikipedia.org/wiki/MSX_character_set |
+| MSXORG | 後年 | MSX Resource Center Wiki "Kanji-ROM" | 参照日の版 | https://msx.org/wiki/Kanji-ROM |
+| MSXM8511 | 当時 | 『MSXマガジン』1985年11月号（Internet Archive の OCR テキスト） | 1985-11 | https://ia601905.us.archive.org/6/items/MsxMagazine-Japan/MsxMagazine198511_text.pdf |
+| TCRF | 後年 | The Cutting Room Floor "TurboGrafx-CD System Card" | 参照日の版 | https://new.tcrf.net/TurboGrafx-CD_System_Card |
+| DWAGT | 後年 | Design Week の記事（Toshi Omagari『Arcade Game Typography』の紹介） | 参照日の版 | https://www.designweek.co.uk/arcade-game-typography/ |
+| NEATO | 後年 | Neatorama "Arcade Game Typography And The History Of Pixelated Fonts" | 2019-11-05 | https://neatorama.com/2019/11/05/Arcade-Game-Typography-And-The-History-Of-Pixelated-Fonts/ |
+| NINT | 後年 | 任天堂「社長が訊く」（Wii。巨大な方眼紙にドット画を描いた話） | 参照日の版 | https://www.nintendo.co.jp/wii/interview/r7pj/vol1/index3.html |
+| IPSJ49 | 後年 | 情報処理学会 コンピュータ博物館「JW-10」 | 参照日の版 | https://museum.ipsj.or.jp/en/computer/word/0049.html |
+| IPSJ55 | 後年 | 情報処理学会 コンピュータ博物館「Rupo JW-R10」 | 参照日の版 | https://museum.ipsj.or.jp/en/computer/word/0055.html |
+| MYNAVI | 後年 | マイナビニュース（ぴゅう太の回） | 参照日の版 | https://news.mynavi.jp/column/history/008/ |
+| MADO | 後年 | 窓の杜「美咲フォント」 | 2012-03-15 | https://forest.watch.impress.co.jp/docs/review/20120315_518253.html |
+| CCHPV | 後年 | Centre for Computing History "Casio PV-1000" | 参照日の版 | https://computinghistory.org.uk/det/67122/Casio-PV-1000 |
+| WIKTK | Wikipedia | ウィクショナリー日本語版「教育漢字の一覧」（現行の学年別漢字配当表） | 参照日の版 | https://ja.wiktionary.org/wiki/%E4%BB%98%E9%8C%B2:%E6%95%99%E8%82%B2%E6%BC%A2%E5%AD%97%E3%81%AE%E4%B8%80%E8%A6%A7 |
+| JIS83A | 後年 | 図書館員のコンピュータ基礎講座「JIS83制定時の変更点」 | 参照日の版 | https://www.asahi-net.or.jp/~ax2s-KMTN/ref/jis78-83.html |
+| JIS83B | 後年 | Scrapbox「JIS X 0208 1983年の改正」 | 参照日の版 | https://scrapbox.io/gosyujin/JIS_X_0208_1983%E5%B9%B4%E3%81%AE%E6%94%B9%E6%AD%A3 |
+| OGATA | 後年 | INTERNET Watch、小形克宏「文字の海、ビットの舟」特別編（83JIS の混乱） | 参照日の版 | https://internet.watch.impress.com/www/column/ogata/sp29.htm |

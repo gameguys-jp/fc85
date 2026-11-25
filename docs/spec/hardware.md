@@ -222,7 +222,7 @@ Temporal RAMは後年のフィールドメモリICではなくDRAM/SRAM＋独立
 
 ### 08　漢字ROM・文字コードの不整合 [P]
 
-既存「試作機の文字ROM フォントの試み v0.1」を継承する。32 KiB（256 Kbit）に8×8ドット字形を格納し、7×7を字形本体、右・下1ドットを余白とする。第一水準2965字に加え非漢字・英数かなの領域を持つ。全字形は未完成であり、現状30字の漢字試作を起点とする。以下は既存資料のROM内オフセットを維持した設計。
+既存「試作機の文字ROM フォントの試み v0.1」（[design/main.md](../design/main.md)）を継承する。32 KiB（256 Kbit）に8×8ドット字形を格納し、7×7を字形本体、右・下1ドットを余白とする。第一水準2965字に加え非漢字・英数かなの領域を持つ。全字形は未完成であり、現状は英数36字・かなと記号102字・漢字30字の168字を起点とする（[design/main.md](../design/main.md) §03、データは [glyphs-v0.1.tsv](../design/glyphs-v0.1.tsv)）。以下は既存資料のROM内オフセットを維持した設計。
 
 | ROM内offset (hex) | 内容 | 容量 |
 |---|---|---:|
@@ -435,4 +435,4 @@ DIP/SOP/LQFP等の手はんだ、QFN/LFCSP/BGAのPCBA・リフロー、変換基
 | [29] | 部品台帳 [BA7230LS.md](../parts/BA7230LS.md)。1984年の雑誌記事・広告による年代の根拠、ピン、VC端子への副搬送波の入力 |
 | [30] | 部品台帳 [host-acrtc-interface.md](../parts/host-acrtc-interface.md)。68000とHD63484の非同期インタフェース：CSの作り方、待ち数、DTACKとDMAの同期化 |
 
-内部資料：Fictional Machines 基本構想・分類体系 v0.6、先行事例と制作案 v0.1、試作機の文字ROM フォントの試み v0.1、旧ハードウェア設計仕様書 v0.1（1990年前後版）、第一世代基本構想およびDesign Manifesto 1984 暫定案。決定記録は [decisions.md](../decisions.md)、物語は [story/main.md](../story/main.md)、未決の課題は [open-issues.md](../open-issues.md)。
+内部資料：Fictional Machines 基本構想・分類体系 v0.6、先行事例と制作案 v0.1、試作機の文字ROM フォントの試み v0.1（[design/main.md](../design/main.md) に取り込み）、旧ハードウェア設計仕様書 v0.1（1990年前後版）、第一世代基本構想およびDesign Manifesto 1984 暫定案。決定記録は [decisions.md](../decisions.md)、物語は [story/main.md](../story/main.md)、未決の課題は [open-issues.md](../open-issues.md)。

@@ -30,7 +30,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/decisions.md` | 決定記録（DR-xxx）。理由と却下した案 |
 | `docs/open-issues.md` | 課題台帳（OI-xxx） |
 | `docs/sources.md` | 部品以外の史実（JIS 改正、キャプテンシステム、Commodore など）の出典台帳 |
-| `docs/design/`・`docs/impl/` | 未作成。製品デザインとエミュレータ等の実装を始めたら作る |
+| `docs/design/` | 製品デザイン。現在は書体（文字 ROM の字形の試案 v0.1）と字形データ `glyphs-v0.1.tsv`。製品名・筐体・ロゴ・UI は未確定 |
+| `docs/impl/` | 未作成。エミュレータ等の実装を始めたら作る |
 
 分類：F1／T2:1985（適合は未検証）、D5・D6・D7、Machine/System、L2〜L7、E3目標、M1先行、S2〜S4重視、V2→V3/V4、N3〜4。
 
