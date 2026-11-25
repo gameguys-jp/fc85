@@ -79,8 +79,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## エミュレータの実装方針（仕様書§12、DR-040）
 
 - Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（今は chips 層の `fc85-chips` だけ）。ホストのライブラリは未定（SDL3、egui が候補）。
-- コマンドは `emulator/` で実行する：`cargo test`（全部）、`cargo test -p fc85-chips --test msm5205 <名前>`（1 件）、`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`。コミットの前に fmt・clippy・test を通す。
-- IC のコアは `crates/chips/src/<IC>.rs`、試験は `crates/chips/tests/<IC>.rs`。コアは IC のクロック 1 つを `tick` の 1 回とし、外部ピンの入出力だけを見せる。状態は serde で保存・復元できるようにする。
+- コマンドは `emulator/` で実行する：`cargo test`（全部）、`cargo test -p fc85-chips --test <IC> <名前>`（1 件。例：`--test tms32010`）、`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`。コミットの前に fmt・clippy・test を通す。
+- IC のコアは `crates/chips/src/<IC>.rs`、試験は `crates/chips/tests/<IC>.rs`。コアは IC のクロック 1 つを `tick` の 1 回とし（TMS32010 は命令サイクル＝CLKOUT の 1 周期）、外部ピンの入出力だけを見せる。状態は serde で保存・復元できるようにする。
 - 試験の期待値は台帳（`docs/parts/`）の計算から取り、どの節の値かを書く。台帳で [V] の動作の扱いは `docs/impl/emulator.md` §03 に書く。
 - 層構成：`core`（時刻・イベント・バス・信号線・IRQ・trace・snapshot）／`chips`／`board`（アドレスマップ・Data Fabric・ポートアダプタ・映像音響経路）／`host`／`SDK`／`tests`。
 - 各クロック領域は整数または有理数の時刻で独立に管理する。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。

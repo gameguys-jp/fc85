@@ -5,3 +5,4 @@
 //! 状態はすべて serde で保存・復元できる（snapshot、Bend のパッチの undo、DR-040）。
 
 pub mod msm5205;
+pub mod tms32010;
