@@ -1223,6 +1223,10 @@ impl Hd68000 {
         let ea = self.ea(bus, mode, op & 7, Sz::B)?;
         let v = self.read_ea(bus, ea, Sz::B)?;
         self.np(bus)?;
+        if matches!(ea, Ea::I(_)) {
+            // BTST Dn,#：レジスタと同じく 2 クロック空く（SST。M68 表7-10 の 4＋実効番地より 2 長い）。
+            self.idle(2);
+        }
         let r = self.bit_op(kind, v, bit & 7);
         if kind != 0
             && let Ea::M(a) = ea
@@ -1323,9 +1327,17 @@ impl Hd68000 {
             }
             4 => {
                 let a = self.ar(dr).wrapping_sub(Self::step_size(dr, sz));
-                self.set_ar(dr, a);
                 self.np(bus)?;
-                self.wr(bus, a, sz, v, true)?;
+                if sz == Sz::L {
+                    // 2 ずつ減らしながら、下位の語、上位の語の順に書く。
+                    self.set_ar(dr, a.wrapping_add(2));
+                    self.wr_w(bus, a.wrapping_add(2), v)?;
+                    self.set_ar(dr, a);
+                    self.wr_w(bus, a, v >> 16)?;
+                } else {
+                    self.set_ar(dr, a);
+                    self.wr(bus, a, sz, v, false)?;
+                }
             }
             5 => {
                 let d = sext(u32::from(self.ext(bus)?), Sz::W);
@@ -1586,8 +1598,8 @@ impl Hd68000 {
         if (op >> 3) & 7 == 6 || op & 0x3f == 0x3b {
             self.idle(2);
         }
-        if op & 0x3f == 0x39 {
-            // (xxx).L は積んでからプリフェッチする。
+        if matches!(op & 0x3f, 0x38 | 0x39) {
+            // (xxx).W・(xxx).L は積んでからプリフェッチする。
             self.push_l(bus, a)?;
             return self.np(bus);
         }
@@ -1624,18 +1636,21 @@ impl Hd68000 {
         let bound = self.read_ea(bus, ea, Sz::W)? as u16 as i16;
         self.np(bus)?;
         let dn = self.d[usize::from((op >> 9) & 7)] as u16 as i16;
+        // 上限との比較が先（4 クロック）、負の判定が後（6 クロック）。例外のときの N は Dn の符号、
+        // 例外にならないときの N は変えない。Z・V・C は資料にない（§03）。
         let mut f = self.sr & (0xff00 | FLAG_X);
         if dn == 0 {
             f |= FLAG_Z;
         }
+        let n = if dn < 0 { FLAG_N } else { 0 };
         if dn > bound {
-            self.sr = f;
+            self.sr = f | n;
             self.idle(4);
         } else if dn < 0 {
-            self.sr = f | FLAG_N;
+            self.sr = f | n;
             self.idle(6);
         } else {
-            self.sr = f;
+            self.sr = f | (self.sr & FLAG_N);
             self.idle(6);
             return Ok(());
         }
@@ -1677,7 +1692,10 @@ impl Hd68000 {
             return self.np(bus);
         }
         let mut a = if mode == 3 {
-            self.ar(an)
+            // (An)+ は最初のアクセスの前に An を 2 進める（フォルトのときに残る値。SST）。
+            let a = self.ar(an);
+            self.set_ar(an, a.wrapping_add(2));
+            a
         } else {
             self.control_addr(bus, mode, op & 7)?
         };
@@ -2158,39 +2176,36 @@ impl Hd68000 {
         self.wr_b(bus, a, r)
     }
 
-    /// d + s + X の 10 進補正。Z は結果が 0 でなければ 0 にし、0 なら変えない。
+    /// d + s + X の 10 進補正。下位の補正（＋6）は下位の桁の和が 9 を超えたとき、上位の補正（＋0x60）と
+    /// C は 2 進の和が 0x99 を超えたとき。V は補正で bit 7 が 0 から 1 になったとき。Z は結果が 0 で
+    /// なければ 0 にし、0 なら変えない。
     fn abcd(&mut self, s: u32, d: u32) -> u32 {
         let x = self.x();
         let bin = s + d + x;
-        let mut r = (s & 0x0f) + (d & 0x0f) + x;
-        if r > 9 {
-            r += 6;
-        }
-        r += (s & 0xf0) + (d & 0xf0);
-        let carry = r > 0x99;
-        if carry {
-            r += 0x60;
-        }
-        let res = r & 0xff;
+        let low = if (s & 0x0f) + (d & 0x0f) + x > 9 {
+            6
+        } else {
+            0
+        };
+        let carry = bin > 0x99;
+        let res = (bin + low + if carry { 0x60 } else { 0 }) & 0xff;
         self.bcd_flags(res, carry, !bin & res & 0x80 != 0);
         res
     }
 
-    /// d − s − X の 10 進補正（NBCD は d＝0）。
+    /// d − s − X の 10 進補正（NBCD は d＝0）。上位の補正（−0x60）は 2 進の差が負のとき、C は補正の後
+    /// が負のとき。V は補正で bit 7 が 1 から 0 になったとき。
     fn sbcd(&mut self, s: u32, d: u32) -> u32 {
-        let x = self.x();
-        let bin = d.wrapping_sub(s).wrapping_sub(x) & 0xff;
-        let mut r = (d & 0x0f) as i32 - (s & 0x0f) as i32 - x as i32;
-        if r < 0 {
-            r -= 6;
-        }
-        r += (d & 0xf0) as i32 - (s & 0xf0) as i32;
-        let carry = r < 0;
-        if carry {
-            r -= 0x60;
-        }
-        let res = (r as u32) & 0xff;
-        self.bcd_flags(res, carry, bin & !res & 0x80 != 0);
+        let x = self.x() as i32;
+        let bin = d as i32 - s as i32 - x;
+        let low = if (d & 0x0f) as i32 - (s & 0x0f) as i32 - x < 0 {
+            6
+        } else {
+            0
+        };
+        let r = bin - low - if bin < 0 { 0x60 } else { 0 };
+        let res = r as u32 & 0xff;
+        self.bcd_flags(res, r < 0, bin as u32 & !res & 0x80 != 0);
         res
     }
 
@@ -2261,7 +2276,7 @@ impl Hd68000 {
         let dividend = self.d[dn];
         if s == 0 {
             // 0 除算（38 クロック＋実効番地。M68 表7-16 は 42(5/4) と数える。§03）。
-            self.sr &= !FLAG_C;
+            self.sr &= !(FLAG_N | FLAG_Z | FLAG_V | FLAG_C);
             self.idle(8);
             let pc = self.pc.wrapping_add(2);
             return self.exception(bus, vector::ZERO_DIVIDE, pc);
