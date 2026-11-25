@@ -575,5 +575,6 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | DR-030 の警告 | `doc_read_modify_write_is_warned` | CLR.B で DOC の窓を読んで書くと 1 回数え、MOVE.B の書込みは数えない | 合格 |
 | Boot ROM で起動 | `console_boot.rs` の `the_boot_rom_runs_with_the_doc_board`、`..._without_the_doc_board` | `firmware/` で組んだ Boot ROM と文字 ROM で 60 フレーム：CPU が止まらない、バスエラーはカートリッジを調べる $400000 の 1 回だけ、DR-030 の警告なし、表示が動いて 2 色以上、IACK 50 回以上、音が無音でない。ROM がなければ飛ばす | 合格（DOC あり・なし） |
 | カートリッジ | `the_sample_cartridge_starts_and_plays_adpcm` | `sdk/samples/game` を差して起動し、START と左を押して 100 フレーム：バスエラーなし（見出しを読めた）、DR-030 の警告なし、ADPCM の取込みが 2000 回より多い（Fabric から ADPCM へ送れた）。ROM がなければ飛ばす | 合格 |
+| 30 分の連続（仕様書 §12 の段階 4 の条件の一つ） | 手動：ホストの `--headless --cart sdk/samples/game/build/game.bin --frames 107856 --pad-script <台本>`。台本は乱数（種 1985）で方向とボタンを 5〜40 フレームごとに替え、600 フレームごとに START | 仮想機の 30 分（107,856 フレーム）でバスエラー・CPU の停止・DR-030 の警告がない。画面と音が最後まで出る | 合格（2026-11-26。CPU 14,399,356,728 クロック、開発機で 1,159 秒。最後の画面はゲームの途中で最高点 60。音は飽和なし、ピーク ±2,692） |
 | 保存と復元 | `a_snapshot_of_the_running_bios_resumes_identically` | BIOS が動いている途中で Console を JSON に保存して戻し、同じ入力で 10 フレーム進めると、CPU・基板・音声の標本が元とすべて同じ | 合格 |
 | 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定） |
