@@ -591,3 +591,13 @@
 | 理由 | 外部の道具（vasm、GNU as など）を入れずに、リポジトリだけでファームウェアを組めるようにする。Python は表の検査や文字 ROM の生成ですでに使っている |
 | 却下した案 | vasm：ライセンスが商用の配布を制限する。GNU as：導入が重く、Windows で手間がかかる。どちらも後で使えるよう、ソースは Motorola の構文に寄せた [O] |
 | 影響 | sdk/m68kasm/、仕様書 §12 の SDK |
+
+## DR-060　ADPCM の効果音を Data Fabric で送る手順（SDK の約束）と、段階 3 のサンプル
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-26 |
+| 決定 | エージェントが決めた（ユーザーが判断を任せた。要見直し）。(1) 段階 3 のサンプルのカートリッジ `sdk/samples/game`（題名 `SAMPLE 1`。遊びの数値は sdk/samples/game/README.md）を置く。カートリッジの入口（DR-057）、ACRTC の XOR の描画、PORT_A、ADPCM の効果音、DOC か本体 DAC の低音を使う。(2) ADPCM の効果音の手順：ADPCM の列は Staging RAM に写し、Data Fabric のチャネル 0 で port 0 → port 5 に送る（SRC_STEP 1、DST_STEP 0、FORMAT 0、MASK $FFFF、XOR 0、SHIFT 0、TRIGGER 0。FIFO が満杯の間は STALL で待つ）。鳴らす前に、チャネルを STOP し、STATUS を W1C し、ADPCM の CTRL に RESET と S1・S2 を書き、PORT_RESET の bit 5 で FIFO を空にして 1 フレーム置く。START の後、FIFO に 16 byte たまってから UNDERRUN を消し、RESET を外す。DONE が立って FIFO が空になったら STOP し、RESET に戻す。鳴っている音を替えるときは、RESET をかけずに先に FIFO を空にする（FLUSH）。(3) ADPCM の列は、頭に 0x08×5、終わりに 20 ms の無音と 0x08×4 を置く。符号器は `sdk/tools/adpcm.py`（エミュレータの復号器と同じ表） |
+| 理由 | 段階 3 の合格条件（仕様書 §12）の「PCM/ADPCM 音声」と「ゲーム描画」を、ソフトから Data Fabric を動かして確かめる最初の例。RESET を外す時点は V̄C̄K̄ に合わせられない（OI-064）ので、FIFO をためてから外し、音の途中では RESET をかけない手順にすると、予測値のずれが ±2 に収まる |
+| 却下した案 | TRIGGER 5（V̄C̄K̄）で 1 byte ずつ送る：FIFO を使う意味が薄く、MISS の扱いを確かめていない [V]。音の途中で RESET をかけて替える：予測値が最大 ±30 ずれる |
+| 影響 | sdk/samples/game/、sdk/tools/adpcm.py、sdk/include/fc85.inc、OI-064 |

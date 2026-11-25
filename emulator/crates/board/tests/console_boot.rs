@@ -95,3 +95,36 @@ fn a_snapshot_of_the_running_bios_resumes_identically() {
     assert_eq!(a.sys.audio_out, b.sys.audio_out);
     assert!(a == b, "保存して戻した後の状態が違う");
 }
+
+#[test]
+fn the_sample_cartridge_starts_and_plays_adpcm() {
+    // sdk/samples/game の SAMPLE 1：BIOS がカートリッジの見出しを見て入り、START で始まりの音を
+    // Data Fabric から ADPCM へ送る（sdk/samples/game/README.md）
+    let Some(cart) = rom("sdk/samples/game/build/game.bin") else {
+        eprintln!("sdk/samples/game/build/game.bin がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(false) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    for i in 0..100 {
+        let pad = match i {
+            40..44 => 0x0080, // START
+            50..90 => 0x0004, // 左
+            _ => 0,
+        };
+        c.sys.set_ports(pad, 0);
+        c.run_frame();
+    }
+    // BIOS_WAIT_VBL の STOP で待っていることがある
+    assert_ne!(c.cpu.state, RunState::Halted, "PC {:06X}", c.cpu.pc);
+    // カートリッジがあるので、見出しを読んでもバスエラーにならない
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(c.sys.log.doc_rule_warnings, 0);
+    let a = &c.sys.ports.adpcm_port;
+    eprintln!("ADPCM の取込み {}、UNDERRUN {}", a.captures, a.underruns);
+    assert!(a.captures > 2000, "ADPCM の取込み {}", a.captures);
+}

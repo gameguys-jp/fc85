@@ -222,6 +222,14 @@ class Expressions(unittest.TestCase):
 
     def test_pc_symbol(self):
         self.assertEqual(asm("\tORG $100\n\tDC.L *\n"), bytes.fromhex("00000100"))
+
+    def test_even_and_align_pad_after_emitted_bytes(self):
+        # 像の終わりの EVEN・ALIGN も埋め草を出す。DS は出さない
+        self.assertEqual(asm("\tDC.B 1\n\tEVEN\n"), bytes.fromhex("01FF"))
+        self.assertEqual(asm("\tDC.B 1\n\tALIGN 4\n", fill=0), bytes.fromhex("01000000"))
+        self.assertEqual(asm("\tDC.B 1\n\tDS.B 3\n"), bytes.fromhex("01"))
+        # 何も出していない番地（RAM の変数）では出さない
+        self.assertEqual(asm("\tDC.W 1\n\tORG $1001\n\tEVEN\n"), bytes.fromhex("0001"))
         self.assertEqual(asm("\tORG $100\n\tDC.W 0\n\tDC.L *-2\n"), bytes.fromhex("000000000100"))
 
 

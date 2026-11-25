@@ -1166,8 +1166,8 @@ sfx_data:
 sfx_data_end:
         ASSERT  sfx_data_end-sfx_data=SFX_BYTES
         DCB.B   4,$08                   ; 写すときに 4 byte 単位で読み過ぎる分
-        IF      SFX_BYTES&1             ; 偶数の大きさにする（EVEN はバイトを出さないので、像の長さが
-        DC.B    $08                     ; 見出しの大きさより 1 短くなる）
+        IF      SFX_BYTES&1             ; 偶数の大きさにする（m68kasm の初版は末尾の EVEN でバイトを
+        DC.B    $08                     ; 出さず、像の長さが見出しの大きさより 1 短くなった）
         ENDIF
 rom_end:
         ASSERT  ((rom_end-CART)&1)=0

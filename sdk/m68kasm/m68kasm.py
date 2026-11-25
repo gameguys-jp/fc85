@@ -21,8 +21,9 @@
   . で始まるラベルは、直前の大域ラベルの中だけで見える（外からは global.local で参照できる）。
 - 注釈は ; から行末まで。1 桁目の * は行全体が注釈。
 - 指令: ORG EQU = SET DC.B/W/L DCB.B/W/L DS.B/W/L EVEN ALIGN INCLUDE INCBIN END
-  IF IFDEF IFNDEF ELSE ENDIF REPT ENDR RSRESET RSSET RS.B/W/L ASSERT。DS・EVEN・ALIGN は番地を
-  進めるだけで、バイトを出さない（空きは --fill の値になる）。DC.B の文字列は ASCII と半角カナ
+  IF IFDEF IFNDEF ELSE ENDIF REPT ENDR RSRESET RSSET RS.B/W/L ASSERT。DS は番地を進めるだけで、
+  バイトを出さない（空きは --fill の値になる。RAM の変数の配置に使う）。EVEN・ALIGN は、直前の
+  バイトを出していれば空きを --fill の値で出す（像の終わりでも長さがそろう）。DC.B の文字列は ASCII と半角カナ
   （JIS X 0201 の 0xA1〜0xDF）。
 - 分岐（Bcc、BRA、BSR）と、大きさを書かない絶対番地は、多パスの緩和で短い形と長い形を選ぶ
   （最初は短い形で、届かなければ長い形にする）。大きさは増える向きにだけ変わるので、必ず収束する。
@@ -647,6 +648,12 @@ class Assembler:
             raise AsmError("最後のパスで大きさが変わった（内部の誤り）")
         return self.image()
 
+    def _pad_to(self, end):
+        """EVEN・ALIGN：直前のバイトを出していれば、`end` までを埋め草で出す。"""
+        if self.pc < end and (self.pc - 1) in self.emitted:
+            for a in range(self.pc, end):
+                self.emitted[a] = self.fill & 0xFF
+
     def image(self):
         if not self.emitted:
             return b""
@@ -971,6 +978,7 @@ class Assembler:
             self.pc += unit * n
             return
         if mnu == "EVEN":
+            self._pad_to((self.pc + 1) & ~1)
             self.pc = (self.pc + 1) & ~1
             self._list(self.pc, b"", text)
             return
@@ -978,6 +986,7 @@ class Assembler:
             n = self._eval_now(args) if args.strip() else 2
             if n <= 0:
                 raise AsmError("ALIGN の値が正しくない")
+            self._pad_to((self.pc + n - 1) // n * n)
             self.pc = (self.pc + n - 1) // n * n
             self._list(self.pc, b"", text)
             return
