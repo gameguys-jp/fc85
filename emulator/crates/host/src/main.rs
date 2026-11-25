@@ -4,7 +4,8 @@
 //! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
-//! [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--trace N] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
+//! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
+//! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ]`
 //!
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
@@ -43,6 +44,10 @@ struct Args {
     frames: Option<u64>,
     /// 最初の N 命令の PC と SR を標準エラーに出す。
     trace: u64,
+    /// headless の入力の台本：(フレーム, PORT_A)。その値をそのフレームから次の行まで保つ。
+    pad_script: Vec<(u64, u16)>,
+    /// headless で画面を書き出すフレーム（`--dump` の名前に `-<フレーム>` を足す）。
+    dump_at: Vec<u64>,
     headless: bool,
     dump: Option<String>,
     wav: Option<String>,
@@ -59,6 +64,8 @@ fn parse_args() -> Args {
         scale: 3,
         frames: None,
         trace: 0,
+        pad_script: Vec::new(),
+        dump_at: Vec::new(),
         headless: false,
         dump: None,
         wav: None,
@@ -77,6 +84,15 @@ fn parse_args() -> Args {
             "--dump" => a.dump = it.next(),
             "--wav" => a.wav = it.next(),
             "--trace" => a.trace = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            "--pad-script" => {
+                a.pad_script = it.next().map(|p| read_pad_script(&p)).unwrap_or_default()
+            }
+            "--dump-at" => {
+                a.dump_at = it
+                    .next()
+                    .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+                    .unwrap_or_default()
+            }
             "--doc-clock" => a.clocks[0] = it.next().and_then(|v| v.parse().ok()),
             "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
             "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
@@ -84,7 +100,8 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
-                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--trace N] [--doc-clock HZ] \
+                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
+                     [--pad-script FILE] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ]"
                 );
                 std::process::exit(0);
@@ -96,6 +113,38 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+/// 入力の台本を読む。1 行に「フレーム 値」（値は 16 進。`$`・`0x` を付けてもよい）。`#` から後は注釈。
+fn read_pad_script(path: &str) -> Vec<(u64, u16)> {
+    let text = String::from_utf8(load(path)).unwrap_or_default();
+    let mut v = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut f = line.split_whitespace();
+        let frame = f.next().and_then(|x| x.parse::<u64>().ok());
+        let value = f.next().and_then(|x| {
+            let x = x.trim_start_matches('$').trim_start_matches("0x");
+            u16::from_str_radix(x, 16).ok()
+        });
+        match (frame, value) {
+            (Some(fr), Some(val)) => v.push((fr, val)),
+            _ => eprintln!("{path}:{}: 「フレーム 値」ではない", i + 1),
+        }
+    }
+    v.sort_by_key(|e| e.0);
+    v
+}
+
+/// `out.ppm` → `out-<n>.ppm`。
+fn numbered(path: &str, n: u64) -> String {
+    match path.rfind('.') {
+        Some(i) => format!("{}-{n}{}", &path[..i], &path[i..]),
+        None => format!("{path}-{n}"),
+    }
 }
 
 fn load(path: &str) -> Vec<u8> {
@@ -410,9 +459,18 @@ fn main() {
     if a.headless {
         let n = a.frames.unwrap_or(60);
         let mut pcm = Vec::new();
-        for _ in 0..n {
+        for i in 0..n {
+            if let Some(&(_, v)) = a.pad_script.iter().rev().find(|e| e.0 <= i) {
+                c.sys.set_ports(v, 0);
+            }
             c.run_frame();
             report(&c, &mut seen);
+            if a.dump_at.contains(&(i + 1))
+                && let Some(p) = &a.dump
+            {
+                view(&c, &mut buf);
+                dump_ppm(&numbered(p, i + 1), &buf);
+            }
             if a.wav.is_some() {
                 pcm.append(&mut c.sys.audio_out);
             } else {
