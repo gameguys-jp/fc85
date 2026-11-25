@@ -1,6 +1,6 @@
 # エミュレータ
 
-**v0.6**  
+**v0.7**  
 2026年11月25日
 
 > 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
@@ -11,7 +11,7 @@
 |---|---|
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
-| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型（ACRTC と DOC のポートを除く）も V2。全体は V0→V2、その後 V3（独立実装との比較） |
+| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ（DOC のポートを除く）も V2。全体は V0→V2、その後 V3（独立実装との比較） |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -21,8 +21,8 @@
 | 層（仕様書 §12） | crate | 状況 |
 |---|---|---|
 | core | 未作成 | 段階 2 の後半で作る（クロック領域ごとの時刻、イベント、trace、snapshot）。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
-| chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（表示はまだ） |
-| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）。ACRTC と DOC のポート、ポートアダプタはまだ |
+| chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンまで。表示はまだ） |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）。DOC のポート、ポートアダプタはまだ |
 | host | 未作成 | 表示・音声・操作 UI のライブラリは未定（SDL3、egui が候補） |
 
 ### 約束
@@ -48,7 +48,7 @@
 | IC | 段階 1 の範囲（仕様書 §12） | 状況 |
 |---|---|---|
 | MSM5205 | ADPCM の既知列（DR-021 の列を含む） | 実装した。試験 12 件 |
-| HD63484 | 描画・COPY・FIFO | ホストとのやり取りと、コマンド 38 種（レジスタ・データ転送、直線・矩形・多角形・円・楕円・弧・塗り・パターン・PAINT・図形コピー）、演算・色・領域モードを実装した。試験 55 件。表示（同期、表示アドレス、カーソル）と DMA のハンドシェイクはまだ |
+| HD63484 | 描画・COPY・FIFO | ホストとのやり取りと、コマンド 38 種（レジスタ・データ転送、直線・矩形・多角形・円・楕円・弧・塗り・パターン・PAINT・図形コピー）、演算・色・領域モードを実装した。段階 2 でデータの DMA のピン（DREQ・DACK・DTACK・DONE）を足した。試験 63 件。表示（同期、表示アドレス、カーソル）とコマンドの DMA はまだ |
 | TMS32010 | 乗算・FIR・外部 I/O。サイクル数は TI の資料どおり | 実装した。試験 33 件 |
 | ES5503 | 発音と停止 | 実装した。試験 20 件 |
 | HD68000、HD6850 | 段階 1 の対象外 | 段階 3 で |
@@ -57,7 +57,7 @@
 
 | 回路 | 段階 2 の範囲（仕様書 §12） | 状況 |
 |---|---|---|
-| Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 の DMA のハンドシェイクと DONE の照合、DOC 子基板の port 2 はまだ |
+| Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 はまだ |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。FIFO の向こう側のアダプタ（DSP、MSM5205、本体 DAC）と、Temporal RAM の CPU 側のレジスタはまだ |
 
 ## 03　仕様との差
@@ -173,6 +173,13 @@
 | CPY・SCPY で転送元と転送先が重なるとき | 走査の順に 1 語ずつ読み書きする | 実チップの順と同じと考えた [V] | 重ねて写すソフト |
 | CLR・SCLR の RWPe（追補 2 の (7)） | 開始の列で、最後の行の 1 つ先（CLR の例で $C6） | DWT の図と CPY の式（図 C14-2）に合わせた。CLR の図のラベル（$B6）とは違う [V] | 続けて CLR を出すソフト |
 | DRD の所要時間 | 最初に 62 を数える（式の 62〜68 の最小） | 幅の中身が資料にない [V] | — |
+| データの DMA のバスのサイクル | DACK を 2CLK の立上りで取り込んだサイクルを T1、次の立上りを T3 として DTACK を出し、DACK＝H を取り込んだ立上り（Tn）で FIFO と受け渡す。ピンの遅れは扱わず、立上りで変える（board 層のつなぎが足す） | U85 p.320–321 の図。T の状態は 2CLK の半周期（host-acrtc-interface.md §2.1、§7.3） | — |
+| DREQ | DDM＝1 で DWT・DMOD・DRD を始めたとき、矩形の語の数を覚える。受け渡した語がそれに満たず、書込みなら書込み FIFO に余地、読出しなら読出し FIFO に語がある間に出す。サイクルスチール（DRC＝1）は T1 で戻し、Tn で出し直す。バースト（DRC＝0）は保ち、1 要求で最大 8 語の上限は扱わない。PSE・ABT・STR＝0・CDM＝1 の間は出さない | U85 p.66–67 は方式だけを書く [V] | バーストを使うソフト |
+| DONE | 転送の最後の語のサイクルの T1 から Tn まで出す | U85 p.50、p.315 No.40 | — |
+| DMA の DRD の終わり | プログラム転送と違い止まらない。最後の語を VRAM から読んだら CED を 1 にし、読出し FIFO に残った語は DMA で渡す | U85 p.128 はプログラム転送の場合だけを書く [V] | CED を見て次のコマンドを書くソフト |
+| DMA と描画の停止・DDM | STR＝0・PSE・ABT の間も、動いているバスのサイクルは DACK＝H まで進める。ABT は要求をやめる。DDM は転送を始めたときの値で決め、途中で 0 にすると DREQ を出さない | 資料にない [V] | — |
+| 空・満杯の FIFO の DMA | プログラム転送と同じく、空の読出しは 0 を渡し、満杯への書込みは捨て、回数を数える | [V] | — |
+| コマンドの DMA（CDM） | 作っていない。CDM＝1 の間は DREQ を出さない | 本機はデータの DMA だけを使う（DR-022） | — |
 | DRD をプログラム転送で（DDM＝0） | 最後の語の後も止まったままにし、ABT で終わる | U85 p.128 | — |
 | DMA（DDM＝1） | ハンドシェイク（DREQ、DACK、DONE）はまだない。プログラム転送と同じ速さで FIFO を通し、DRD も最後の語で終わる | 段階 2（Data Fabric）で足す | — |
 | 円・楕円・弧の画素（追補 3 の (1)） | 中心からの相対座標で、整数の式 kx·x²＋ky·y²＝k をたどる。円は x²＋y²＝r²、楕円は b·x²＋a·y²＝b·dX²、弧は CP で取る値。8 近傍で 1 画素ずつ、接線の主の向きに 1 進め、副の向きは式の値が 0 に近いほうを選ぶ（同じなら進めない） | U85 に画素の選び方は書いてない [V] | 実チップと 1 画素ずれる点がありうる。V4 で確かめる |
@@ -195,7 +202,7 @@
 
 ### Data Fabric
 
-コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fifo.rs`（67401）、`ports.rs`（ポートの側）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
+コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fifo.rs`（67401）、`ports.rs`（ポートの側）、`acrtc.rs`（port 1 のつなぎ）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
 
 ポートの外側（ポート、モジュールの /PRES、PORT_RESET と AUDIO_N の書込みの信号）は `Ports` トレイトの向こう側に置き、board 層（または試験）が実装する。
 
@@ -214,7 +221,12 @@
 | 電源投入時 | A ファイルの値と設定のレジスタは 0。MASK は 0xFFFF、XOR は 0 | 資料にない [V]。MASK・XOR は DR-046 (4) | — |
 | MODULES への書込み | 捨てる（DTACK は返す） | 読出し専用 [P] | — |
 | 67401 の FIFO（review-digital.md 付録 A.1） | 通り抜けの時間を扱わない。書いた次のスロットの中ほどで準備の信号に出る。空の読出しは前の値、満杯の書込みは捨てる。4 個を並べた FIFO を 1 つとして扱う | 通り抜けの時間を資料で確かめていない [V] | 空の FIFO に書いてすぐ読む転送が、実機より早い可能性 |
-| まだないポート | port 1（ACRTC）は準備が 0 で、アクセスに答えない（時間切れで ERROR）。DOC 子基板の port 2 も答えない。port 8・11〜15 は読むと 0 | 段階 2 の後半で足す | — |
+| まだないポート | DOC 子基板の port 2 は答えない（時間切れで ERROR）。port 8・11〜15 は読むと 0 | 段階 2 の後半で足す | — |
+| ポートの向こうの回路の時間 | `Ports::run_slot` を、スロットの頭の判断の後に毎スロット呼び、このスロットで始まるアクセスを渡す。ACRTC のつなぎは、そこでスロットの間の 16 MHz と 2CLK の立上りを時刻の順に進める。準備の信号とアクセスの応答は、その後に問う | 中ほどの準備の取込みと、延びるアクセスの終わりを、スロットの中の時刻に合わせるため | core を作るとき、時刻の管理を core に移す |
+| port 1 の時刻（DR-016、host-acrtc-interface.md §2.3・§7） | 時刻の単位は 1 スロットの 1/3780（16 MHz の周期が 945、2CLK が 2816）。Fabric の出力（DACK、R/W、データ）は P1A のクロックの 20 ns 後に変わる。ACRTC は 40 ns 前の DACK を見て（tDAKS）、DREQ・DONE を 50 ns 後、DTACK を 70 ns 後に変える。ブリッジの FF は 16 MHz で 10 ns 前の値を取り、DREQ・DTACK は 2 段、DONE は 1 段。P1A は 2 段目の DTACK を次の立上りで見て DACK を戻し、データと DONE を取り込む。RDY1 は中ほどの立上りの前の 2 段目の DREQ | ACRTC の遅れは U85 の表の値。Fabric の出力の遅れと FF のセットアップは [P]。2 つの発振源の位相は `set_phase` で決め（既定 0）、水晶のずれは扱わない | 1 回のアクセスは位相によらず 3 スロット（DACK の L は 480〜668 ns。§7.2 の 375〜688 ns の範囲） |
+| port 1 の速さ | 1 語は、Temporal RAM から 6〜7 スロット、Staging RAM から 6 か 8 スロット（1.5〜2.0 µs）。ACRTC の DWT（約 6 サイクル＝1.12 µs/語）より遅く、port 1 の速さは Fabric の側で決まる | 次の DREQ の同期化と中ほどの取込み、満杯・空の信号の規則、要素の R と W の順による（試験 `one_word_takes_six_or_seven_slots_from_temporal_ram`） | host-acrtc-interface.md §7.2 の「DWT の速度を制限しない」と食い違う（OI-051） |
+| DONE と COUNT（DR-022） | port 1 のアクセスが終わったとき、DONE の有無と、要素が最後か（COUNT の桁上げ）が食い違えば ERROR にし、時間切れと同じくチャネルを止める（書いていない要素は捨てる）。DONE は `PortReply::Last` で渡す | DR-022 は ERROR にするとだけ書く [P] | COUNT が矩形より大きいと、DONE の付いた最後の語も書かれない |
+| ACRTC の VRAM | 64K 語。ACRTC の 20 bit の語番地の下位 16 bit を使い、上は折り返す | 仕様書 §05 は 128 KiB とだけ書く [V] | — |
 
 ## 04　テストと判定基準
 
@@ -294,13 +306,14 @@
 | 円・楕円・弧 | `crcl_example_draws_a_closed_circle_around_cp`、`crcl_of_radius_zero_draws_nothing`、`elps_example`、`aarc_example_draws_three_quarters`、`aarc_clockwise_takes_the_short_way`、`rarc_example`、`arc_with_pe_equal_to_cp_draws_the_whole_circle`、`aearc_quarter_and_rearc_agree`、`curves_advance_the_line_pattern` | U85 の例（r＝7、a＝9・b＝4・dX＝9、AARC・RARC の 4 分の 3 の円）。どの点も曲線から半画素以内で、上下・左右・対角に対称で、閉じている。時計回りでも同じ画素。弧は円の画素のうち、通る範囲だけで、終点を描かない。CP と 8d＋66、10d＋90、8d＋18、10d＋96 サイクル（追補 3 の (1)） | 合格 |
 | パターン | `ptn_example_copies_the_pattern`、`ptn_smaller_and_larger_than_the_pattern`、`ptn_zoom_doubles_each_dot`、`ptn_scan_directions` | U85 の例 (1)・(3)・(4)・(5) の SZ と拡大。SL・SD の 16 通りの向きと Pe（表 C36-1）。(4·6＋10)·8＋20 サイクル（追補 3 の (2)） | 合格 |
 | PAINT | `paint_fills_a_rectangle_inside_the_edge`、`paint_pattern_follows_the_offset_from_cp`、`paint_inside_a_circle`、`paint_treats_cl0_and_cl1_as_edges`、`paint_e1_fills_the_region_of_the_edg_color`、`paint_overflow_seeds_go_to_the_read_fifo`、`paint_with_data_in_the_read_fifo_has_a_two_point_stack`、`paint_area_modes` | 矩形で (18·10＋102)·7−58 サイクル。円の中だけを塗る。CL0・CL1 も縁。E＝1。10 個の部屋のうち 6 個の種が FIFO に出て（18 語で FIFO が満杯になり、読むまで待つ）、図 C34-6 の手順でやり直すと全部塗れる。領域モード（追補 3 の (3)） | 合格 |
+| データの DMA | `dma_dwt_one_word_per_request_and_done_on_the_last`、`dma_cycle_takes_t1_t3_and_waits_for_dack_high`、`dma_drd_hands_out_the_read_fifo_and_does_not_hang`、`dma_drd_requests_only_while_the_read_fifo_has_data`、`dma_burst_keeps_dreq_through_the_cycle`、`dma_write_fifo_full_holds_dreq`、`dma_needs_ddm_and_stops_on_pause_and_abort`、`dma_state_survives_a_snapshot` | 1 語ごとの DREQ（サイクルスチールは T1 で戻す）、T1・T3・Tn、最後の語の DONE、DMA の DRD は止まらない、満杯の書込み FIFO の間は要求しない、DDM・PSE・ABT（U85 p.49–50、p.66–67、p.320–321） | 合格 |
 | 保存 | `snapshot_round_trip_mid_transfer` | DWT の途中で保存して戻すと、同じ VRAM と状態になる | 合格 |
 
 期待値は U85 の例・記述と手計算で、実チップの測定ではない。曲線の画素は、曲線への近さと対称性だけを見ている（選び方は §03 の [V]）。直線の画素は、画素の数と列ごとに 1 画素であることだけを見ている（選び方は §03 の [V]）。MAME と比べるとき（V3）は、演算モード 110・111、パターンの位置、色レジスタの位置、COL＝11、領域モード、CED の時期、円・楕円・弧・PAINT が既知の差になる（§03）。
 
 ### Data Fabric
 
-試験は `emulator/crates/board/tests/fabric.rs`。期待値は仕様書 §06、DR-046、fabric.md の記述と、そこからの手計算で取る。
+試験は `emulator/crates/board/tests/fabric.rs` と、port 1 は `tests/acrtc_port.rs`。期待値は仕様書 §06、DR-022、DR-046、fabric.md の記述と、そこからの手計算で取る。
 
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
@@ -312,5 +325,6 @@
 | CPU と割込み | `cpu_access_to_the_register_file_takes_a_slot_from_the_transfer`、`irq_follows_done_and_irq_en` | 転送中の COUNT の読出しが 1 スロットを取り、転送は正しく終わる。IRQ は IRQ_EN∧DONE で、W1C で消える | 合格 |
 | ポートの細部 | `port0_byte_lanes_and_word_alignment`、`mask_xor_and_shift_apply_on_the_way`、`port_reset_clears_fifos_and_pointers` | 8 bit の偶数番地は上位バイト、16 bit は bit 0 を無視（DR-046 (3)）。0x1234 を 8 回して MASK・XOR で 0x3403。PORT_RESET | 合格 |
 | 保存 | `snapshot_round_trip_mid_transfer` | 2 チャネルの転送の途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
+| port 1 | `dwt_from_staging_ram_fills_the_rectangle`、`drd_to_staging_ram_reads_the_rectangle`、`one_word_takes_six_or_seven_slots_from_temporal_ram`、`count_larger_than_the_rectangle_is_an_error`、`count_smaller_than_the_rectangle_is_an_error_and_abt_clears_the_acrtc`、`the_channel_stalls_until_the_acrtc_requests`、`stop_in_the_middle_of_a_port1_access_releases_dack`、`snapshot_round_trip_mid_port1_transfer` | DWT・DRD の矩形を COUNT＝x·y で運ぶ（DR-022）。1 回のアクセスは 3 スロット、1 語は Staging RAM から 6 か 8、Temporal RAM から 6〜7 スロット（§03 の時刻からの計算。2CLK の位相を 7 通りに変える）。COUNT が大きくても小さくても ERROR、ABT で ACRTC が止まる。DREQ まで STALL。STOP で DACK を戻す。途中で保存して戻せる | 合格 |
 
 期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。fabric.md の順序と状態の PAL の式ができたら、この試験のスロットの列と突き合わせる（OI-050 (1)）。

@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.2**  
+**v0.3**  
 2026年11月25日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)
 
 ## 01　前提と範囲
 
@@ -224,7 +224,7 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 | SEQ（20R8A） | 判断を登録する。DBCH の交互の切替え、動いている要素（INF）、CPU への許可 | GO、次の AOP、次のアクセス、HREQ、OPDN、TOUT、再設定の要求（ch0・1）、ERROR | DBCH、INF、AOP（3）、アクセス（2）、HGNT |
 | AFC0・1（20L8A） | AOP と CPU の番地を、A ファイルの番地（4）、/WE、/CS、Cin、B ファイルの選択と番地（3）、SL・U12–U13 の出力の許可、PS・PD・U7–U8 の取込みの信号に直す | AOP、DBCH、HA6、HA3、HA2、R/W、q0・q1 | 15 本 |
 
-- 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
+- 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。port 1 は、エミュレータの模型（ブリッジの同期化の時刻。[emulator.md](../impl/emulator.md) §03）で、DACK を出してから戻すまで 3 スロット、1 語は 6〜8 スロットになる（OI-051）。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。
 - 優先は、CPU のアクセス、動いている要素の W、その COUNT の更新、再設定、新しい要素の順（DR-046 (2)）。
 
 ### チャネルの状態（CHS、STS）

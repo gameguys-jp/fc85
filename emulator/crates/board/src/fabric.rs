@@ -177,12 +177,17 @@ pub struct Access {
 pub enum PortReply {
     /// 終わった。読出しでは FD の値（8 bit のポートは下位バイト）。
     Done(u16),
+    /// 終わった。ポートが転送の最後の語の印を出した（port 1 の ACRTC の DONE。DR-022）。
+    Last(u16),
     /// まだ終わらない（port 1、DOC の port 2 だけ）。
     Wait,
 }
 
 /// Fabric の外側の回路：ポート、モジュールの /PRES、PORT_RESET と AUDIO_N の書込みの信号。
 pub trait Ports {
+    /// このスロットの間、ポートの向こうの回路（ACRTC のつなぎなど）を進める。スロットの頭の判断の後に
+    /// 毎スロット呼び、このスロットで始まるアクセスを渡す。準備の信号とアクセスの応答は、この後に問う。
+    fn run_slot(&mut self, _starting: Option<&Access>) {}
     /// 準備の信号（RDY の入力）。スロットの中ほどで、このスロットのアクセスより前の状態を返す。
     fn ready(&self, port: u8, dir: Dir) -> bool;
     /// アクセスを始める。port 1 と DOC の port 2 のほかは、すぐ `Done` を返す。
@@ -428,6 +433,8 @@ struct Active {
     elapsed: u32,
     flag: bool,
     result: Option<u16>,
+    /// ポートが最後の語の印（DONE）を出した。
+    end_mark: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -688,6 +695,8 @@ impl Fabric {
         let candidate = self.dbch;
         let (aop, decision) = self.decide(doc, next_s);
         self.dbch = self.next_candidate();
+        let starting = self.active.filter(|a| a.elapsed == 0).map(|a| a.acc);
+        ports.run_slot(starting.as_ref());
 
         // 2. 中ほど：候補の準備の信号
         let regs = self.ch[self.dbch as usize].regs;
@@ -700,15 +709,20 @@ impl Fabric {
         let mut slot_flag = false;
         if let Some(mut a) = self.active.take() {
             slot_flag = a.flag;
-            if a.elapsed == 0 {
-                if let PortReply::Done(v) = ports.access(&a.acc) {
+            let reply = if a.elapsed == 0 {
+                Some(ports.access(&a.acc))
+            } else if a.kind == Kind::Long && a.result.is_none() {
+                Some(ports.continue_access(a.acc.port))
+            } else {
+                None
+            };
+            match reply {
+                Some(PortReply::Done(v)) => a.result = Some(v),
+                Some(PortReply::Last(v)) => {
                     a.result = Some(v);
+                    a.end_mark = true;
                 }
-            } else if a.kind == Kind::Long
-                && a.result.is_none()
-                && let PortReply::Done(v) = ports.continue_access(a.acc.port)
-            {
-                a.result = Some(v);
+                _ => {}
             }
             a.elapsed += 1;
             let finished = match a.kind {
@@ -721,7 +735,14 @@ impl Fabric {
                 if a.acc.dir == Dir::Read {
                     a.acc.data = v;
                 }
-                self.complete(&a.acc, v);
+                if a.acc.port == 1 && self.done_mismatch(&a) {
+                    // ACRTC の DONE と COUNT が合わない：ERROR にし、時間切れと同じく止める（DR-022）
+                    let c = a.acc.ch as usize;
+                    self.kill(c);
+                    self.ch[c].error = true;
+                } else {
+                    self.complete(&a.acc, v);
+                }
                 access_done = true;
             } else if a.kind == Kind::Long && a.elapsed >= TIMEOUT_SLOTS {
                 ports.abort_access(a.acc.port);
@@ -800,7 +821,23 @@ impl Fabric {
             elapsed: 0,
             flag: port_attr(sc.port, doc).flag,
             result: None,
+            end_mark: false,
         }
+    }
+
+    /// port 1 のアクセスで、DONE の有無が、要素が最後かどうか（COUNT の桁上げ）と食い違う。
+    fn done_mismatch(&self, a: &Active) -> bool {
+        [self.elem, self.tail]
+            .into_iter()
+            .flatten()
+            .find(|e| {
+                e.ch == a.acc.ch
+                    && match a.acc.dir {
+                        Dir::Read => !e.read_done,
+                        Dir::Write => e.w_decided && !e.w_done,
+                    }
+            })
+            .is_some_and(|e| e.count_done && e.last != a.end_mark)
     }
 
     /// スロットの頭の判断（fabric.md §06 の ELG・SEQ）。優先は、CPU、動いている要素の W、

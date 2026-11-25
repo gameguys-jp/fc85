@@ -10,10 +10,13 @@
 //! - port 9：文字 ROM 32 KiB。bit 15 を無視する。
 //! - port 10：音声入力の FIFO（64×8。拡張基板があるとき）。
 //!
-//! まだないもの（`ready` は 0、アクセスは何もしない）：port 1（ACRTC の DMA）、DOC 子基板の
-//! port 2、port 8（Capture RAM、[O]）、port 11〜15（拡張）。FIFO の向こう側（DSP、MSM5205、
-//! 本体 DAC）のアダプタもまだなく、試験や上の層が FIFO を直接読み書きする。
+//! - port 1：ACRTC の DMA。ACRTC と VRAM は `acrtc`（`AcrtcBridge`）が持ち、スロットごとに進める。
+//!
+//! まだないもの（`ready` は 0、アクセスは何もしない）：DOC 子基板の port 2、port 8（Capture RAM、[O]）、
+//! port 11〜15（拡張）。FIFO の向こう側（DSP、MSM5205、本体 DAC）のアダプタもまだなく、試験や上の層が
+//! FIFO を直接読み書きする。
 
+use crate::acrtc::AcrtcBridge;
 use crate::fabric::{Access, Dir, PortReply, Ports};
 use crate::fifo::Fifo;
 use serde::{Deserialize, Serialize};
@@ -78,6 +81,8 @@ pub struct FabricPorts {
     pub modules: u16,
     /// 最後に書かれた AUDIO_N。
     pub audio_n: u16,
+    /// port 1：ACRTC と VRAM、ブリッジと P1A。
+    pub acrtc: AcrtcBridge,
 }
 
 impl FabricPorts {
@@ -94,6 +99,7 @@ impl FabricPorts {
             doc: false,
             modules: 0,
             audio_n: 0,
+            acrtc: AcrtcBridge::new(),
         }
     }
 
@@ -129,9 +135,14 @@ impl Default for FabricPorts {
 }
 
 impl Ports for FabricPorts {
+    fn run_slot(&mut self, starting: Option<&Access>) {
+        self.acrtc.run_slot(starting.filter(|a| a.port == 1));
+    }
+
     fn ready(&self, port: u8, dir: Dir) -> bool {
         match (port, dir) {
             (0 | 6 | 7 | 9, _) => true,
+            (1, _) => self.acrtc.rdy1(),
             // DOC 子基板があれば RDY2 は常に 1 で、アクセスが DOC の窓まで延びる（fabric.md §06）。
             (2, _) if self.doc => true,
             (2, Dir::Write) => self.dac.ir(),
@@ -172,15 +183,25 @@ impl Ports for FabricPorts {
             (7, Dir::Read) => self.temporal.read() as u16,
             (9, Dir::Read) => self.char_rom[(a.addr & 0x7FFF) as usize] as u16,
             (10, Dir::Read) => self.audio_in.shift_out(),
-            // port 1 は ACRTC の応答まで延びる。まだ ACRTC をつないでいない。
-            (1, _) => return PortReply::Wait,
+            // port 1 は ACRTC の応答まで延びる（DACK は `run_slot` で出している）。
+            (1, _) => return self.acrtc.port_reply(),
             _ => 0,
         };
         PortReply::Done(v)
     }
 
-    fn continue_access(&mut self, _port: u8) -> PortReply {
-        PortReply::Wait
+    fn continue_access(&mut self, port: u8) -> PortReply {
+        if port == 1 {
+            self.acrtc.port_reply()
+        } else {
+            PortReply::Wait
+        }
+    }
+
+    fn abort_access(&mut self, port: u8) {
+        if port == 1 {
+            self.acrtc.abort();
+        }
     }
 
     fn doc_present(&self) -> bool {

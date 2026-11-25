@@ -1345,3 +1345,232 @@ fn snapshot_round_trip_mid_transfer() {
     assert_eq!(r.m.0[0x100..0x104], [1, 2, 3, 4]);
     assert!(r.m.0 == s.m.0);
 }
+
+// ---- データの DMA（DREQ・DACK・DTACK・DONE。U85 p.49–50、p.66–67、p.320–321） ----
+
+const CCR_DMA_STEAL: u16 = 0x2A00; // DDM＝1、DRC＝1（サイクルスチール。DR-016）、GBM＝010
+const CCR_DMA_BURST: u16 = 0x2200; // DDM＝1、DRC＝0
+
+impl Rig {
+    /// DREQ が出るまで進める。
+    fn until_dreq(&mut self, limit: u32) {
+        for _ in 0..limit {
+            if self.a.dreq() {
+                return;
+            }
+            self.a.tick(&mut self.m);
+        }
+        panic!("DREQ が出ない");
+    }
+
+    /// DMA の 1 語。DACK＝L を 1 回目の立上りで T1、2 回目で T3（DTACK）、DACK＝H を 3 回目で Tn。
+    /// 読んだ語と、DONE が出ていたかを返す。
+    fn dma_word(&mut self, to_acrtc: bool, data: u16) -> (u16, bool) {
+        assert!(self.a.dreq());
+        self.a.set_dack(true, to_acrtc, data);
+        self.a.tick(&mut self.m);
+        assert!(!self.a.dma_dtack(), "T1 では DTACK はまだ");
+        let done = self.a.done();
+        self.a.tick(&mut self.m);
+        assert!(self.a.dma_dtack(), "T3 で DTACK");
+        assert_eq!(self.a.done(), done);
+        let v = self.a.dma_data();
+        self.a.set_dack(false, to_acrtc, data);
+        self.a.tick(&mut self.m);
+        assert!(!self.a.dma_dtack() && !self.a.done());
+        (v, done)
+    }
+}
+
+#[test]
+fn dma_dwt_one_word_per_request_and_done_on_the_last() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    r.reg(0x02, CCR_DMA_STEAL);
+    // AX＝1、AY＝−1：2 語×2 行。データは DMA で渡す
+    r.put(&[DWT, 1, neg(-1)]);
+    let mut dones = Vec::new();
+    for w in [0xA, 0xB, 0xC, 0xD] {
+        r.until_dreq(200);
+        r.a.set_dack(true, true, w);
+        r.a.tick(&mut r.m);
+        // サイクルスチール：T1 で DREQ を戻す
+        assert!(!r.a.dreq());
+        dones.push(r.a.done());
+        r.a.tick(&mut r.m);
+        assert!(r.a.dma_dtack());
+        r.a.set_dack(false, true, w);
+        r.a.tick(&mut r.m);
+    }
+    assert_eq!(dones, vec![false, false, false, true]);
+    assert_eq!(r.a.dma_progress(), (4, 4));
+    assert!(!r.a.dreq(), "語が残らなければ要求しない");
+    r.finish();
+    assert_eq!(r.m.0[0x100..0x102], [0xA, 0xB]);
+    assert_eq!(r.m.0[0x140..0x142], [0xC, 0xD]);
+    assert_eq!(r.a.rwp(), (0, 0x180));
+    assert_ne!(r.a.status() & SR_CED, 0);
+}
+
+#[test]
+fn dma_cycle_takes_t1_t3_and_waits_for_dack_high() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    r.reg(0x02, CCR_DMA_STEAL);
+    r.put(&[DWT, 0, 0]);
+    r.until_dreq(200);
+    r.a.set_dack(true, true, 0x1234);
+    r.a.tick(&mut r.m); // T1
+    assert!(r.a.done(), "1 語だけなので最初の語で DONE");
+    r.a.tick(&mut r.m); // T3
+    assert!(r.a.dma_dtack());
+    // DACK を L のまま保てば、DTACK も保つ（Tw）
+    for _ in 0..5 {
+        r.a.tick(&mut r.m);
+        assert!(r.a.dma_dtack() && r.a.done());
+    }
+    r.a.set_dack(false, true, 0x1234);
+    r.a.tick(&mut r.m); // Tn
+    assert!(!r.a.dma_dtack() && !r.a.done());
+    r.finish();
+    assert_eq!(r.m.0[0x100], 0x1234);
+}
+
+#[test]
+fn dma_drd_hands_out_the_read_fifo_and_does_not_hang() {
+    let mut r = Rig::new(0x40);
+    for i in 0..4 {
+        r.m.0[0x300 + i] = 0x1111 * (i as u16 + 1);
+    }
+    r.set_rwp(0, 0x300);
+    r.reg(0x02, CCR_DMA_STEAL);
+    r.put(&[DRD, 3, 0]);
+    let mut got = Vec::new();
+    for _ in 0..4 {
+        r.until_dreq(500);
+        got.push(r.dma_word(false, 0));
+    }
+    assert_eq!(
+        got,
+        vec![
+            (0x1111, false),
+            (0x2222, false),
+            (0x3333, false),
+            (0x4444, true)
+        ]
+    );
+    assert!(!r.a.dreq());
+    // プログラム転送と違い、最後の語の後で止まらない
+    r.finish();
+    assert_ne!(r.a.status() & SR_CED, 0);
+    assert_eq!(r.a.error_counts(), (0, 0));
+}
+
+#[test]
+fn dma_drd_requests_only_while_the_read_fifo_has_data() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x300);
+    r.reg(0x02, CCR_DMA_STEAL);
+    r.put(&[DRD, 1, 0]);
+    // 実行を始めて最初の語を読むまでは要求しない
+    for _ in 0..40 {
+        r.a.tick(&mut r.m);
+        assert!(!r.a.dreq());
+    }
+    r.until_dreq(100);
+    assert_ne!(r.a.status() & SR_RFR, 0);
+}
+
+#[test]
+fn dma_burst_keeps_dreq_through_the_cycle() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    r.reg(0x02, CCR_DMA_BURST);
+    r.put(&[DWT, 3, 0]);
+    r.until_dreq(200);
+    r.a.set_dack(true, true, 1);
+    r.a.tick(&mut r.m);
+    assert!(r.a.dreq(), "バーストでは語が残る間 DREQ を保つ");
+    r.a.tick(&mut r.m);
+    r.a.set_dack(false, true, 1);
+    r.a.tick(&mut r.m);
+    for w in 2..=4 {
+        r.dma_word(true, w);
+    }
+    assert!(!r.a.dreq());
+    r.finish();
+    assert_eq!(r.m.0[0x100..0x104], [1, 2, 3, 4]);
+}
+
+#[test]
+fn dma_write_fifo_full_holds_dreq() {
+    let mut r = Rig::new(0x100);
+    r.set_rwp(0, 0x1000);
+    r.reg(0x02, CCR_DMA_STEAL);
+    // 64 語×1 行。DMA は 3 サイクルで 1 語、描画は 4〜6 サイクルで 1 語なので、FIFO がいずれ満ちる
+    r.put(&[DWT, 63, 0]);
+    let mut held = false;
+    let mut sent = 0u16;
+    for _ in 0..5000 {
+        if sent == 64 {
+            break;
+        }
+        if r.a.dreq() {
+            r.dma_word(true, sent);
+            sent += 1;
+        } else {
+            if sent > 0 && r.a.status() & SR_WFR == 0 {
+                held = true;
+            }
+            r.a.tick(&mut r.m);
+        }
+    }
+    assert_eq!(sent, 64);
+    assert!(held, "書込み FIFO が満杯の間は要求しない");
+    r.finish();
+    assert!((0..64).all(|i| r.m.0[0x1000 + i] == i as u16));
+    assert_eq!(r.a.error_counts(), (0, 0));
+}
+
+#[test]
+fn dma_needs_ddm_and_stops_on_pause_and_abort() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    // DDM＝0：プログラム転送。DREQ は出ない
+    r.put(&[DWT, 0, 0]);
+    for _ in 0..200 {
+        r.a.tick(&mut r.m);
+        assert!(!r.a.dreq());
+    }
+    r.put(&[0x5555]);
+    r.finish();
+    assert_eq!(r.m.0[0x100], 0x5555);
+
+    r.reg(0x02, CCR_DMA_STEAL);
+    r.put(&[DWT, 3, 0]);
+    r.until_dreq(200);
+    r.reg(0x02, CCR_DMA_STEAL | 0x4000); // PSE
+    assert!(!r.a.dreq());
+    r.reg(0x02, CCR_DMA_STEAL);
+    assert!(r.a.dreq());
+    r.dma_word(true, 1);
+    r.reg(0x02, CCR_DMA_STEAL | 0x8000); // ABT
+    r.reg(0x02, CCR_DMA_STEAL);
+    assert!(!r.a.dreq());
+    assert_eq!(r.a.dma_progress(), (0, 0));
+}
+
+#[test]
+fn dma_state_survives_a_snapshot() {
+    let mut r = Rig::new(0x40);
+    r.set_rwp(0, 0x100);
+    r.reg(0x02, CCR_DMA_STEAL);
+    r.put(&[DWT, 1, 0]);
+    r.until_dreq(200);
+    r.a.set_dack(true, true, 0x77);
+    r.a.tick(&mut r.m);
+    let saved = serde_json::to_string(&r.a).unwrap();
+    let b: Hd63484 = serde_json::from_str(&saved).unwrap();
+    assert_eq!(b, r.a);
+    assert_eq!(b.dma_progress(), (0, 2));
+}

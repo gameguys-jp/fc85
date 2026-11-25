@@ -9,7 +9,11 @@
 //! - ホストとのやり取りは 16 bit バスだけ（本機の接続。台帳 §2）。`read`・`write` の 1 回が CS の 1 サイクル。
 //! - 描画先のフレームバッファ（VRAM）は `Vram` トレイトの向こう側に置く。番地は 20 bit の語番地。
 //! - 表示（同期信号、表示アドレス、ラスタカウンタ）はまだ作っていない。タイミング・表示のレジスタは値を保つだけ。
-//! - DMA のハンドシェイク（DREQ、DACK、DONE）は段階 2 で足す。データ転送はプログラム転送（DDM＝0）で動く。
+//! - データの DMA（DDM＝1 の DWT・DMOD・DRD）は、DREQ・DACK・DTACK・DONE のピンで見せる（段階 2）。
+//!   DACK は 2CLK の立上りで取り込み、そのサイクルを T1、次の立上りを T3 として DTACK を出し、DACK＝H を
+//!   取り込んだ立上り（Tn）で FIFO との受け渡しを終える（U85 p.49–50、p.320–321）。ピンの遅れ（tDRQD・
+//!   tDDTZL など）は扱わず、立上りで変わるものとする。遅れは board 層のつなぎの模型が足す。
+//!   コマンドの DMA（CDM）は作っていない。
 //! - 資料で決まらない動作は、`docs/impl/emulator.md` §03 にどう扱ったかを書く。
 
 use std::collections::VecDeque;
@@ -32,6 +36,8 @@ pub const SR_WFE: u8 = 0x01;
 const CCR_ABT: u16 = 0x8000;
 const CCR_PSE: u16 = 0x4000;
 const CCR_DDM: u16 = 0x2000;
+const CCR_CDM: u16 = 0x1000;
+const CCR_DRC: u16 = 0x0800;
 const OMR_STR: u16 = 0x4000;
 
 /// 20 bit の語番地。
@@ -333,6 +339,40 @@ pub struct Hd63484 {
     cycles: u64,
     overruns: u64,
     underruns: u64,
+    dma: Dma,
+}
+
+/// DMA の 1 サイクルの段階（U85 p.320–321 の図 T-4・T-5）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum DmaCycle {
+    #[default]
+    Idle,
+    /// DACK＝L を取り込んだ立上り（T1・T2）。
+    T1,
+    /// T3 から：DTACK＝L を出し、DACK＝H を待つ。
+    Ack,
+}
+
+/// データの DMA のピンと、転送の語の数。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Dma {
+    /// DACK の入力が L。
+    dack: bool,
+    /// DMA の R/W（反転した極性）が H：ACRTC への書込み（U85 p.50）。
+    to_acrtc: bool,
+    /// データバスの入力（DMA の書込み）。
+    data_in: u16,
+    cycle: DmaCycle,
+    /// このサイクルの向き（T1 で取り込む）。
+    cycle_write: bool,
+    /// このサイクルが転送の最後の語（DONE を出す）。
+    last: bool,
+    /// 転送の向き：VRAM から読む（DRD）。
+    read: bool,
+    /// DMA で受け渡した語の数。
+    count: u32,
+    /// 転送の語の数（AX・AY の矩形）。0 なら DMA の転送はない。
+    total: u32,
 }
 
 impl Default for Hd63484 {
@@ -387,6 +427,7 @@ impl Hd63484 {
             cycles: 0,
             overruns: 0,
             underruns: 0,
+            dma: Dma::default(),
         }
     }
 
@@ -400,6 +441,8 @@ impl Hd63484 {
         self.rfifo.clear();
         self.exec = Exec::Idle;
         self.busy = 0;
+        self.dma.total = 0;
+        self.dma.count = 0;
     }
 
     // ---- ホストのアクセス（16 bit バス） ----
@@ -483,6 +526,100 @@ impl Hd63484 {
         self.wfifo.clear();
         self.rfifo.clear();
         self.flags = SR_CED;
+        // DMA の要求をやめる。動いているバスのサイクルは、DACK＝H まで続ける [V]
+        self.dma.total = 0;
+        self.dma.count = 0;
+    }
+
+    // ---- DMA のピン（U85 p.49–50、p.66–67） ----
+
+    /// DACK の入力。`low` が true で L（応答）。`to_acrtc` は R/W（DMA では H が ACRTC への書込み）、
+    /// `data` は書込みのデータ。次の 2CLK の立上りで取り込む。
+    pub fn set_dack(&mut self, low: bool, to_acrtc: bool, data: u16) {
+        self.dma.dack = low;
+        self.dma.to_acrtc = to_acrtc;
+        self.dma.data_in = data;
+    }
+
+    /// DREQ が L（要求）か。サイクルスチール（DRC＝1）では 1 語ごとに、T1 で H に戻し、Tn で次を出す。
+    /// バースト（DRC＝0）では、FIFO に余地があり語が残る間 L のまま [V]（1 要求で最大 8 語の上限は扱わない）。
+    pub fn dreq(&self) -> bool {
+        let d = &self.dma;
+        if d.total == 0
+            || self.ccr & (CCR_ABT | CCR_PSE | CCR_CDM) != 0
+            || self.ccr & CCR_DDM == 0
+            || self.omr & OMR_STR == 0
+        {
+            return false;
+        }
+        let busy = d.cycle != DmaCycle::Idle;
+        if busy && self.ccr & CCR_DRC != 0 {
+            return false;
+        }
+        let n = usize::from(busy);
+        if d.count as usize + n >= d.total as usize {
+            return false;
+        }
+        if d.read {
+            self.rfifo.len() > n
+        } else {
+            self.wfifo.len() + n < FIFO_WORDS
+        }
+    }
+
+    /// DMA のサイクルの DTACK が L か（T3 から、DACK＝H を取り込むまで）。
+    pub fn dma_dtack(&self) -> bool {
+        self.dma.cycle == DmaCycle::Ack
+    }
+
+    /// DONE が L か（データの DMA の最後の語のサイクル。T1 から Tn まで）。
+    pub fn done(&self) -> bool {
+        self.dma.cycle != DmaCycle::Idle && self.dma.last
+    }
+
+    /// DMA の読出しでデータバスに出す語（読出し FIFO の先頭。空なら 0）。
+    pub fn dma_data(&self) -> u16 {
+        self.rfifo.front().copied().unwrap_or(0)
+    }
+
+    /// DMA で受け渡した語の数と、転送の語の数。
+    pub fn dma_progress(&self) -> (u32, u32) {
+        (self.dma.count, self.dma.total)
+    }
+
+    /// 2CLK の立上りの DMA のバスのサイクル。
+    fn dma_edge(&mut self) {
+        let d = &mut self.dma;
+        match d.cycle {
+            DmaCycle::Idle => {
+                if d.dack {
+                    d.cycle = DmaCycle::T1;
+                    d.cycle_write = d.to_acrtc;
+                    d.last = d.total > 0 && d.count + 1 == d.total;
+                }
+            }
+            DmaCycle::T1 => d.cycle = DmaCycle::Ack,
+            DmaCycle::Ack => {
+                if !d.dack {
+                    // Tn：書込みは FIFO に入れ、読出しは FIFO から出す
+                    d.cycle = DmaCycle::Idle;
+                    d.last = false;
+                    if d.count < d.total {
+                        d.count += 1;
+                    }
+                    if d.cycle_write {
+                        let w = d.data_in;
+                        if self.wfifo.len() < FIFO_WORDS {
+                            self.wfifo.push_back(w);
+                        } else {
+                            self.overruns += 1;
+                        }
+                    } else if self.rfifo.pop_front().is_none() {
+                        self.underruns += 1;
+                    }
+                }
+            }
+        }
     }
 
     // ---- 状態の読出し（副作用なし） ----
@@ -570,6 +707,8 @@ impl Hd63484 {
     /// 2CLK を 1 周期進める。
     pub fn tick(&mut self, vram: &mut impl Vram) {
         self.cycles += 1;
+        // DMA のバスのサイクルは、描画の停止（STR、PSE、ABT）と関係なく進める [V]
+        self.dma_edge();
         // STR＝0 なら描画も止まる。PSE＝1 は一時停止、ABT＝1 は FIFO に触れない（U85 p.66、p.70）
         if self.omr & OMR_STR == 0 || self.ccr & (CCR_ABT | CCR_PSE) != 0 {
             return;
@@ -758,6 +897,14 @@ impl Hd63484 {
                     None
                 };
                 let read = cmd == Cmd::Drd;
+                // データの DMA（U85 p.66）。DDM は実行を始めたときの値で決める [V]
+                if self.ccr & CCR_DDM != 0 {
+                    self.dma.total = rect.words();
+                    self.dma.count = 0;
+                    self.dma.read = read;
+                } else {
+                    self.dma.total = 0;
+                }
                 self.exec = Exec::Transfer {
                     rect,
                     mm,

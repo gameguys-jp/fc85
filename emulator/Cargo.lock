@@ -6,6 +6,7 @@ version = 4
 name = "fc85-board"
 version = "0.1.0"
 dependencies = [
+ "fc85-chips",
  "serde",
  "serde_json",
 ]
