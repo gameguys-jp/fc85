@@ -75,16 +75,16 @@ Fictional Machines / GAME GUYS ｜ 2026.11.25 ｜ WORKING SPECIFICATION
 | IC | [D] 参照仕様 | [P/V] 本機の使い方 |
 |---|---|---|
 | HD68000-8 [1][25][26] | 16-bit外部データ、24-bitアドレス、非同期バス、DTACK、バス調停信号。日立HD68000-8はMC68000L8と同等品として1985年の日立データブックに載り、同年の国産基板に刻印例がある [D]（[25] §5、[26] §1） | 8 MHz（16 MHz÷2）[P]（DR-003）。16 MiB空間。ROM起動、周辺待ち時間、バスエラー。日立品を使う [P]（DR-008） |
-| HD63484-8 [2][3][15][16] | 1984年の資料に8 MHz品、2 MiBグラフィックメモリ空間、38種の描画命令、画面分割・外部同期・DMA。16-bitホストとローカルバス。-8品の2CLK周期は125 ns以上。1985年8月付けの-8品データシートと、同年の米国製ボードの採用例がある [D]（[15] §1、[16] §1–2） | 2CLK 5.369318 MHz（21.47727 MHz÷4、周期186 ns）[P]（DR-004）。1985年後半の量産初期品を使い、-4／-6品は使わない [P]（DR-004）。128 KiB VRAM。AR/STATUSとデータポート。FIFOを介した描画・転送。ローカルVRAMをCPUに直結しない |
-| TMS32010 [4][17] | 16-bit固定小数点DSP、16×16乗算、32-bit演算器、144ワード内部データRAM、4Kワード外部プログラム、8 I/Oポート。200 ns命令サイクル級 | 20 MHz入力（専用の発振源）[P]（DR-003）／5 M命令サイクル毎秒級。外部8 KiB（4K×16）プログラムRAMを停止中にロード。I/Oラッチ経由で処理。速度グレード確認。国産の代替候補は富士通MB8764 [O]（DR-007、[27] §1） |
-| ES5503 [5][6][18][19] | 32オシレータ、64 KiB直接波形アドレス、周波数・音量・波形位置等の制御、時分割波形アクセスと内蔵DAC。入力クロックの周期は100〜125 ns（8〜10 MHz）[D]（[18] §3.1） | 8 MHz（既存の16 MHz÷2を流用）[P]（DR-003、DR-011）。DOC、64 KiB波形RAM、アダプタ、出力アンプを子基板に載せる [P]（DR-011）。初期16有効オシレータを目標。CPU/FabricアクセスはDOCの空き位相に限定。入手は試作用の少量サンプルという架空の設定 [P]（DR-006、[音源の差し替え](../story/sound-redesign.md)） |
+| HD63484-8 [2][3][15][16] | 1984年の資料に8 MHz品、2 MiBグラフィックメモリ空間、コマンド38種（うち図形描画23種）、画面分割・外部同期・DMA。16-bitホストとローカルバス。-8品の2CLK周期は125 ns以上。1985年8月付けの-8品データシートと、同年の米国製ボードの採用例がある [D]（[15] §1、[16] §1–2） | 2CLK 5.369318 MHz（21.47727 MHz÷4、周期186 ns）[P]（DR-004）。1985年後半の量産初期品を使い、-4／-6品は使わない [P]（DR-004）。128 KiB VRAM。AR/STATUSとデータポート。FIFOを介した描画・転送。ローカルVRAMをCPUに直結しない |
+| TMS32010 [4][17] | 16-bit固定小数点DSP、16×16乗算、32-bit演算器、144ワード内部データRAM、4Kワード外部プログラム、入力8・出力8ポート。200 ns命令サイクル級 | 20 MHz入力（専用の発振源）[P]（DR-003）／5 M命令サイクル毎秒級。外部8 KiB（4K×16）プログラムRAMを停止中にロード。I/Oラッチ経由で処理。速度グレード確認。国産の代替候補は富士通MB8764 [O]（DR-007、[27] §1） |
+| ES5503 [5][6][18][19] | 32オシレータ、64 KiB直接波形アドレス、周波数・音量・波形位置等の制御、時分割波形アクセスと内蔵DAC。入力クロックの周期は100〜125 ns（8〜10 MHz）[D]（[18] §3.1） | 8 MHz（既存の16 MHz÷2を流用）[P]（DR-003、DR-011）。DOC、64 KiB波形RAM、アダプタ、出力アンプを子基板に載せる [P]（DR-011）。初期16有効オシレータを目標。CPU/Fabricのアクセスは、DOCサイクルごとに来るホスト側の位相（E High）に限る [D]（[18]、§06 port 2）。入手は試作用の少量サンプルという架空の設定 [P]（DR-006、[音源の差し替え](../story/sound-redesign.md)） |
 | MSM5205 [7][20] | 3/4-bit ADPCM、384 kHz基準で4/6/8 kHz、DACと外付けフィルタ | 4-bit、8 kHz。外部FIFOからニブルを供給。復号履歴とリセットをモデル化 |
 | CD22101 [8][21] | 4×4×2アナログクロスポイントスイッチ。1980年RCA資料に掲載。1983年RCA資料では正式品として載る [D]（[27] §5） | CD22101を維持する [P]（DR-009）。初期は1個相当の経路モデル。必要なら複数個。電圧、帯域、RON、制御ピンは実装前に照合 |
 | TDC1048 [9][22] | 1984・1985年TRW資料の8-bit、20 MSPSフラッシュADC。28ピン、+5／−5.2 V、1.6 W。用途に「Low-Cost Video Digitizing」[D]（[22]、[27] §2） | 映像入力基板の輝度取り込み用 [P]（DR-009）。同期分離、クランプ、色復号、RAM書込みは外部回路。TDC1007（64ピン、2.7 W、−6 V）は採らない [P]（DR-009） |
 | HD6850 [10][23][26] | 非同期シリアルI/O、制御・状態・データレジスタ。MC6850と互換の国産品として1985年の日立データブックに載る [D]（[26] §2） | MIDI IN/OUT用 [P]（DR-008）、31.25 kbit/s（500 kHz＝16 MHz÷32）[P]（DR-003）。オプトアイソレータ等は別設計 |
-| BA7230LS [27] | ロームのRGB→NTSCエンコーダ。+5 V単一、SZIP-24。映像入力との高速切替（スーパーインポーズ）を持つ。1985年10月発売の国産家庭用ゲーム機が採用（後年の解析資料による）[D]（[27] §3） | NTSCエンコーダ [P][V]（DR-009）。1985年以前のローム資料で確認できなければMC1377（1983年Motorola資料、+12 V）に戻す [O] |
+| BA7230LS [27] | ロームのRGB→NTSCエンコーダ。+5 V単一、SZIP-24。映像入力との高速切替（スーパーインポーズ）を持つ。1985年10月発売の国産家庭用ゲーム機が採用（後年の解析資料による）[D]（[27] §3） | NTSCエンコーダ [P][V]（DR-009）。1985年以前のローム資料で確認できなければMC1377（1983年Motorola資料、+12 V）に戻す [O]。本体では映像入力との重ね合わせを使わない。ゲンロックは映像拡張基板の候補 [O]（DR-013） |
 
-HD63484のメーカー資料の接続例には68000とDMAコントローラが含まれる。対してDOCは別のCPUバス形式を前提とするため、クロック位相・バイト幅を変換する専用アダプタを置く。DSPも外部RAMを汎用データ空間として直接参照できない。
+HD63484のメーカー資料の接続例には68000とDMAコントローラが含まれる。対してDOCは別のCPUバス形式を前提とするため、クロック位相・バイト幅を変換する専用アダプタを置く。DSPは外部RAMを汎用データ空間としては参照できないが、TBLR／TBLW（各3サイクル、ACCの下位12 bitで番地を指定）で外部プログラムRAMと内部データRAMの間を1語ずつ転送できる [D]（[4]、[17]）。
 
 HD63484とES5503は他のICに置き換えない [P]（DR-001）。HD63484-8は1985年1月の米国広告、同年6月以降の採用ボード、8月付けの正式データシートがあり、1985年の部品として扱える [D]（[16] §1–2）。音源にヤマハFMは使わない。録音した音や文字・画像のデータをそのまま波形として鳴らすためで、DSPにはプログラムをRAMに読み込んで差し替えられるTMS32010を使う [P]（DR-007）。
 
@@ -117,7 +117,7 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | ローカルメモリ | 容量 | 構成・アクセス |
 |---|---:|---|
 | ACRTC VRAM | 128 KiB | 16-bit word。HM4864A-12（64K×1、120 ns）×16。読み出しと書き込みでCASの時刻を分ける [P]（DR-005）。リフレッシュはACRTCがHSYNC中に行う [D]（[15] §3.1）。表示・描画・DMAは調停。CPUからはACRTC経由 |
-| DOC wave RAM | 64 KiB | 8-bit。DOCの読出し位相を優先。DOCの子基板に載せる [P]（DR-011） |
+| DOC wave RAM | 64 KiB | 8-bit。DOC側（E Low）とホスト側（E High）の位相が固定で交互に来る [D]（[18]、§06 port 2）。DOCの子基板に載せる [P]（DR-011） |
 | DSP program RAM | 8 KiB | 4096×16。外部プログラムメモリ。HM6168H-55（4K×4、55 ns）×4 [P]（DR-008） |
 | DSP internal RAM | 288 B | 144×16。CPU直接アクセス不可 |
 | Temporal RAM | 64 KiB | 独立R/Wカウンタ。リング／同期リセット |
@@ -142,8 +142,8 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | ID | ポート | 方向・アクセス条件 |
 |---|---|---|
 | 0 | Staging RAM | R/W、byte address、16-bit対応 |
-| 1 | ACRTC VRAM stream | R/W、native RD/WT等のコマンドとFIFO経由。転送開始前にポインタを設定し、逐次word転送。初期は任意stride不可 |
-| 2 | DOC Wave RAM | R/W、byte address。DOC非使用位相でアクセス |
+| 1 | ACRTC VRAM stream | R/W。ACRTCのネイティブな連続転送（DWT／DRD／DMODコマンドと、DREQ／DACK／DONE信号）とFIFOを使う [D]（[15]）。転送開始前にポインタを設定し、逐次word転送。MWRを行間隔にした矩形転送は候補 [O]（OI-030） |
+| 2 | DOC Wave RAM | R/W、byte address。DOCサイクルごとのホスト側の窓（E High）でアクセスし、DOCレジスタのアクセスと同じ窓を取り合う。上限は1サイクル1 byte（8 MHzで1.0 MB/s）[D]（[18]） |
 | 3 / 4 | DSP input / output FIFO | W / R、16-bit。32 wordsずつ暫定 |
 | 5 | ADPCM input FIFO | W、8-bit packed、16 bytes暫定 |
 | 6 / 7 | Temporal write / read | W / R、8-bit逐次、独立ポインタ |
@@ -197,11 +197,14 @@ Fabricの理論予算：16-bit幅、8 MHz、1要素の読み書き計4クロッ�
 | 同30 Hz片方向／往復 | 約0.74 / 1.47 MB/s |
 | 128×96、8-bit、15 Hz捕捉 | 約0.18 MB/s |
 | ADPCM 4-bit、8 kHz | 4 kB/s |
-| 生CVBS 8-bit、4fsc | 約14.32 MB/s（専用捕捉経路が必要） |
+| DOC wave RAM 64 KiBの書換え | 上限1.0 MB/s、65.5 ms以上（§06 port 2）[D]（[18]） |
+| 生CVBS 8-bit、4fsc | 約14.32 MB/s（専用捕捉経路が必要）。4fscは21.47727 MHzの整数分周で作れない（3fscは÷2）[V]（OI-046） |
+
+上の表はFabric側の量。ACRTC側にも上限がある。DWTで256×192・4bppの全画面を書くと、表示との競合を除いても2CLK 5.369 MHzで約14.0 msかかる [D]（[15]の値からの計算）。1フレーム約16.7 msのうち表示との競合を考えると、全画面を60 Hzで転送する運用は成り立たない見込み [V]。
 
 #### 映像基本仕様
 
-256×192、4bpp packed（16色）を初期標準。16-bit word内の画素順はACRTCネイティブ仕様に従う。VRAM 128 KiBに24 KiBの画面2面と素材を格納。8bppは同解像度での拡張候補。1行32字×24行の8×8フォント表示に対応する。RGB各4-bitパレット、NTSCコンポジットとRGB出力を想定。外付けラッチ・パレット・DAC・エンコーダのタイミングは別設計。エンコーダはBA7230LS [P][V]（DR-009、§10）。スプライト専用ハードは前提にせず、描画／COPYと背景復元でゲームを構成する。
+256×192、4bpp packed（16色）を初期標準。16-bit word内の画素順はACRTCネイティブ仕様に従い、4bppでは左端の画素がLSB側（bit3–0が画素0）[D]（[15]）。VRAM 128 KiBに24 KiBの画面2面と素材を格納。8bppは同解像度での拡張候補。1行32字×24行の8×8フォント表示に対応する。RGB各4-bitパレット、NTSCコンポジットとRGB出力を想定。外付けラッチ・パレット・DAC・エンコーダのタイミングは別設計。エンコーダはBA7230LS [P][V]（DR-009、§10）。スプライト専用ハードは前提にせず、描画／COPYと背景復元でゲームを構成する。
 
 ドットクロックと2CLKを同じにするため、ACRTCはデュアル（インタリーブ）アクセス、GAI＝+1で使う。256画素の有効幅は約47.7 µsになる [P]（[15] §3.3。レジスタ値の案は[15] §3.4）。
 
@@ -237,7 +240,7 @@ Temporal RAMは後年のフィールドメモリICではなくDRAM/SRAM＋独立
 | 規格不一致 | 同一の区点列にJIS78/83の別ROMを適用。字形差・位置入替を観察 |
 | Address bending | ROM参照アドレスの低位線固定・XOR。範囲外は定義済みopen bus等 |
 | Data bending | 行データのビット反転・並べ替え・断線モデル |
-| 字形の音響化 | Character ROM → DOC wave RAMまたはADPCM FIFO。ゼロ値で停止するDOC固有挙動も利用 |
+| 字形の音響化 | Character ROM → DOC wave RAMまたはADPCM FIFO。ゼロ値で停止するDOC固有挙動も利用。各字形の8 byte目（下の余白行）は必ず0x00なので、そのまま再生すると8 byte以内で止まる。ビット0（右の余白列）も常に0なので、FabricでXOR 0x01をかければ止まらずに鳴らせる [P]（[18]） |
 | 字形の再描画 | Character ROM → staging → DSP/ACRTC。加工後はRAMに保存（ROMは書き換えない） |
 
 8×8全漢字はテレビ上の可読性が保証されない。フォントROMの容量制約と読めなさを機械の特性として扱う。高解像度字形・別規格は後継機または拡張候補。フォントのライセンス・由来・作成過程を管理し、他社ROMを配布物に含めない。
@@ -288,7 +291,7 @@ BIOS/SDKではデジタル状態、連続値、タイムスタンプ付きイベ
 <div class="node accent">Capture RAM → Data Fabric → VRAM / DSP / DOC / ADPCM</div>
 </div>
 
-ADV7180は復号済み映像、AD9280はADC（生波形を取得し外部で復号）であり、直接互換ではない。両方を必須にしない。ADV7391は現代PCBの出力候補。[13] 1985年型のNTSCエンコーダはローム BA7230LS とし、1985年以前のローム資料で確認できなければMC1377に戻す [P][V]（DR-009）。RGB/輝度・色差、色副搬送波、同期合成、75 Ω出力回路を別途設計する。
+ADV7180は復号済み映像、AD9280はADC（生波形を取得し外部で復号）であり、直接互換ではない。両方を必須にしない。ADV7391は現代PCBの出力候補。[13] 1985年型のNTSCエンコーダはローム BA7230LS とし、1985年以前のローム資料で確認できなければMC1377に戻す [P][V]（DR-009）。本体では映像入力との重ね合わせを使わない。外部映像の取り込みとComposite feedback（§11）は取り込み経路で成り立つ。ゲンロック（ACRTCの外部同期と、映像系クロックのVCXO／PLL）は映像拡張基板の候補 [O]（DR-013）。RGB/輝度・色差、色副搬送波、同期合成、75 Ω出力回路を別途設計する。
 
 コンポジット信号モデルは水平・垂直同期、ブランキング、輝度、色副搬送波（NTSC約3.58 MHz）、バースト、帯域制限を含む。4fsc（約14.32 MS/s）を基準にした生成・復号モデルをPC上で段階実装。復号済みPCカメラと生波形は区別する。外部映像フィードバックは仮想波形または実キャプチャから形成する。
 
@@ -398,9 +401,9 @@ DIP/SOP/LQFP等の手はんだ、QFN/LFCSP/BGAのPCBA・リフロー、変換基
 | ID | 資料・確認範囲 |
 |---|---|
 | [1] | Motorola, M68000 User's Manual, bus operation. [バス仕様PDF](https://datasheets.chipdb.org/Motorola/68000/MC68000UM.9.pdf)（前版参照、後年版） |
-| [2] | 日立評論 Vol.66 No.7 (1984), pp.43–48, HD63484 ACRTC。表1、図1–3。[原典PDF](https://www.hitachihyoron.com/jp/pdf/1984/07/1984_07_10.pdf) |
-| [3] | Hitachi, HD63484 Application Note (1986)。[アーカイブ](https://bitsavers.org/components/hitachi/_dataBooks/U90_Hitachi_HD63484_ACRTC_Advanced_CRT_Controller_Application_Note_198604.pdf)、[データシート](https://mega-micros.co.uk/datasheets/datasheet%20-%2063484%20%28hitachi%29%20acrtc.pdf)。AR/STATUS・FIFO・表示回路の復元用 |
-| [4] | TI, TMS32010 User's Guide, Rev.B (1985-03), program memory / I/O。[原典PDF](https://bitsavers.computerhistory.org/components/ti/TMS320xx/3201x/1983_TI_TMS32010_Users_Guide_Digital_Signal_Processor_Products_Revision_B_198503.pdf)。テキスト確認、画像取得制限あり。[1983 Assembly Guide](https://www.bitsavers.org/components/ti/TMS320xx/3201x/1983_TMS32010_Assembly_Language_Programmers_Guide.pdf) |
+| [2] | 日立評論 Vol.66 No.7 (1984), pp.43–46, HD63484 ACRTC。表1、図1–3。[原典PDF](https://www.hitachihyoron.com/jp/pdf/1984/07/1984_07_10.pdf) |
+| [3] | Hitachi, HD63484 Application Note (1986)。[アーカイブ](https://bitsavers.org/components/hitachi/_dataBooks/U90_Hitachi_HD63484_ACRTC_Advanced_CRT_Controller_Application_Note_198604.pdf)、[データシート](https://mega-micros.co.uk/datasheets/datasheet%20-%2063484%20%28hitachi%29%20acrtc.pdf)。AR/STATUS・FIFO・表示回路の復元用。データシートは-98品を含む後年資料で、データDMAの頁が白紙 |
+| [4] | TI, TMS32010 User's Guide, Rev.B (1985-03), program memory / I/O。[原典PDF](https://bitsavers.computerhistory.org/components/ti/TMS320xx/3201x/1983_TI_TMS32010_Users_Guide_Digital_Signal_Processor_Products_Revision_B_198503.pdf)。テキスト確認、画像取得制限あり。付録のデータシートは1986-02改訂（後年資料）。[1983 Assembly Guide](https://www.bitsavers.org/components/ti/TMS320xx/3201x/1983_TMS32010_Assembly_Language_Programmers_Guide.pdf) |
 | [5] | Apple Computer, Ensoniq DOC ERS Rev.1.0 (1986-06-25), pp.1–2、oscillator/register descriptions。[技術資料PDF](https://www.brutaldeluxe.fr/documentation/cortland/v4_13_EnsoniqDOC.pdf)（後年資料） |
 | [6] | Ensoniq Mirageの技術資料アーカイブとMAME機種実装。[資料一覧](https://zine.r-massive.com/ensoniq-technical-documents-and-schematics/) / [Mirage実装](https://github.com/mamedev/mame/blob/master/src/mame/ensoniq/enmirage.cpp)。採用実績・復元参考 |
 | [7] | OKI Voice Synthesis ICs (1994), MSM5205。[データブック](https://www.bitsavers.org/components/oki/_dataBooks/1994_OKI_Voice_Synthesis_ICs.pdf)（前版参照、後年資料。初期品の差異は要調査） |
@@ -410,7 +413,7 @@ DIP/SOP/LQFP等の手はんだ、QFN/LFCSP/BGAのPCBA・リフロー、変換基
 | [11] | International Musician & Recording World (Nov. 1985), [Atari 520ST MIDI Computer](https://www.muzines.co.uk/articles/atari-520st-midi-computer/5101) |
 | [12] | Maplin Electronics (June 1985), [27256/41256掲載号](https://www.worldradiohistory.com/UK/Mapelin/Maplin-Electronics-1985-06-08.pdf) |
 | [13] | 現代I/O資料：ADI [ADV7180](https://www.analog.com/en/products/adv7180.html)、[ADV7391](https://www.analog.com/en/products/adv7391.html)、[AD9280](https://www.analog.com/en/products/ad9280.html)、[RP2350](https://pip.raspberrypi.com/categories/1214-rp2350)、[CH446Q](https://www.lcsc.com/product-detail/C109471.html) |
-| [14] | MAME参考実装：[HD63484](https://github.com/mamedev/mame/blob/master/src/devices/video/hd63484.cpp)、[ES5503](https://github.com/mamedev/mame/blob/master/src/devices/sound/es5503.cpp)、[MSM5205](https://github.com/mamedev/mame/blob/master/src/devices/sound/msm5205.cpp)、[MAMEリポジトリ](https://github.com/mamedev/mame)。個別の精度・ライセンスは要確認 |
+| [14] | MAME参考実装：[HD63484](https://github.com/mamedev/mame/blob/master/src/devices/video/hd63484.cpp)、[ES5503](https://github.com/mamedev/mame/blob/master/src/devices/sound/es5503.cpp)、[MSM5205](https://github.com/mamedev/mame/blob/master/src/devices/sound/msm5205.cpp)、[TMS32010](https://github.com/mamedev/mame/tree/master/src/devices/cpu/tms320c1x)（旧 `tms32010/`）、[MAMEリポジトリ](https://github.com/mamedev/mame)。個別の精度・ライセンスは要確認 |
 | [15] | 部品台帳 [HD63484.md](../parts/HD63484.md)。ACRTCのピン・タイミング・レジスタ、2CLKと走査の案、VRAMの速度条件、MAME実装の注意 |
 | [16] | 部品台帳 [supply-HD63484.md](../parts/supply-HD63484.md)。HD63484の1984〜85年の供給・速度品・採用例 |
 | [17] | 部品台帳 [TMS32010.md](../parts/TMS32010.md)。ピン・タイミング・I/O、外部プログラムRAMのロード回路 |
