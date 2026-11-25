@@ -52,8 +52,8 @@
 
 | 依存している史実 | 出典 | 矛盾の有無 |
 |---|---|---|
-| Commodore の日本の組立工場、日本工場と米国工場の自動挿入の違い、香港への移転 | [supply-ES5503.md](../parts/supply-ES5503.md) §7a（S12、1985-03） | なし。移転の時期は未確認 |
+| Commodore の日本の組立工場、日本工場と米国工場の自動挿入の違い、香港への移転 | [supply-ES5503.md](../parts/supply-ES5503.md) §7a（S12、1985-03） | なし。移転の時期は未確認（[OI-037](../open-issues.md)） |
 | Ensoniq の創業者は MOS Technology と Commodore の出身 | [supply-ES5503.md](../parts/supply-ES5503.md) §7a | なし |
 | 創業者が個人として日本企業と取引した記録はない | [supply-ES5503.md](../parts/supply-ES5503.md) §7a | なし。面識は仕事の上のもので、取引の記録が残る規模ではない |
 | 日立の CRTC が1980年代前半の国産機で使われた | [baseline-1985.md](../parts/baseline-1985.md) | なし |
-| キャプテンシステムの商用化（1984年） | 未確認 | [V]。出典を確認するまで [仮] |
+| キャプテンシステムの商用化（1984年） | 未確認 | [V]。出典を確認するまで [仮]（[OI-036](../open-issues.md)） |
