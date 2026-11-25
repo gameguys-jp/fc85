@@ -107,6 +107,7 @@
 <text x="28.0" y="440.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">上面の点検蓋：180×135</text>
 <text x="28.0" y="456.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">カートリッジの差込み口：110×22（前面の左）</text>
 <text x="28.0" y="472.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">基板：360×250 mm を 2 枚重ね（spec/board.md）</text>
+<text x="28.0" y="488.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">変わりうる範囲：幅 390〜430・奥行き 290〜310・高さ 95〜105</text>
 <rect x="380.0" y="815.0" width="390.0" height="95.0" rx="0" fill="#ebebe7" stroke="#222" stroke-width="1.2"/>
 <rect x="725.0" y="910.0" width="30.0" height="7.0" rx="0" fill="#bbb" stroke="#555" stroke-width="0.6"/>
 <rect x="395.0" y="910.0" width="30.0" height="7.0" rx="0" fill="#bbb" stroke="#555" stroke-width="0.6"/>
@@ -115,7 +116,7 @@
 <circle cx="624.0" cy="894.0" r="1.2" fill="#888" stroke="#666" stroke-width="0.4"/>
 <circle cx="751.0" cy="852.0" r="1.2" fill="#888" stroke="#666" stroke-width="0.4"/>
 <circle cx="624.0" cy="852.0" r="1.2" fill="#888" stroke="#666" stroke-width="0.4"/>
-<text x="688.0" y="844.0" font-size="7" text-anchor="middle" font-weight="normal" fill="#1f6fb2">拡張用の蓋（映像入力基板）</text>
+<text x="688.0" y="844.0" font-size="7" text-anchor="middle" font-weight="normal" fill="#1f6fb2">拡張用の蓋（映像・音声入力基板）</text>
 <circle cx="736.0" cy="886.0" r="5" fill="#fff" stroke="#333" stroke-width="0.8"/>
 <circle cx="736.0" cy="886.0" r="1.8" fill="#333" stroke="#333" stroke-width="0.4"/>
 <text x="736.0" y="876.0" font-size="6.5" text-anchor="middle" font-weight="normal" fill="#222">映像OUT</text>
@@ -171,6 +172,6 @@
 <line x1="392.0" y1="825.0" x2="392.0" y2="848.0" stroke="#666" stroke-width="1.4"/>
 <text x="495.0" y="822.0" font-size="7" text-anchor="middle" font-weight="normal" fill="#222">通風口</text>
 <text x="575.0" y="932.0" font-size="9" text-anchor="middle" font-weight="bold" fill="#222">背面図（後ろから見る。左右が正面図と逆になる）</text>
-<text x="20.0" y="975.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">外観の大枠の試案 v0.1 [仮]。色・仕上げ・ロゴ・名称・表示の書体は未定。基板と寸法の条件は spec/board.md、詳細は design/enclosure.md。</text>
-<text x="20.0" y="990.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">寸法は最終試作機（2 枚重ね）。量産計画は幅と奥行きが同じで、高さ約 60 mm。</text>
+<text x="20.0" y="975.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">外観の大枠 v0.2。構成は [確定]、寸法は見積り [仮]（最大で約 430×310×105 mm まで大きくなりうる。spec/board.md §09）。</text>
+<text x="20.0" y="990.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">寸法は最終試作機（2 枚重ね）。量産計画は幅と奥行きが同じで高さ約 60 mm。色・仕上げ・ロゴ・名称は未定。</text>
 </svg>
