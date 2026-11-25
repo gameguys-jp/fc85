@@ -74,7 +74,9 @@ COL_TEXT        EQU     15
 HUD_SCORE       EQU     $0001
 HUD_HI          EQU     $0002
 HUD_LIVES       EQU     $0004
-HUD_OVER        EQU     $0008
+HUD_OVER        EQU     $0008           ; 終わりの枠（次のフレームに T1、その次に T2）
+HUD_OVER_T1     EQU     $0010
+HUD_OVER_T2     EQU     $0020
 
 ; 効果音の番号（build.py の SOUNDS と同じ順）
 SFX_START       EQU     0
@@ -106,6 +108,7 @@ g_color         RS.W    1               ; ACRTC の CL0・CL1 に入れてある
 g_score         RS.L    1               ; BCD 8 桁
 g_score_shown   RS.L    1               ; 画面に出してある点数（変わった桁だけ描き直す）
 g_hi            RS.L    1               ; BCD 8 桁
+g_hi_shown      RS.L    1               ; 画面の帯に出してある最高点
 g_digit         RS.B    2               ; 1 字の文字列
 g_lives         RS.W    1
 g_rock_cd       RS.W    1               ; 石が増えるまでに拾う数
@@ -275,7 +278,8 @@ new_game:
         CLR.W   g_flash
         MOVE.W  #GEMS_PER_ROCK,g_rock_cd
         BSR     objects_init
-        MOVE.L  #-1,g_score_shown       ; 点数の 6 桁を全部描く
+        MOVE.L  #-1,g_score_shown       ; 点数と最高点の 6 桁を全部描く
+        MOVE.L  #-1,g_hi_shown
         MOVE.W  #HUD_SCORE|HUD_HI|HUD_LIVES,g_hud
         BSR     play_screen             ; 帯・枠・数・最初の物を描いてから見せる
         MOVE.W  #ST_PLAY,g_state
@@ -550,8 +554,7 @@ player_hit:
         MOVE.L  g_score,D0
         CMP.L   g_hi,D0                 ; BCD は符号なしの比較で大小がわかる
         BLS.S   .snd
-        MOVE.L  D0,g_hi
-        ORI.W   #HUD_HI,g_hud
+        MOVE.L  D0,g_hi                 ; 帯には HUD_OVER_T1 で描く
 .snd    BSR     music_stop
         MOVEQ   #SFX_OVER,D0
         BRA     sfx_play
@@ -720,8 +723,10 @@ shape_rock:
 shape_gem:
         DC.W    COL_GEM,5, 2,0,3,0, 1,1,4,1, 0,2,5,3, 1,4,4,4, 2,5,3,5
 
-; 上の帯の数と、終わりの枠。BIOS_PUTS は 1 字に約 0.35 ms かかる（16 語を CPU が字形から作る）ので、
-; 点数は変わった桁だけ描き直す。
+; 上の帯の数と、終わりの枠。BIOS_PUTS は 1 字に約 12 ライン（0.75 ms）かかる（16 語を CPU が字形から作る。
+; エミュレータで測った [V]）。6 桁を描き直すと VBlank（70 ライン）を超えるので、点数と最高点は変わった桁だけ
+; 描く。終わりの枠は 3 フレームに分ける（枠と残り → 最高点と「GAME OVER」→「PUSH START」）。文字は表示が
+; その行に来る前に描き終わるので、裂けない。
 draw_hud:
         MOVE.W  g_hud,D7
         BEQ     .ret
@@ -731,13 +736,13 @@ draw_hud:
         MOVEQ   #HUD_Y,D1
         BTST    #0,D7                   ; HUD_SCORE
         BEQ.S   .hi
-        BSR     draw_score
+        LEA     g_score,A1
+        LEA     g_score_shown,A2
+        MOVEQ   #SCORE_X,D0
+        BSR     draw_digits
 .hi     BTST    #1,D7                   ; HUD_HI
         BEQ.S   .lives
-        MOVE.L  g_hi,D4
-        MOVEQ   #6,D5
-        MOVE.W  #HI_X,D0
-        JSR     BIOS_PUT_HEX
+        BSR     draw_hi
 .lives  BTST    #2,D7                   ; HUD_LIVES
         BEQ.S   .over
         MOVEQ   #0,D4
@@ -745,18 +750,47 @@ draw_hud:
         MOVEQ   #1,D5
         MOVE.W  #LIFE_X,D0
         JSR     BIOS_PUT_HEX
-.over   BTST    #3,D7                   ; HUD_OVER
-        BEQ.S   .ret
+.over   BTST    #3,D7                   ; HUD_OVER：枠
+        BEQ.S   .t1
+        MOVE.W  D7,-(SP)
         BSR     draw_over_box
+        MOVE.W  (SP)+,D7
+        ORI.W   #HUD_OVER_T1,g_hud
+.t1     BTST    #4,D7                   ; HUD_OVER_T1：最高点（帯は VBlank の中に描く）と「GAME OVER」
+        BEQ.S   .t2
+        MOVEQ   #COL_TEXT,D2
+        MOVEQ   #COL_BAND,D3
+        MOVEQ   #HUD_Y,D1
+        BSR     draw_hi
+        LEA     str_over(PC),A0
+        MOVEQ   #92,D0
+        MOVEQ   #OVY0+8,D1
+        MOVEQ   #COL_ROCK,D2
+        MOVEQ   #COL_BG,D3
+        JSR     BIOS_PUTS
+        ORI.W   #HUD_OVER_T2,g_hud
+.t2     BTST    #5,D7                   ; HUD_OVER_T2：「PUSH START」
+        BEQ.S   .ret
+        LEA     str_push(PC),A0
+        MOVEQ   #88,D0
+        MOVEQ   #OVY0+24,D1
+        MOVEQ   #COL_BLINK,D2
+        MOVEQ   #COL_BG,D3
+        JSR     BIOS_PUTS
 .ret    RTS
 
-; 点数の 6 桁のうち、g_score_shown と違う桁だけを 1 字ずつ描く。D1〜D3 は draw_hud のまま。
-draw_score:
-        MOVEM.L D4-D7,-(SP)
-        MOVE.L  g_score,D4
-        MOVE.L  g_score_shown,D6
-        MOVE.L  D4,g_score_shown
-        MOVEQ   #SCORE_X+5*8,D0         ; いちばん右の桁から
+draw_hi:
+        LEA     g_hi,A1
+        LEA     g_hi_shown,A2
+        MOVE.W  #HI_X,D0
+; 6 桁の BCD（(A1).L）のうち、(A2).L と違う桁だけを 1 字ずつ描き、(A2) を新しい値にする。D0＝左端の x。
+; D1〜D3（y と色）は呼ぶ側の値。
+draw_digits:
+        MOVEM.L D0/D4-D7/A0,-(SP)
+        MOVE.L  (A1),D4
+        MOVE.L  (A2),D6
+        MOVE.L  D4,(A2)
+        ADDI.W  #5*8,D0                 ; いちばん右の桁から
         MOVEQ   #6-1,D7
 .digit  MOVE.W  D4,D5
         EOR.W   D6,D5
@@ -773,7 +807,7 @@ draw_score:
         LSR.L   #4,D6
         SUBQ.W  #8,D0
         DBRA    D7,.digit
-        MOVEM.L (SP)+,D4-D7
+        MOVEM.L (SP)+,D0/D4-D7/A0
         RTS
 
 ; 終わりの枠。置き換え（OPM＝000）で描くので、下の物は壊れる（始め直すと画面ごと消す）。
@@ -781,34 +815,27 @@ OVX0            EQU     76
 OVY0            EQU     80
 OVX1            EQU     179
 OVY1            EQU     119
+; 縁の 4 本と中を別に塗る（画素は 104×40 の 1 回分、約 49 ライン）。D0〜D7 を壊す。
 draw_over_box:
         MOVEQ   #ACRTC_OPM_REP,D4
         MOVEQ   #COL_BORDER,D0
         BSR     set_color
-        MOVEQ   #OVX0,D0
-        MOVEQ   #OVY0,D1
-        MOVE.W  #OVX1,D2
-        MOVEQ   #OVY1,D3
+        LEA     over_rects(PC),A1
+        MOVEQ   #4-1,D6
+.edge   MOVEM.W (A1)+,D0-D3
         BSR     rect
+        DBRA    D6,.edge
         MOVEQ   #COL_BG,D0
         BSR     set_color
-        MOVEQ   #OVX0+2,D0
-        MOVEQ   #OVY0+2,D1
-        MOVE.W  #OVX1-2,D2
-        MOVEQ   #OVY1-2,D3
-        BSR     rect
-        LEA     str_over(PC),A0
-        MOVEQ   #92,D0
-        MOVEQ   #OVY0+8,D1
-        MOVEQ   #COL_ROCK,D2
-        MOVEQ   #COL_BG,D3
-        JSR     BIOS_PUTS
-        LEA     str_push(PC),A0
-        MOVEQ   #88,D0
-        MOVEQ   #OVY0+24,D1
-        MOVEQ   #COL_BLINK,D2
-        JSR     BIOS_PUTS
-        RTS
+        MOVEM.W (A1)+,D0-D3
+        BRA     rect
+
+over_rects:
+        DC.W    OVX0,OVY0,OVX1,OVY0+1
+        DC.W    OVX0,OVY1-1,OVX1,OVY1
+        DC.W    OVX0,OVY0+2,OVX0+1,OVY1-2
+        DC.W    OVX1-1,OVY0+2,OVX1,OVY1-2
+        DC.W    OVX0+2,OVY0+2,OVX1-2,OVY1-2     ; 中
 
 ; 当たったときの赤い背景（パレットの 0 番）。
 palette_fx:
@@ -1039,8 +1066,8 @@ measure:
         MOVE.W  D0,dbg_max
 .ret    RTS
 
-; C で出し入れ。出している間は 16 フレームごとに数だけ書き直す（8 字で約 3 ms。測ったあとに描くので、
-; ライン数には入らない）。題名の画面では出さない。
+; C で出し入れ。出している間は 16 フレームごとに数だけ書き直す（8 字で約 6 ms。測ったあとに描くので、
+; ライン数には入らない。表示が上のほうを走っている間に画面の下の行を描くので、裂けない）。題名の画面では出さない。
 dbg_phase:
         TST.W   g_state
         BEQ.S   .ret
