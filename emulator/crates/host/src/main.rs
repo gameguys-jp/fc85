@@ -4,13 +4,18 @@
 //! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
-//! [--frames N] [--headless] [--dump out.ppm]`
+//! [--frames N] [--headless] [--dump out.ppm] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
+//! [--audio-clock HZ]`
+//!
+//! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
+//! （既定 20 MHz）、MSM5205 の発振（既定 384 kHz）、音声クロックの分周器の入力（既定 8 MHz）。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
 use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
+use fc85_core::time::{Time, UNITS_PER_SECOND};
 
 /// 窓に出す範囲（ドット、ライン）。案B の表示（64〜319 ドット、43〜234 ライン）を真ん中に置く。
 const VIEW_X: usize = 22;
@@ -37,6 +42,8 @@ struct Args {
     frames: Option<u64>,
     headless: bool,
     dump: Option<String>,
+    /// 外部クロック（Hz）：DOC、DSP、ADPCM、音声クロック。
+    clocks: [Option<f64>; 4],
 }
 
 fn parse_args() -> Args {
@@ -49,6 +56,7 @@ fn parse_args() -> Args {
         frames: None,
         headless: false,
         dump: None,
+        clocks: [None; 4],
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -61,10 +69,15 @@ fn parse_args() -> Args {
             "--frames" => a.frames = it.next().and_then(|v| v.parse().ok()),
             "--headless" => a.headless = true,
             "--dump" => a.dump = it.next(),
+            "--doc-clock" => a.clocks[0] = it.next().and_then(|v| v.parse().ok()),
+            "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
+            "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
+            "--audio-clock" => a.clocks[3] = it.next().and_then(|v| v.parse().ok()),
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
-                     [--scale N] [--frames N] [--headless] [--dump out.ppm]"
+                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--doc-clock HZ] \
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ]"
                 );
                 std::process::exit(0);
             }
@@ -121,6 +134,20 @@ fn build_console(a: &Args) -> Console {
     }
     if let Some(p) = &a.cart {
         c.sys.cart = Some(load(p));
+    }
+    let period = |hz: f64| (UNITS_PER_SECOND as f64 / hz).round().max(1.0) as Time;
+    let p = &mut c.sys.ports;
+    if let Some(hz) = a.clocks[0] {
+        p.doc_board.set_clock_period(period(hz));
+    }
+    if let Some(hz) = a.clocks[1] {
+        p.dsp.set_input_period(4 * period(hz));
+    }
+    if let Some(hz) = a.clocks[2] {
+        p.adpcm_port.set_input_period(period(hz));
+    }
+    if let Some(hz) = a.clocks[3] {
+        p.audio.set_input_period(period(hz));
     }
     c.power_on();
     c
