@@ -46,4 +46,4 @@
 
 ## ライセンス
 
-[MIT](LICENSE)
+[MIT](LICENSE)。外部の GPL のコードを組み込む部分と、ハードウェアの設計データ（PCB・FPGA・機構）のライセンスは未定です（[OI-014](docs/open-issues.md)、[DR-044](docs/decisions.md)）。
