@@ -1081,3 +1081,42 @@ fn snapshot_round_trip_mid_transfer() {
     assert_eq!(r.f, b.f);
     assert_eq!(r.p, b.p);
 }
+
+#[test]
+fn a_staging_channel_starves_while_the_other_channel_waits() {
+    // DR-046 (2) の規則のままの動作（OI-052）。2 チャネルとも動いていると候補はスロットごとに入れ替わり、
+    // S と X の交互と同じ周期になる。port 0 から読む要素は X のスロットの頭でしか始められないので、
+    // 相手が要素を始めない限り、候補が S の頭にだけ来て止まる。
+    let mut done = Vec::new();
+    for other in [false, true] {
+        let mut r = Rig::new();
+        r.setup(
+            0,
+            Cfg {
+                count: 100,
+                ..Cfg::default()
+            },
+        );
+        if other {
+            // ch1 は文字 ROM → Temporal RAM で、トリガ（発生源 6）を待つだけ
+            r.setup(
+                1,
+                Cfg {
+                    src: 9,
+                    trigger: NEVER,
+                    ..Cfg::default()
+                },
+            );
+            r.start(1);
+        }
+        r.start(0);
+        r.run(400);
+        let n = r
+            .trace
+            .iter()
+            .filter(|x| matches!(x.decision, Decision::Start(0)))
+            .count();
+        done.push((n, r.status(0)));
+    }
+    assert_eq!(done, vec![(100, DONE), (2, BUSY)]);
+}

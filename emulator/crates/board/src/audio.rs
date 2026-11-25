@@ -30,6 +30,8 @@ pub struct AudioClock {
     count: u32,
     /// 出力が High の残りの入力クロック数。
     high: u8,
+    /// 最後の拍の時刻。
+    beat_at: Option<Time>,
     /// 拍の数。
     pub ticks: u64,
 }
@@ -49,6 +51,7 @@ impl AudioClock {
             n_next: 0,
             count: 0,
             high: 0,
+            beat_at: None,
             ticks: 0,
         }
     }
@@ -73,16 +76,25 @@ impl AudioClock {
         self.high > 0
     }
 
+    /// 時刻 `t` の TRIGGER 3 のレベル。`run` で進めた範囲の中の時刻に使う（DSP の BIO。DR-029 (3)）。
+    pub fn level_at(&self, t: Time) -> bool {
+        let pulse = self
+            .beat_at
+            .is_some_and(|b| t >= b && t < b + 2 * self.clk.period());
+        pulse || (self.level() && self.divisor() <= 2)
+    }
+
     /// `end` より前の入力クロックの立上りを進め、拍の数を返す。
     pub fn run(&mut self, end: Time) -> u32 {
         let mut beats = 0;
-        while self.clk.take_before(end).is_some() {
+        while let Some(t) = self.clk.take_before(end) {
             self.high = self.high.saturating_sub(1);
             self.count += 1;
             if self.count >= self.divisor() {
                 self.count = 0;
                 self.n = self.n_next;
                 self.high = 2;
+                self.beat_at = Some(t);
                 self.ticks += 1;
                 beats += 1;
             }

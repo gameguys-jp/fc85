@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.4**  
+**v0.5**  
 2026年11月25日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)
 
 ## 01　前提と範囲
 
@@ -165,7 +165,7 @@ ROT0・ROT1 は入力 13 本・出力 8 本、ROT2・ROT3 は入力 10 本・出
 
 ### 判断バスと候補
 
-SEQ が、スロットごとに判断バスのチャネル（DBCH）を選ぶ。要素が動いている間はそのチャネル、再設定を待つチャネルがあればそれ、なければ動いている 2 チャネルを交互に選ぶ（DR-046 (2)）。DBCH のチャネルの SRC・DST・FORMAT（74LS173 の 3 ステート出力）が判断バスに出る。
+SEQ が、スロットごとに判断バスのチャネル（DBCH）を選ぶ。要素が動いている間はそのチャネル、再設定を待つチャネルがあればそれ、なければ動いている 2 チャネルを交互に選ぶ（DR-046 (2)）。この入れ替えは S・X と同じ周期なので、port 0 から読むチャネルは、相手が要素を始めない限り候補が S の頭にだけ来て止まる。直し方は [OI-052](../open-issues.md) で決める。DBCH のチャネルの SRC・DST・FORMAT（74LS173 の 3 ステート出力）が判断バスに出る。
 
 - RDY が SRC・DST の準備を、スロットの中ほどで取り込む（下の式）。
 - U32（74LS157）が、次のアクセスのポートを選ぶ：要素が動いていなければ SRC（R）、動いていれば DST（W）。

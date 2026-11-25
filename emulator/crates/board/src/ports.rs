@@ -13,13 +13,15 @@
 //! - port 1：ACRTC の DMA。ACRTC と VRAM は `acrtc`（`AcrtcBridge`）が持ち、スロットごとに進める。
 //! - 音声クロック（TRIGGER 3）と、DOC 子基板がないときの本体 DAC（port 2 の FIFO を読む）。`audio`。
 //! - ADPCM のアダプタ（port 5 の FIFO を MSM5205 へ。TRIGGER 5 の V̄C̄K̄）。`adpcm`。
+//! - DSP のアダプタ（port 3・4 の FIFO と TMS32010、プログラム RAM）。`dsp`。
 //!
 //! まだないもの（`ready` は 0、アクセスは何もしない）：DOC 子基板の port 2、port 8（Capture RAM、[O]）、
-//! port 11〜15（拡張）。DSP のアダプタもまだなく、試験や上の層が port 3・4 の FIFO を直接読み書きする。
+//! port 11〜15（拡張）。
 
 use crate::acrtc::AcrtcBridge;
 use crate::adpcm::AdpcmPort;
 use crate::audio::{AudioClock, MainDac};
+use crate::dsp::DspPort;
 use crate::fabric::{Access, Dir, PortReply, Ports};
 use crate::fifo::Fifo;
 use fc85_core::time::{SLOT, Time};
@@ -93,6 +95,8 @@ pub struct FabricPorts {
     pub main_dac: MainDac,
     /// ADPCM のアダプタ（port 5 の FIFO を読む）。
     pub adpcm_port: AdpcmPort,
+    /// DSP のアダプタ（port 3・4 の FIFO の向こう）。
+    pub dsp: DspPort,
     /// 次のスロットの頭の時刻。
     now: Time,
 }
@@ -115,6 +119,7 @@ impl FabricPorts {
             audio: AudioClock::new(),
             main_dac: MainDac::new(),
             adpcm_port: AdpcmPort::new(),
+            dsp: DspPort::new(),
             now: 0,
         }
     }
@@ -162,6 +167,8 @@ impl Ports for FabricPorts {
             }
         }
         self.adpcm_port.run(end, &mut self.adpcm);
+        self.dsp
+            .run(end, &mut self.dsp_in, &mut self.dsp_out, &self.audio);
         self.now = end;
     }
 
