@@ -40,7 +40,7 @@
 | 物語 | [docs/story/](docs/story/)：[本筋](docs/story/main.md)、[メーカーの出自](docs/story/company-origin.md)、[音源の差し替え](docs/story/sound-redesign.md)、[設計方式の由来](docs/story/architecture.md) |
 | 部品 | [docs/parts/](docs/parts/)：IC ごとの台帳、1985年の供給調査、部品の見直し |
 | デザイン | [docs/design/](docs/design/)：[書体（文字 ROM の字形）](docs/design/main.md)、[筐体の外観の大枠](docs/design/enclosure.md)（[仮]）。製品名・ロゴ・UI・意匠の規則は未確定 |
-| 実装 | [emulator/](emulator/)（Rust。段階 1 の MSM5205、TMS32010、ES5503 と、HD63484 の描画コマンドまで。段階 2 の Data Fabric のスロットの模型と、ACRTC の DMA（port 1）、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2。段階 3 の HD68000、本体のバス、68000 から DOC のレジスタへのブリッジ、ACRTC の表示と映像の出力段、ACIA。ホスト（窓・音声・キーボード）は `cargo run --release -p fc85-host`）。Boot ROM（BIOS 版 1 と内蔵のデモ）と文字 ROM は [firmware/](firmware/)、68000 のアセンブラと BIOS の ABI は [sdk/](sdk/)（[sdk/docs/bios-abi.md](sdk/docs/bios-abi.md)）。段階 3 のサンプルのカートリッジ（ゲームと ADPCM の効果音）は [sdk/samples/game/](sdk/samples/game/)。設計と仕様との差は [docs/impl/emulator.md](docs/impl/emulator.md) |
+| 実装 | [emulator/](emulator/)（Rust。段階 1 の MSM5205、TMS32010、ES5503 と、HD63484 の描画コマンドまで。段階 2 の Data Fabric のスロットの模型と、ACRTC の DMA（port 1）、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2。段階 3 の HD68000、本体のバス、68000 から DOC のレジスタへのブリッジ、ACRTC の表示と映像の出力段、ACIA。ホスト（窓・音声・キーボード）は `cargo run --release -p fc85-host`）。Boot ROM（BIOS 版 1 と内蔵のデモ）と文字 ROM は [firmware/](firmware/)、68000 と TMS32010 のアセンブラと BIOS の ABI は [sdk/](sdk/)（[sdk/docs/bios-abi.md](sdk/docs/bios-abi.md)）。段階 3 のサンプルのカートリッジ（ゲームと ADPCM の効果音）は [sdk/samples/game/](sdk/samples/game/)、DSP をソフトから動かすサンプル（低域通過とエコー）は [sdk/samples/dsp/](sdk/samples/dsp/)。設計と仕様との差は [docs/impl/emulator.md](docs/impl/emulator.md) |
 | 決定記録 | [docs/decisions.md](docs/decisions.md) |
 | 課題台帳 | [docs/open-issues.md](docs/open-issues.md) |
 
@@ -52,9 +52,11 @@ Rust（1.88 以降。edition 2024 と let-chains を使う）と Python 3 が要
 py firmware/charrom/build.py
 py firmware/boot/build.py
 py sdk/samples/game/build.py
+py sdk/samples/dsp/build.py
 cd emulator
 cargo run --release -p fc85-host                                              # Boot ROM の内蔵のデモ
 cargo run --release -p fc85-host -- --cart ../sdk/samples/game/build/game.bin  # サンプルのカートリッジ
+cargo run --release -p fc85-host -- --cart ../sdk/samples/dsp/build/dsp.bin    # DSP のサンプル（A・B・C で切替え）
 ```
 
 | キー | 働き |

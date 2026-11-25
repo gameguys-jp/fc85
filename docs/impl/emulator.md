@@ -12,7 +12,7 @@
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
 | V（検証、現状→目標） | MSM5205、TMS32010、ES5503、HD6850 のコアと、HD63484 のコア（描画と表示）は V2（単体試験）。HD68000 は V2 と、SingleStepTests との照合（V3 の一部、99.4%）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2、68000 から DOC のレジスタへのブリッジ、本体のバス、映像の出力段も V2。全体は V0→V2、その後 V3（独立実装との比較） |
-| 段階（仕様書 §12） | 段階 1・2 は済み。段階 3 は、2026-11-26 にエミュレータの上で合格条件をそろえた：自作の Boot ROM（`firmware/boot`）で起動し、入力、ゲームの描画（`sdk/samples/game`）、文字 ROM、PCM（DOC・本体 DAC）と ADPCM の音声、256×192・4bpp の表示。試験は §04 の「本体のバス」。段階 4（AV／HCI）はまだ |
+| 段階（仕様書 §12） | 段階 1・2 は済み。段階 3 は、2026-11-26 にエミュレータの上で合格条件をそろえた：自作の Boot ROM（`firmware/boot`）で起動し、入力、ゲームの描画（`sdk/samples/game`）、文字 ROM、PCM（DOC・本体 DAC）と ADPCM の音声、256×192・4bpp の表示。試験は §04 の「本体のバス」。段階 4（AV／HCI）は、30 分の連続試験、DSP をソフトから通すサンプル（`sdk/samples/dsp`、DR-062）、ホストの MIDI の入出力（DR-061。装置との送受信は未確認 [V]）、外部クロックのジャンパ（DR-035）まで |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -576,5 +576,6 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | Boot ROM で起動 | `console_boot.rs` の `the_boot_rom_runs_with_the_doc_board`、`..._without_the_doc_board` | `firmware/` で組んだ Boot ROM と文字 ROM で 60 フレーム：CPU が止まらない、バスエラーはカートリッジを調べる $400000 の 1 回だけ、DR-030 の警告なし、表示が動いて 2 色以上、IACK 50 回以上、音が無音でない。ROM がなければ飛ばす | 合格（DOC あり・なし） |
 | カートリッジ | `the_sample_cartridge_starts_and_plays_adpcm` | `sdk/samples/game` を差して起動し、START と左を押して 100 フレーム：バスエラーなし（見出しを読めた）、DR-030 の警告なし、ADPCM の取込みが 2000 回より多い（Fabric から ADPCM へ送れた）。ROM がなければ飛ばす | 合格 |
 | 30 分の連続（仕様書 §12 の段階 4 の条件の一つ） | 手動：ホストの `--headless --cart sdk/samples/game/build/game.bin --frames 107856 --pad-script <台本>`。台本は乱数（種 1985）で方向とボタンを 5〜40 フレームごとに替え、600 フレームごとに START | 仮想機の 30 分（107,856 フレーム）でバスエラー・CPU の停止・DR-030 の警告がない。画面と音が最後まで出る | 合格（2026-11-26。CPU 14,399,356,728 クロック、開発機で 1,159 秒。最後の画面はゲームの途中で最高点 60。音は飽和なし、ピーク ±2,692） |
+| DSP の道（SAMPLE 2） | 手動：ホストの `--headless [--no-doc] --cart sdk/samples/dsp/build/dsp.bin --frames 600 --pad-script sdk/samples/dsp/pad-demo.txt --wav <WAV>` のあと `py sdk/samples/dsp/verify_wav.py <WAV> [--doc]` | DSP のプログラムを bridge で読み込み、Staging RAM→port 3→DSP→port 4→本体 DAC（子基板なし）か波形 RAM の輪→DOC（あり）。WAV の全標本が、DSP のプログラムの Python のモデル（`model.py`）と一致する。画面の COUNT・SUM もモデルと一致する | 合格（2026-11-26。子基板なし 158,187 標本、あり 474,138 標本で合わない標本 0。バスエラー 0。DOC の側の照合はエミュレータの混ぜ方に合わせた計算 [V]） |
 | 保存と復元 | `a_snapshot_of_the_running_bios_resumes_identically` | BIOS が動いている途中で Console を JSON に保存して戻し、同じ入力で 10 フレーム進めると、CPU・基板・音声の標本が元とすべて同じ | 合格 |
 | 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定） |
