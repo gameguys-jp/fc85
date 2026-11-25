@@ -278,6 +278,7 @@ dependencies = [
  "fc85-chips",
  "fc85-core",
  "minifb",
+ "serde_json",
 ]
 
 [[package]]

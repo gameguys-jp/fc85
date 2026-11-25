@@ -15,3 +15,4 @@ fc85-chips = { path = "../chips" }
 fc85-board = { path = "../board" }
 minifb = "0.28"
 cpal = "0.15"
+serde_json.workspace = true

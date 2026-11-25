@@ -1,7 +1,7 @@
 //! fc85 のホスト（仕様書 §12 の host 層。DR-055）。
 //!
 //! 仮想機（board 層の `Console`）を 1 フレームずつ進め、画面を窓に、音声をオーディオ装置に出し、
-//! キーボードを PORT_A に渡す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
+//! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm]`
@@ -229,6 +229,36 @@ fn push_audio(c: &mut Console, ring: &Ring) {
     }
 }
 
+// ---------------------------------------------------------------------- 保存
+
+/// 保存の置き場所（今のフォルダ）。
+const STATE_FILE: &str = "fc85.state.json";
+
+/// F5：仮想機の状態をまるごと保存する（DR-040 の snapshot）。画面の配列と音声の待ちは入れない。
+fn save_state(c: &Console) {
+    match serde_json::to_vec(c) {
+        Ok(v) => match std::fs::write(STATE_FILE, v) {
+            Ok(()) => eprintln!("{STATE_FILE} に保存した"),
+            Err(e) => eprintln!("{STATE_FILE} に書けない: {e}"),
+        },
+        Err(e) => eprintln!("保存できない: {e}"),
+    }
+}
+
+/// F9：保存した状態に戻す。
+fn load_state(c: &mut Console) {
+    let r = std::fs::read(STATE_FILE)
+        .map_err(|e| e.to_string())
+        .and_then(|v| serde_json::from_slice::<Console>(&v).map_err(|e| e.to_string()));
+    match r {
+        Ok(s) => {
+            *c = s;
+            eprintln!("{STATE_FILE} から戻した");
+        }
+        Err(e) => eprintln!("{STATE_FILE} から戻せない: {e}"),
+    }
+}
+
 // ---------------------------------------------------------------------- 入力
 
 fn pad(w: &minifb::Window) -> u16 {
@@ -298,6 +328,12 @@ fn main() {
     w.set_target_fps(60);
     let mut frames = 0u64;
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
+        if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
+            save_state(&c);
+        }
+        if w.is_key_pressed(minifb::Key::F9, minifb::KeyRepeat::No) {
+            load_state(&mut c);
+        }
         c.sys.set_ports(pad(&w), 0);
         c.run_frame();
         push_audio(&mut c, &ring);

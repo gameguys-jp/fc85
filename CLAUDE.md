@@ -94,7 +94,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## エミュレータの実装方針（仕様書§12、DR-040）
 
-- Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（今は core 層の `fc85-core`、chips 層の `fc85-chips`、board 層の `fc85-board`）。ホストのライブラリは未定（SDL3、egui が候補）。
+- Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（core 層の `fc85-core`、chips 層の `fc85-chips`、board 層の `fc85-board`、host 層の `fc85-host`）。ホスト（`crates/host`、実行ファイル `fc85`）は minifb と cpal（DR-055）。動かすときは `cargo run --release -p fc85-host`。
 - コマンドは `emulator/` で実行する：`cargo test`（全部）、`cargo test -p fc85-chips --test <IC> <名前>`（1 件。例：`--test tms32010`。board 層は `cargo test -p fc85-board --test fabric <名前>`）、`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`。コミットの前に fmt・clippy・test を通す。
 - IC のコアは `crates/chips/src/<IC>.rs`、試験は `crates/chips/tests/<IC>.rs`。コアは IC のクロック 1 つを `tick` の 1 回とし（TMS32010 は命令サイクル＝CLKOUT の 1 周期、ES5503 は DOC サイクル＝E の 1 周期、HD63484 は 2CLK の 1 周期）、外部ピンの入出力だけを見せる。IC の外のメモリ（波形 RAM、VRAM）はトレイトの向こうに置く。状態は serde で保存・復元できるようにする。
 - board 層の Data Fabric は `crates/board/src/fabric.rs`。`step_slot` の 1 回を 1 スロット（250 ns）とし、ポートの外側は `Ports` トレイトの向こうに置く。ポートの向こうの回路（ACRTC のつなぎ `acrtc.rs`、音声 `audio.rs`、ADPCM `adpcm.rs`、DSP `dsp.rs`、DOC 子基板と 68000 からのブリッジ `doc.rs`）は `Ports::run_slot` で毎スロット進め、トリガのレベルは `Ports::trigger_levels` で渡す。スロットの列（`SlotRecord`）は、fabric.md の PAL の式を書くときの基準になるので、変えるときは fabric.md と emulator.md §03 も直す。
