@@ -111,6 +111,9 @@ pub struct MainDac {
     pub underruns: u64,
     /// 拍の数（取り込んだか保ったか）。
     pub beats: u64,
+    /// CTRL の DIRECT（DR-053）：拍で FIFO を読まず、CPU が DATA に書いた値を出す。
+    #[serde(default)]
+    pub direct: bool,
 }
 
 impl MainDac {
@@ -121,6 +124,9 @@ impl MainDac {
     /// 拍：FIFO から 1 語を取り込む。空なら保つ。
     pub fn beat(&mut self, fifo: &mut Fifo) {
         self.beats += 1;
+        if self.direct {
+            return;
+        }
         if fifo.is_empty() {
             self.underrun = true;
             self.underruns += 1;

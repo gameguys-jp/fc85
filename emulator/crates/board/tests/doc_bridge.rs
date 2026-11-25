@@ -2,6 +2,7 @@
 //! 期待値は仕様書 §05、DR-016、DR-019、DR-035、台帳 HD68000.md §2.2、ES5503.md §2・§3 と、ブリッジの
 //! 模型（emulator.md §03）からの手計算で取る。
 
+use fc85_board::console::BERR_HALF_CLOCKS;
 use fc85_board::doc::{HostDone, host_register};
 use fc85_board::fabric::{Decision, Fabric, HostReply};
 use fc85_board::ports::FabricPorts;
@@ -24,9 +25,9 @@ fn reg(n: u8) -> u32 {
 
 /// S0 から S4 の立上り（CS の登録）まで。
 const TO_S4: Time = 2 * PERIOD_8M;
-/// バスの時間切れ：S0 から 64 クロック以内に DTACK を認識しなければバスエラー（仕様書 §05。数え始めは
-/// 段階 3 のバスで決める。ここでは S0 から [P]）。
-const BUS_TIMEOUT: Time = 64 * PERIOD_8M;
+/// バスの時間切れ（DR-052）：AS↓ の後の立上りを 64 数えて BERR を出し、S0 から 65.5 クロックの立下りで
+/// 認識する。同じ立下りで DTACK を認識してもバスエラー。
+const BUS_TIMEOUT: Time = BERR_HALF_CLOCKS * PERIOD_8M / 2;
 
 struct Rig {
     f: Fabric,
@@ -263,10 +264,11 @@ fn the_cpu_starts_an_oscillator_through_the_bridge() {
 #[test]
 fn a_slow_doc_clock_can_run_past_the_bus_timeout() {
     // DR-035 の外部クロック。DOC の CLK が 2 MHz（E は 64 クロック＝16 スロット）なら待ちは 32＋⌈j/2⌉
-    // （j＝0〜63）。S0 から 64 クロックの時間切れは待ち 62 以上で、j＝59〜63 の 5 通り。窓はそれより前に
-    // 済むので、書込みは DOC に届く。1 MHz（E は 32 スロット）ではすべての位相で時間切れになり、窓が
-    // 時間切れより前に始まる j＝0〜61 の 62 通り（128 通りのうち）だけ書込みが届く
-    for (clk, errors, landed) in [(7560, 5, 64), (15120, 128, 62)] {
+    // （j＝0〜63）。DR-052 の時間切れ（S0 から 65.5 クロックの立下り）は待ち 63 以上で、j＝61〜63 の
+    // 3 通り。窓はそれより前に済むので、書込みは DOC に届く。1 MHz（E は 32 スロット）ではすべての位相で
+    // 時間切れになる。打ち切りは BERR の後のスロットの頭（S0 から 66 クロック）で、それより前に窓が始まる
+    // 位相（128 通りのうち 66 通り）だけ書込みが届く
+    for (clk, errors, landed) in [(7560, 3, 64), (15120, 128, 66)] {
         let period = 8 * clk;
         let (mut n_err, mut n_landed) = (0, 0);
         for k in 0..period / PERIOD_16M {
@@ -277,11 +279,11 @@ fn a_slow_doc_clock_can_run_past_the_bus_timeout() {
             r.run(10);
             let s0 = r.begin(reg(0x41), Some(0x99));
             let mut ok = false;
-            while r.p.now() < s0 + BUS_TIMEOUT {
+            while r.p.now() <= s0 + BUS_TIMEOUT {
                 r.step();
                 if let Some(d) = r.p.doc_host_poll() {
                     assert_eq!(d.waits, expected_waits(k * PERIOD_16M, period, s0));
-                    ok = d.recognized <= s0 + BUS_TIMEOUT;
+                    ok = d.recognized < s0 + BUS_TIMEOUT;
                     break;
                 }
             }

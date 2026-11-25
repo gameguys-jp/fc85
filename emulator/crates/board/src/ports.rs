@@ -213,7 +213,11 @@ impl Ports for FabricPorts {
     }
 
     fn trigger_levels(&self) -> u8 {
-        (u8::from(self.audio.level()) << 3) | (u8::from(self.adpcm_port.vck()) << 5)
+        let (vblank, hblank) = self.acrtc.video.blank_levels();
+        (u8::from(vblank) << 1)
+            | (u8::from(hblank) << 2)
+            | (u8::from(self.audio.level()) << 3)
+            | (u8::from(self.adpcm_port.vck()) << 5)
     }
 
     fn ready(&self, port: u8, dir: Dir) -> bool {

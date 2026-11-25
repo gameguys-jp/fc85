@@ -206,6 +206,11 @@ pub struct DocBoard {
     /// 最後に訪れたオシレータの読出しと、最後の SIG±。
     pub last_osc: Option<OscRead>,
     pub last_sig: i32,
+    /// 出力段のサンプルホールド（CA3–CA0 のチャネルごと。CSTRB で SIG を取る）と、DOC のサイクルごとの和
+    /// （音声の出力が平均をとる）。DR-054。
+    pub chan: [i32; 16],
+    pub chan_sum: [i64; 16],
+    pub chan_cycles: u32,
     /// P2A が最後に使った窓。
     pub last_window: Option<Window>,
     /// P2A が使った窓の数。
@@ -249,6 +254,9 @@ impl DocBoard {
             cycles: 0,
             last_osc: None,
             last_sig: 0,
+            chan: [0; 16],
+            chan_sum: [0; 16],
+            chan_cycles: 0,
             last_window: None,
             windows: 0,
             bridge: Bridge::default(),
@@ -373,7 +381,7 @@ impl DocBoard {
             let ff = (q < 4).then(|| t0 + q * PERIOD_16M);
             let rise = self
                 .rise_pending
-                .then(|| self.fall.next() - self.fall.period() / 2)
+                .then(|| self.fall.next().saturating_sub(self.fall.period() / 2))
                 .filter(|&r| r < end);
             let fall = (self.fall.next() < end).then(|| self.fall.next());
             // 同じ時刻なら E の縁を先にする（FF はセットアップの分だけ前の値を取る）
@@ -451,6 +459,27 @@ impl DocBoard {
             self.last_osc = Some(OscRead { n, addr, wave });
         }
         self.last_sig = tick.sig;
+        if tick.strobe {
+            self.chan[usize::from(tick.channel & 15)] = tick.sig;
+        }
+        for (s, &c) in self.chan_sum.iter_mut().zip(&self.chan) {
+            *s += i64::from(c);
+        }
+        self.chan_cycles += 1;
+    }
+
+    /// 前に呼んでからのチャネルごとの平均を返し、和を 0 にする。DOC のサイクルがなければ今の値。
+    pub fn take_channel_average(&mut self) -> [i32; 16] {
+        let n = i64::from(self.chan_cycles);
+        let mut out = self.chan;
+        if n > 0 {
+            for (o, s) in out.iter_mut().zip(&self.chan_sum) {
+                *o = (*s / n) as i32;
+            }
+        }
+        self.chan_sum = [0; 16];
+        self.chan_cycles = 0;
+        out
     }
 
     /// 16 MHz の立上り：E の同期化と、P2A・ブリッジの段。

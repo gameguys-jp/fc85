@@ -7,5 +7,6 @@
 pub mod es5503;
 pub mod hd63484;
 pub mod hd68000;
+pub mod hd6850;
 pub mod msm5205;
 pub mod tms32010;

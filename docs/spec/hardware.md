@@ -94,7 +94,7 @@ ES5503は1985年のMirage採用例に基づくが、確認した詳細仕様書�
 
 ### 05　メモリ構成・ホストバス [P]
 
-CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot ROMの先頭8 byteに配置する。16-bitレジスタは偶数番地、8-bit ICは上位バイトレーンに配置。未割当・不正幅アクセスは有限時間でバスエラー（初期実装は64 CPUサイクル以内を目標）。ACRTCのAR/STATUS・データポートには、CLR・TASなどの読み書き一体の命令を使わない。DMA中はCPUからACRTCのFIFOにアクセスしない。どちらもソフトの規約とし、BIOS・SDKの文書に書き、エミュレータで警告する [P]（DR-016）。ACRTCのFIFOにはSRのWFR・RFRを確かめてからアクセスする [P]（DR-033）。DOCの窓もMOVE.Bの1回の読みか書きだけで触り、0xE0・0xE2は読むと状態が変わるのでBIOSの決まった処理だけが読む [P]（DR-030）。規約に反するアクセスは、通常モードでは警告し、Bendモードでは実行する。実チップでの挙動がわからない部分は近似と明記する（§11）。\n\n例外ベクタ2〜255は、Main RAMのジャンプ表（0x100000＋6n、各項目は`JMP abs.L`）を指す。表はBIOSが起動時に埋め、アプリケーションはBIOSの呼出しか表の書き換えで処理を差し替える。レベル7の要因は、表を埋めるまで回路で止めておく [P]（DR-025）。\n\n割込みはすべてオートベクタ（VPA）で応える。IACKサイクルもバスエラーのタイマーの対象とし、応答のない割込みはスプリアス割込みで終わる。レベルは期限の短い順に割り当てる：6＝映像（VBlank・HBlank、ACRTCのIRQ）、5＝ACIA（MIDI。1バイト320 µs）、4＝DOC、3＝Data Fabric・ADPCM bridge、2＝DSP bridge、1＝入力（INPUT_IRQ_STATUS）、7＝予約 [P]（DR-028）。割込みの受付からジャンプ表の先の処理まで62〜71クロック（7.8〜8.9 µs）（計算、[31] §2.4）。
+CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot ROMの先頭8 byteに配置する。16-bitレジスタは偶数番地、8-bit ICは上位バイトレーンに配置。未割当・不正幅アクセスは有限時間でバスエラー（初期実装は64 CPUサイクル以内を目標）。時間切れのカウンタはAS↓の後のCPUクロックの立上りを64数えてBERRを出す。S0から65.5クロックの立下りで認識され、サイクルは67クロックで終わる。ROMへの書込みはDTACKを返して捨て、16-bitレジスタへのバイトのアクセスはバスエラー [P]（DR-052）。ACRTCのAR/STATUS・データポートには、CLR・TASなどの読み書き一体の命令を使わない。DMA中はCPUからACRTCのFIFOにアクセスしない。どちらもソフトの規約とし、BIOS・SDKの文書に書き、エミュレータで警告する [P]（DR-016）。ACRTCのFIFOにはSRのWFR・RFRを確かめてからアクセスする [P]（DR-033）。DOCの窓もMOVE.Bの1回の読みか書きだけで触り、0xE0・0xE2は読むと状態が変わるのでBIOSの決まった処理だけが読む [P]（DR-030）。規約に反するアクセスは、通常モードでは警告し、Bendモードでは実行する。実チップでの挙動がわからない部分は近似と明記する（§11）。\n\n例外ベクタ2〜255は、Main RAMのジャンプ表（0x100000＋6n、各項目は`JMP abs.L`）を指す。表はBIOSが起動時に埋め、アプリケーションはBIOSの呼出しか表の書き換えで処理を差し替える。レベル7の要因は、表を埋めるまで回路で止めておく [P]（DR-025）。\n\n割込みはすべてオートベクタ（VPA）で応える。IACKサイクルもバスエラーのタイマーの対象とし、応答のない割込みはスプリアス割込みで終わる。レベルは期限の短い順に割り当てる：6＝映像（VBlank・HBlank、ACRTCのIRQ）、5＝ACIA（MIDI。1バイト320 µs）、4＝DOC、3＝Data Fabric・ADPCM bridge、2＝DSP bridge、1＝入力（INPUT_IRQ_STATUS）、7＝予約 [P]（DR-028）。割込みの受付からジャンプ表の先の処理まで62〜71クロック（7.8〜8.9 µs）（計算、[31] §2.4）。
 
 | CPU番地（hex） | 領域 | 用途 |
 |---|---|---|
@@ -104,12 +104,12 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 120000–12FFFF | 64 KiB AV staging RAM | DMA、DSP入出力、素材 |
 | 200000–200003 | ACRTC host | +0 AR(write)/STATUS(read)、+2 DATA |
 | 210000–2101FF | DOC registers | native reg n → base+2n、上位byte。子基板がないときはバスエラー [P]（DR-019） |
-| 220000–22001F | DSP bridge | mailbox / FIFO / control / status。CTRLにRESET、BIOSEL[1:0] [P]（DR-029）。BIOSELの拍は、拍の立上りで立ちDSPが状態ポートを読むと消えるラッチ [P]（DR-049）。STATUSにUNDERRUN／OVERRUN（W1C）[P]（DR-017） |
-| 230000–23001F | ADPCM bridge | FIFO / clock / reset。FIFOの残量、半分空きの割込み、UNDERRUN（W1C）[P]（DR-017）。230010–23001Fは本体DAC（子基板がないとき）のCTRL／STATUS／DATA [P]（DR-019） |
-| 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態 |
+| 220000–22001F | DSP bridge | mailbox / FIFO / control / status。+0 CTRL（RESET、BIOSEL、IRQ_EN）、+2 STATUS、+4 MAILBOX、+6 RESPONSE [P]（DR-053）。CTRLにRESET、BIOSEL[1:0] [P]（DR-029）。BIOSELの拍は、拍の立上りで立ちDSPが状態ポートを読むと消えるラッチ [P]（DR-049）。STATUSにUNDERRUN／OVERRUN（W1C）[P]（DR-017） |
+| 230000–23001F | ADPCM bridge | FIFO / clock / reset。+0 CTRL（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）、+2 STATUS（残量、UNDERRUN、半分空き）[P]（DR-053）。FIFOの残量、半分空きの割込み、UNDERRUN（W1C）[P]（DR-017）。230010–23001Fは本体DAC（子基板がないとき）のCTRL／STATUS／DATA [P]（DR-019）。CTRLのDIRECTでCPUがDATAを直接DACに出す [P]（DR-053） |
+| 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態。+0 WPTR、+2 RPTR、+4 CTRL（ポインタの初期化、VBlankでの同期の初期化）、+6 DIST。240020–はCapture [O] [P]（DR-053） |
 | 250000–250FFF | Data Fabric | DMA・IRQ・経路・bend |
 | 260000–2600FF | Controller / MIDI / matrix | 入力・ACIA・クロック・マトリクス |
-| 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）。残りは予約 [P]（DR-027） |
+| 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）[P]（DR-027）。270022 VIDEO_IRQ（VBlank・HBlankの割込みの許可と保留、レベル6）、270024 LINE（ラスタ）、270026 LINE_CMP。残りは予約 [P]（DR-053） |
 | 280000–281FFF | DSP program window | 4K×16。DSPをリセットしPRGBUS＝1の間だけR/W可。それ以外はバスエラー [P]（DR-029） |
 | 400000–4FFFFF | Cartridge ROM window | 最大1 MiB窓、初期128 KiB想定。既定は1ウェイト（tACC 375 ns以下のROM）。カートリッジがDTACKを返す方式は [O]（DR-026） |
 | その他 | 予約 | 将来拡張 |
@@ -284,7 +284,7 @@ MIDIは1983年に規格化され、1985年のAtari STにも内蔵端子の例が
 | 00 / 02 | PORT_A / PORT_B：16-bitデジタル状態（active-high論理値） |
 | 04–12 | AXIS0–7：8個の16-bitレジスタ。初期は8-bitアナログ値を下位に格納 |
 | 14 / 16 | MIDI_STATUS / MIDI_DATA：ACIAの制御・状態、送受信データ、上位byte lane |
-| 18 | INPUT_IRQ_STATUS：入力変化、受信、外部trigger。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028） |
+| 18 | INPUT_IRQ_STATUS：bit0 PORT_Aの変化、bit1 PORT_Bの変化、bit2 MIDI受信、bit3 外部trigger [P]（DR-053）。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028） |
 | 1A | INPUT_IRQ_ENABLE：イベント割込みの許可 |
 | 20–3E | 予約：アナログマトリクス、外部trigger／拡張 |
 

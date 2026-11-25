@@ -10,8 +10,10 @@
 pub mod acrtc;
 pub mod adpcm;
 pub mod audio;
+pub mod console;
 pub mod doc;
 pub mod dsp;
 pub mod fabric;
 pub mod fifo;
 pub mod ports;
+pub mod video;

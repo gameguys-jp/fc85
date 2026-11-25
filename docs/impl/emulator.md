@@ -1,6 +1,6 @@
 # エミュレータ
 
-**v0.13**  
+**v0.14**  
 2026年11月25日
 
 > 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
@@ -21,8 +21,8 @@
 | 層（仕様書 §12） | crate | 状況 |
 |---|---|---|
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
-| chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンまで。表示はまだ） |
-| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3） |
+| chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3） |
 | host | 未作成 | 表示・音声・操作 UI のライブラリは未定（SDL3、egui が候補） |
 
 ### 約束
@@ -51,7 +51,8 @@
 | HD63484 | 描画・COPY・FIFO | ホストとのやり取りと、コマンド 38 種（レジスタ・データ転送、直線・矩形・多角形・円・楕円・弧・塗り・パターン・PAINT・図形コピー）、演算・色・領域モードを実装した。段階 2 でデータの DMA のピン（DREQ・DACK・DTACK・DONE）を足した。試験 63 件。表示（同期、表示アドレス、カーソル）とコマンドの DMA はまだ |
 | TMS32010 | 乗算・FIR・外部 I/O。サイクル数は TI の資料どおり | 実装した。試験 33 件 |
 | ES5503 | 発音と停止 | 実装した。試験 20 件 |
-| HD68000、HD6850 | 段階 1 の対象外 | 段階 3 で |
+| HD68000 | 段階 1 の対象外 | 段階 3 で作っている。バスの約束（`Bus` トレイト）だけ先に置いた |
+| HD6850 | 段階 1 の対象外 | 段階 3 で実装した（byte の単位の送受信、割込み、マスタリセット）。試験は本体のバスの試験に含む |
 
 ### 基板の回路の状況
 
@@ -60,6 +61,8 @@
 | Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件） |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ（port 3・4、プログラム RAM、メールボックス、BIO の選択）も実装した（試験 9 件）。ブリッジと Temporal RAM の CPU 側のレジスタの番地はまだ |
 | DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。68000 のコアとバスはまだなく、試験がバスサイクルを直接始める（試験 7 件。規則は OI-055） |
+| 本体のバス（段階 3） | アドレスマップ（仕様書 §05）、待ち、バスの時間切れ、割込み、I/O レジスタ | 解読、メモリ（Boot ROM、文字 ROM、Main RAM、Staging RAM、カートリッジ）、各窓の待ち、バスの時間切れ、割込みのレベル（74LS148）、オートベクタ、ACIA、入力、DSP・ADPCM・本体 DAC・Temporal のレジスタ、RESET 命令、音声の出力（48 kHz）を実装した。68000 のコアはまだなく、試験がバスサイクルを直接出す（試験 16 件。DR-052〜DR-054） |
+| 映像の出力段（段階 3） | ACRTC の表示、パレット、映像の割込み | ACRTC の表示のタイミング（chips）と、画素、パレットの 2 面と写し、DIRECT、VBlank・HBlank の割込みと Fabric のトリガ 1・2 を実装した（DR-027、DR-053） |
 
 ## 03　仕様との差
 
@@ -288,10 +291,48 @@
 | 波形 RAM | 64 KiB。DOC の BS（番地の bit 16）はつながず、上下のバンクは同じ RAM。電源投入時は 0 | 台帳 §2。電源投入時の中身は [V] | — |
 | 68000 のブリッジ（段階 3、OI-055） | `FabricPorts::doc_host_begin` でバスサイクルを始める（S0 の時刻、番地、UDS・LDS、書込みの値）。reg n は 0x210000＋2n の UDS だけで、ほかの幅と子基板がないときは DTACK を返さない（`BusError`）。CS は S4 の立上りで登録し、P2A と同じ同期化した E の立下り（登録と同じ縁を含む）で次の窓を取る。同じ縁で P2A も待っていれば 68000 が先。窓の終わりでレジスタに書くか、読んだ値をラッチし、同期化した E の次の立下りで DTACK を出す。68000 はその後の最初の立下りで認識する。68000 の書込みは預からない | CS の作り方は DR-016 の ACRTC と同じ。取り合いと DTACK の規則は [P]（OI-055） | 待ちは 8〜16（E の位相 16 通りで、8 と 16 が 1 通り、9〜15 が 2 通りずつ）。1 アクセス 12〜20 クロック |
 | 68000 のクロックの位相 | 68000 のクロックの立上りは `PERIOD_8M` の倍数の時刻（スロットの頭と同じ）[P] | 16 MHz の 2 分周の位相は資料にない | 待ちの数は E との位相で決まる |
-| バスの時間切れ | ブリッジは時間切れを数えない。上の層（今は試験）が数え、`host_abort` を呼ぶ。窓を取る前なら取り消し、E が上がった後なら、書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V] | バスの時間切れの回路は段階 3 のバスで作る。試験は S0 から 64 クロックとした | DOC の CLK を 2 MHz に下げると、E の位相 64 通りのうち 5 通りで時間切れになる。1 MHz ではすべてで時間切れになり、66 通りでは書込みも届かない |
+| バスの時間切れ | ブリッジは時間切れを数えない。上の層（本体のバス、試験）が数え、`host_abort` を呼ぶ。窓を取る前なら取り消し、E が上がった後なら、書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V] | 時間切れは DR-052（S0 から 65.5 クロックの立下りで BERR を認識） | DOC の CLK を 2 MHz に下げると、E の位相 64 通りのうち 3 通りで時間切れになる。1 MHz ではすべてで時間切れになり、128 通りのうち 66 通りで書込みが届く |
 | 読み書き一体の命令（DR-030） | ブリッジは見分けない | 警告は 68000 のコアとバスを作るときに足す | — |
 | DOC の出力 | 最後のオシレータの読出しと SIG± を記録するだけ | サンプルホールドとミキサは段階 4 | — |
 | 子基板の有無（DR-019） | `doc` が false の間、DOC は進めない。後から true にすると、E の位相を保って今のスロットから動く | 試験の設定のため | — |
+
+### 本体のバス（段階 3）
+
+コードは `emulator/crates/board/src/console.rs`。仕様書 §05・§09、DR-016、DR-019、DR-024〜DR-029、DR-031、DR-051〜DR-054。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| バスサイクルの時刻 | CPU は S0 の時刻（CPU クロックの数）とともにバスを呼ぶ。基板は S0 を含むスロットまで進めてから答え、読み書きの効果はその時刻に起きたとする | スロット（250 ns）の模型の上に CPU を載せるため | 効果の時刻は最大 1 スロットずれる。ACRTC は T1 を含むスロット、DOC と Fabric の A ファイルは DTACK までスロットで進める |
+| 待ち（DR-024、DR-026、DR-027、DR-031） | Boot ROM・文字 ROM・カートリッジは 1。Main RAM は 0 で、HSYNC の後 12.5 クロックのリフレッシュと重なると終わるまで待つ。Staging RAM は S0 の 4 クロックの枠の位置で 0、0、2、1。パレットの書込みは HSYNC の後 24 クロックの写しの間なら終わるまで待つ。ほかのレジスタは 0 | DR の値をそのまま使った | 文字 ROM の port 9 との取り合い（3〜5 クロック）は数えない [V]。リフレッシュが CPU のサイクルの途中で始まらない規則は、S0 がリフレッシュの前ならぶつからないとして扱う |
+| ACRTC（DR-016） | `acrtc_timing`：CS を S4 の立上り＋20 ns、ACRTC のセットアップ 40 ns で T1、T1 の次の 2CLK の立上り＋35 ns で DTACK、68000 のセットアップ 20 ns の後の立下りで認識 | host-acrtc-interface.md §5.1 の中央の遅れ | 待ちは 2〜4（位相が一様なら 6%、67%、27%）。FIFO が満杯のときの DTACK の遅れは扱わない [V] |
+| VPA のサイクル（DR-028、台帳 HD68000.md §2.5） | E は 10 クロックの周期で回り、E↑ を 10k＋5.5 クロックの立下りに置く [P]。1 サイクル 7＋d クロック（d＝3〜12） | E の位相は資料で決まらない | ACIA と IACK は 10〜19 クロック |
+| バスの時間切れ（DR-052） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてがバスエラーになる |
+| 割込み（DR-028） | 要因をレベルにまとめ、いちばん高いレベルを IPL にする。応答はすべてオートベクタ。レベル 6：映像の割込みと ACRTC の IRQ、5：ACIA、4：DOC、3：Fabric と ADPCM の半分空き、2：DSP の応答（IRQ_EN）、1：入力 | DR-028 (4) | 割込みを受けるのは CPU の命令の境目。IPL の同期化の遅れは扱わない |
+| RESET 命令（DR-052） | `peripheral_reset`：ACRTC、DSP・ADPCM・本体 DAC の CTRL、映像と入力の割込みの許可、Temporal の CTRL、PAL_CTRL、DOC の RESET | DR-052 (3) | Fabric と ACIA は変えない [V] |
+| 音声の出力（DR-054） | 48 kHz の標本ごとに、DOC のチャネルの平均（偶数を L、奇数を R）、子基板がないときは本体 DAC、ADPCM を半分ずつ足す。`audio_out` にためてホストが取り出す | 仕様書 §10 の段はまだ設計していない | LPF・DC 除去・音量の比は仮 [V] |
+| 読み書き一体の命令（DR-030） | バスは見分けない。警告は 68000 のコアができてから足す | CPU のコアがまだない | — |
+
+### HD63484 の表示と映像の出力段（段階 3）
+
+コードは `emulator/crates/chips/src/hd63484.rs`（表示のタイミング）と `emulator/crates/board/src/video.rs`（画素とパレット）。台帳 HD63484.md §3.1〜§3.4・§4.3・§4.5、DR-027、DR-053。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 表示のタイミング | 2CLK ごとにドットとラスタを数える。HC・HSW・HDS・HDW（メモリサイクル＝2CLK×2 の単位）、VC・VSW・VDS、SP1（基本画面の高さ）から枠を求める。STR＝0 の間は止める [V] | 台帳 §3.4 の書式 | 案B（HC 171、VC 262）で 342 ドット×262 ライン、表示は 64〜319 ドット、43〜234 ライン |
+| 表示の読出し | インタリーブ（ACM＝10）の形だけ：表示の範囲で 4×2CLK ごとに 1 語。SAR から MWR ずつ下へ。GAI の増分を使う | 本機の設定（台帳 §3.3） | 単一アクセス、上画面・下画面・ウィンドウ、カーソル、ズーム、スムーズスクロール、インタレースは作っていない。描画とのメモリの取り合いは数えない [V] |
+| 画素 | 読んだ 2CLK から、語の LSB の側の 4 bit から 1 画素ずつ出す。表示の外は黒 [P] | 台帳 §4.5 | シフトレジスタと DISP の遅れ（DSK）は扱わない。画面の配列は 342×262 の $0RGB |
+| パレット（DR-027） | HSYNC の始まりで裏から表へ一度に写す。DIRECT では CPU が表に書く | 写しの 3.0 µs の中の順は見えない | 書込みの間の点状のノイズは作っていない [V] |
+| 映像の割込み（DR-053） | VBlank（表示のラスタの外）と HBlank（表示の横の範囲の外）の立上りで保留を立てる。LINE_CMP では HBlank の保留をそのラインだけにする。Fabric のトリガ 1・2 は同じレベル。表示が止まっている間は 0 | DR-053 (6) | — |
+
+### HD6850
+
+コードは `emulator/crates/chips/src/hd6850.rs`。台帳 MC6850.md。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 送受信 | byte の単位で、1 文字のビット数×16（÷64 では ×64）クロックかけて受け取り・送り終える。÷1 は ÷16 と同じに扱う [V] | MIDI の入出力に要るのは byte の時刻 | ビットの標本化、偽スタートの除去、FE・PE は作っていない |
+| オーバーラン | RDRF のまま次の byte を受けると、その byte を捨てて OVRN。RDR を読むと RDRF と OVRN が消える | 台帳 §4.3 | 「状態→データの順に読む」手順は RDR の読出しで代えた [V] |
+| CTS̅・DCD̅ | Low につないだとする | 本機の接続（台帳 §2） | 状態の bit 2・3 は 0 |
 
 ## 04　テストと判定基準
 
@@ -444,5 +485,28 @@
 | 待ち | `waits_follow_the_e_phase` | E の位相 16 通りで、待ちが手計算の 8＋⌈j/2⌉（j は S4 から同期化した E の立下りまでの 16 MHz のクロック数）と一致し、8〜16。番地の登録から E の立上りまで 375 ns 以上、窓は 500 ns | 合格 |
 | 取り合い | `the_cpu_goes_before_p2a_on_the_same_edge` | Fabric が毎回の窓で書いている間に 68000 が書くと、68000 の待ちは Fabric がないときと同じで、Fabric の 64 byte は 4 スロット延びる | 合格 |
 | DOC の設定 | `the_cpu_starts_an_oscillator_through_the_bridge` | 68000 がブリッジでオシレータ 0 を設定すると、DOC が波形 RAM の表を読む | 合格 |
-| 遅い DOC の CLK | `a_slow_doc_clock_can_run_past_the_bus_timeout` | S0 から 64 クロックで時間切れとすると、2 MHz で 64 通りのうち 5 通り（書込みは届く）、1 MHz で 128 通りすべて（届くのは 62 通り）。待ちは手計算と一致 | 合格 |
+| 遅い DOC の CLK | `a_slow_doc_clock_can_run_past_the_bus_timeout` | DR-052 の時間切れ（S0 から 65.5 クロック）で、2 MHz で 64 通りのうち 3 通り（書込みは届く）、1 MHz で 128 通りすべて（届くのは 66 通り）。待ちは手計算と一致 | 合格 |
 | 保存（ブリッジ） | `snapshot_round_trip_with_a_cpu_access_in_flight` | 68000 のアクセスの途中で保存して戻すと、同じ DTACK と状態になる | 合格 |
+
+### 本体のバス（段階 3）
+
+試験は `emulator/crates/board/tests/console.rs`。68000 のコアを使わず、試験がバスサイクルを直接出す。期待値は仕様書 §05・§09、DR-016・DR-024・DR-026〜DR-028・DR-052・DR-053、台帳 HD68000.md §2.5、host-acrtc-interface.md §5、HD63484.md §3.4・§4.5 からの手計算。
+
+| 分野 | テスト | 判定基準 | 状況 |
+|---|---|---|---|
+| 解読 | `memories_decode_to_the_address_map` | Boot ROM・文字 ROM・カートリッジは 1 ウェイト。文字 ROM は偶数番地の上位レーン。Main RAM と Staging RAM は big-endian。割り当てのない番地、カートリッジがないときの窓、16 bit のレジスタのバイト幅はバスエラー（67 クロック） | 合格 |
+| Staging RAM | `staging_waits_follow_the_500ns_frame` | S0 の枠の中の位置で待ち 0、0、2、1 | 合格 |
+| VPA | `vpa_cycles_take_10_to_19_clocks` | E の位相 10 通りで 10〜19 クロックが 1 回ずつ。IACK はオートベクタ | 合格 |
+| ACRTC | `acrtc_accesses_take_2_to_4_waits` | 2CLK の位相 2816 通りで待ち 2・3・4 が 172・1890・754 通り。バスの上でも 2〜4。SR の初期値 | 合格 |
+| 表示 | `the_display_shows_vram_through_the_palette` | 案B の枠（64〜320 ドット、43〜235 ライン）。VRAM の語 0x4321 が左から画素 1、2、3、4 の色で出る。表示の外は黒 | 合格 |
+| 映像の割込み | `vblank_raises_level_6_and_the_cpu_clears_it` | VBlank でレベル 6、W1C で消え、次のフレームでまた立つ | 合格 |
+| パレットの写し | `palette_writes_wait_for_the_copy_in_hsync` | 写しと重なった書込みの待ちは最大 20〜24 クロック。DIRECT では待たない | 合格 |
+| リフレッシュ | `main_ram_waits_for_the_refresh` | Main RAM の待ちは最大 10〜12 クロック | 合格 |
+| ACIA | `the_acia_receives_midi_and_raises_level_5` | 0x03・0x95 の後、受けた byte は 320 µs で RDRF とレベル 5。INPUT_IRQ_STATUS の MIDI ビット。読むと消える。送信は 320 µs。下位レーンはバスエラー | 合格 |
+| 入力 | `input_changes_raise_level_1` | PORT_A の変化でレベル 1。W1C。許可していない PORT_B は割り込まない | 合格 |
+| 優先 | `levels_are_prioritized_by_the_74ls148` | レベル 6 と 1 が同時ならレベル 6 | 合格 |
+| DSP bridge | `dsp_bridge_registers` | CTRL の初期値、RESET の後の PRGBUS とプログラム窓、BIOSEL と IRQ_EN、COMMAND | 合格 |
+| ADPCM・本体 DAC | `adpcm_and_dac_registers` | CTRL の初期値、半分空きの割込み（レベル 3）、本体 DAC の DIRECT、子基板があるときの窓 | 合格 |
+| Temporal | `temporal_pointers` | ポインタの読み書き、DIST、初期化。Capture RAM の窓はバスエラー | 合格 |
+| 時間切れ | `doc_bus_timeout_counts_from_as` | DOC の CLK を 1 MHz にすると、DOC のアクセスはすべてバスエラー | 合格 |
+| 保存 | `snapshot_round_trip` | 表示と割込みが動いている途中で保存して戻すと、同じ時刻に同じ状態 | 合格 |

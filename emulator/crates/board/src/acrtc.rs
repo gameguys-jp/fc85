@@ -19,6 +19,7 @@
 //! - RDY1（Fabric の準備の信号）は、スロットの中ほど（q2 の立上り、MCLK↑）に取り込む 2 段目の DREQ。
 
 use crate::fabric::{Access, Dir, PortReply};
+use crate::video::Video;
 use fc85_chips::hd63484::{Hd63484, Vram};
 use fc85_core::time::{Clock, PERIOD_2CLK, PERIOD_16M, SLOT, Time};
 use serde::{Deserialize, Serialize};
@@ -110,6 +111,8 @@ pub struct AcrtcBridge {
     reply: Option<(u16, bool)>,
     /// DACK を出したスロットの数（統計）。
     pub dack_slots: u64,
+    /// 映像の出力段（パレット、画面、映像の割込み）。
+    pub video: Video,
 }
 
 impl Default for AcrtcBridge {
@@ -138,12 +141,23 @@ impl AcrtcBridge {
             active: false,
             reply: None,
             dack_slots: 0,
+            video: Video::new(),
         }
     }
 
     /// 次の 2CLK の立上りを、次のスロットの頭から `units` 後にする（0〜2815）。
     pub fn set_phase(&mut self, units: Time) {
         self.clk.set_next(self.now + units % PERIOD_2CLK);
+    }
+
+    /// `t` 以降の最初の 2CLK の立上り。
+    pub fn edge_at_or_after(&self, t: Time) -> Time {
+        let n = self.clk.next();
+        if t <= n {
+            n
+        } else {
+            n + (t - n).div_ceil(PERIOD_2CLK) * PERIOD_2CLK
+        }
     }
 
     /// RDY1：中ほどで取り込んだ、同期化した DREQ。
@@ -234,6 +248,7 @@ impl AcrtcBridge {
         let dack = self.dack.value(e.saturating_sub(T_DAKS));
         self.acrtc.set_dack(dack, self.bus_write, self.bus_data);
         self.acrtc.tick(&mut self.vram);
+        self.video.tick(&self.acrtc, &self.vram, e);
         self.dreq.set(self.acrtc.dreq(), e + T_DRQD);
         self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL);
         self.done.set(self.acrtc.done(), e + T_DND);

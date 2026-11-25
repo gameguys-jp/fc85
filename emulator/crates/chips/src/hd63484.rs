@@ -8,7 +8,10 @@
 //!   U85 p.173 の式で数える。表示とのメモリの取り合いは数えない（台帳 §7 の 4）。
 //! - ホストとのやり取りは 16 bit バスだけ（本機の接続。台帳 §2）。`read`・`write` の 1 回が CS の 1 サイクル。
 //! - 描画先のフレームバッファ（VRAM）は `Vram` トレイトの向こう側に置く。番地は 20 bit の語番地。
-//! - 表示（同期信号、表示アドレス、ラスタカウンタ）はまだ作っていない。タイミング・表示のレジスタは値を保つだけ。
+//! - 表示（段階 3）：同期信号、表示期間、ラスタカウンタ（RCR）と、基本画面の表示アドレスを 2CLK ごとに数える
+//!   （`Display`）。インタリーブ（ACM＝10）の形だけを作り、4×2CLK ごとに 1 語を読む（台帳 §3.2・§3.3）。
+//!   上画面・下画面・ウィンドウ、カーソル、ズーム、スムーズスクロール、インタレースは作っていない。表示と
+//!   描画のメモリの取り合いは数えない。読んだ語は `display_fetch` で board 層に渡し、画素にするのは board 層。
 //! - データの DMA（DDM＝1 の DWT・DMOD・DRD）は、DREQ・DACK・DTACK・DONE のピンで見せる（段階 2）。
 //!   DACK は 2CLK の立上りで取り込み、そのサイクルを T1、次の立上りを T3 として DTACK を出し、DACK＝H を
 //!   取り込んだ立上り（Tn）で FIFO との受け渡しを終える（U85 p.49–50、p.320–321）。ピンの遅れ（tDRQD・
@@ -340,6 +343,41 @@ pub struct Hd63484 {
     overruns: u64,
     underruns: u64,
     dma: Dma,
+    disp: Display,
+}
+
+/// 表示のタイミングの位置（台帳 §3.1・§3.4・§4.3）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Display {
+    /// ラインの頭（HSYNC の始まり）からの 2CLK の数。メモリサイクルは 2CLK×2。
+    dot: u16,
+    /// VSYNC の始まりからのラスタの数。
+    raster: u16,
+    /// 次に読む表示の語番地。
+    addr: u32,
+    /// GAI＝111 の、語を進めない表示サイクル。
+    skip: bool,
+    /// この 2CLK で読んだ表示の語番地。
+    fetch: Option<u32>,
+}
+
+/// タイミングのレジスタから求めた表示の枠（単位は 2CLK とラスタ）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame {
+    /// 1 ラインの 2CLK の数（HC×2）。
+    pub line: u16,
+    /// HSYNC の幅（HSW×2）。
+    pub hsync: u16,
+    /// 表示の始まりと終わり（2CLK）。
+    pub h_start: u16,
+    pub h_end: u16,
+    /// 1 フレームのラスタの数（VC）。
+    pub rasters: u16,
+    /// VSYNC の幅（VSW）。
+    pub vsync: u16,
+    /// 表示の始まりと終わり（ラスタ）。
+    pub v_start: u16,
+    pub v_end: u16,
 }
 
 /// DMA の 1 サイクルの段階（U85 p.320–321 の図 T-4・T-5）。
@@ -428,6 +466,7 @@ impl Hd63484 {
             overruns: 0,
             underruns: 0,
             dma: Dma::default(),
+            disp: Display::default(),
         }
     }
 
@@ -465,7 +504,7 @@ impl Hd63484 {
             0x02 => self.ccr,
             0x04 => self.omr,
             0x06 => self.dcr,
-            0x80 => 0, // RCR：表示はまだ作っていない
+            0x80 => self.disp.raster, // RCR
             0x81..=0xFF => {
                 if (0xEC..=0xEF).contains(&ar) {
                     self.flags &= !SR_LPD;
@@ -707,6 +746,7 @@ impl Hd63484 {
     /// 2CLK を 1 周期進める。
     pub fn tick(&mut self, vram: &mut impl Vram) {
         self.cycles += 1;
+        self.display_tick();
         // DMA のバスのサイクルは、描画の停止（STR、PSE、ABT）と関係なく進める [V]
         self.dma_edge();
         // STR＝0 なら描画も止まる。PSE＝1 は一時停止、ABT＝1 は FIFO に触れない（U85 p.66、p.70）
@@ -725,6 +765,90 @@ impl Hd63484 {
         if self.busy == 0 && self.exec == Exec::Done {
             self.complete();
         }
+    }
+
+    // ---- 表示 ----
+
+    /// タイミングのレジスタ（r82〜r8A）から表示の枠を求める（台帳 §3.4 の書式）。
+    pub fn frame(&self) -> Frame {
+        let r = |ar: usize| self.regs[(ar - 0x80) / 2];
+        let hc = (r(0x82) >> 8) + 1;
+        let hsw = r(0x82) & 0x1F;
+        let hds = (r(0x84) >> 8) + 1;
+        let hdw = (r(0x84) & 0xFF) + 1;
+        let vc = (r(0x86) & 0x0FFF).max(1);
+        let vds = (r(0x88) >> 8) + 1;
+        let vsw = r(0x88) & 0x1F;
+        let h_start = 2 * (hsw + hds);
+        let v_start = vsw + vds;
+        Frame {
+            line: 2 * hc,
+            hsync: 2 * hsw,
+            h_start,
+            h_end: h_start + 2 * hdw,
+            rasters: vc,
+            vsync: vsw,
+            v_start,
+            v_end: v_start + (r(0x8A) & 0x0FFF),
+        }
+    }
+
+    /// ラインの頭からの 2CLK の数と、VSYNC の始まりからのラスタの数。
+    pub fn beam(&self) -> (u16, u16) {
+        (self.disp.dot, self.disp.raster)
+    }
+
+    /// 表示が動いているか（OMR の STR）。
+    pub fn display_running(&self) -> bool {
+        self.omr & OMR_STR != 0
+    }
+
+    /// この 2CLK で表示のために読んだ語番地（20 bit）。読んだ語の 4 画素は、この 2CLK から 1 画素ずつ出す。
+    pub fn display_fetch(&self) -> Option<u32> {
+        self.disp.fetch
+    }
+
+    /// 表示を 2CLK 進める。STR＝0 の間は止める [V]。
+    fn display_tick(&mut self) {
+        self.disp.fetch = None;
+        if self.omr & OMR_STR == 0 {
+            return;
+        }
+        let f = self.frame();
+        let d = &mut self.disp;
+        d.dot += 1;
+        if d.dot >= f.line {
+            d.dot = 0;
+            d.raster += 1;
+            if d.raster >= f.rasters {
+                d.raster = 0;
+            }
+        }
+        if d.raster < f.v_start || d.raster >= f.v_end {
+            return;
+        }
+        if d.dot == 0 {
+            // 基本画面（rC8〜rCF）：SAR から MWR ずつ下へ進む（台帳 §4.3・§4.5）
+            let mwr = u32::from(self.regs[(0xCA - 0x80) / 2] & 0x0FFF);
+            let sar = (u32::from(self.regs[(0xCC - 0x80) / 2] & 0x0F) << 16)
+                | u32::from(self.regs[(0xCE - 0x80) / 2]);
+            d.addr = sar + u32::from(d.raster - f.v_start) * mwr;
+            d.skip = false;
+        }
+        if d.dot < f.h_start || d.dot >= f.h_end || !(d.dot - f.h_start).is_multiple_of(4) {
+            return;
+        }
+        d.fetch = Some(d.addr & ADDR_MASK as u32);
+        // GAI（OMR bit 6–4）：+1、+2、+4、+8、増加なし、2 表示サイクルごとに +1（台帳 §3.2）
+        let step = match (self.omr >> 4) & 7 {
+            g @ 0..=3 => 1 << g,
+            7 => {
+                d.skip = !d.skip;
+                u32::from(!d.skip)
+            }
+            _ => 0,
+        };
+        d.addr = d.addr.wrapping_add(step);
     }
 
     fn complete(&mut self) {
