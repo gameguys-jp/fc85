@@ -4,5 +4,6 @@
 //! 基板（アドレスマップ、Data Fabric、ポートアダプタ）は board 層の仕事で、ここには置かない。
 //! 状態はすべて serde で保存・復元できる（snapshot、Bend のパッチの undo、DR-040）。
 
+pub mod es5503;
 pub mod msm5205;
 pub mod tms32010;
