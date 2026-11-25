@@ -44,6 +44,29 @@
 | 決定記録 | [docs/decisions.md](docs/decisions.md) |
 | 課題台帳 | [docs/open-issues.md](docs/open-issues.md) |
 
+## 動かし方
+
+Rust（1.88 以降。edition 2024 と let-chains を使う）と Python 3 が要ります。ROM のイメージはリポジトリに入れていないので、先に組みます。
+
+```
+py firmware/charrom/build.py
+py firmware/boot/build.py
+py sdk/samples/game/build.py
+cd emulator
+cargo run --release -p fc85-host                                              # Boot ROM の内蔵のデモ
+cargo run --release -p fc85-host -- --cart ../sdk/samples/game/build/game.bin  # サンプルのカートリッジ
+```
+
+| キー | 働き |
+|---|---|
+| 矢印 | 方向（PORT_A の上・下・左・右） |
+| Z・X・C | A・B・C |
+| Enter | START |
+| F5・F9 | 状態の保存・復元 |
+| Esc | 終わり |
+
+`--no-doc` で DOC 子基板なしの構成、`--help` でほかの起動オプション（外部クロックの Bend、MIDI、窓なしの実行など）。詳しくは [docs/impl/emulator.md](docs/impl/emulator.md) §02。
+
 ## ライセンス
 
 ソフトウェアと文書は [MIT](LICENSE)、ハードウェアの設計データ（PCB、FPGA の HDL、機構）は CERN-OHL-P v2（`hardware/` を作るときに `hardware/LICENSE` を置きます）です。外部のコードは元のライセンスのままで、GPL のコアを組み込んだ成果物は GPL に従います（[DR-045](docs/decisions.md)）。
