@@ -59,34 +59,21 @@ enum Cmd {
     Mod(u8),
     Clr,
     Sclr(u8),
-    Cpy {
-        s: bool,
-        dsd: u8,
-        mm: Option<u8>,
-    },
+    Cpy { s: bool, dsd: u8, mm: Option<u8> },
     Amove,
     Rmove,
-    Line {
-        rel: bool,
-    },
-    Rect {
-        rel: bool,
-    },
-    Poly {
-        rel: bool,
-        closed: bool,
-    },
-    /// 段階 1 の後半で作る。パラメータの数だけ読み捨てる。
-    Unimplemented(u8),
-    Frct {
-        rel: bool,
-    },
+    Line { rel: bool },
+    Rect { rel: bool },
+    Poly { rel: bool, closed: bool },
+    Crcl { cw: bool },
+    Elps { cw: bool },
+    Arc { rel: bool, cw: bool },
+    Earc { rel: bool, cw: bool },
+    Paint,
+    Ptn { sl: bool, sd: u8 },
+    Frct { rel: bool },
     Dot,
-    Gcpy {
-        rel: bool,
-        s: bool,
-        dsd: u8,
-    },
+    Gcpy { rel: bool, s: bool, dsd: u8 },
 }
 
 impl Cmd {
@@ -94,6 +81,8 @@ impl Cmd {
         let mm = (op & 3) as u8;
         let s = op & 0x0800 != 0;
         let dsd = ((op >> 8) & 7) as u8;
+        // 円・楕円・弧の C（bit 8）：1 は時計回り
+        let cw = op & 0x0100 != 0;
         let cmd = match op >> 12 {
             0x6 => Cmd::Cpy { s, dsd, mm: None },
             0x7 => Cmd::Cpy {
@@ -101,15 +90,17 @@ impl Cmd {
                 dsd,
                 mm: Some(mm),
             },
-            0xD => Cmd::Unimplemented(1), // PTN
+            0xD => Cmd::Ptn { sl: s, sd: dsd },
             0xE => Cmd::Gcpy { rel: false, s, dsd },
             0xF => Cmd::Gcpy { rel: true, s, dsd },
             _ => match op >> 9 {
-                0x54 => Cmd::Unimplemented(1),        // CRCL
-                0x56 => Cmd::Unimplemented(3),        // ELPS
-                0x58 | 0x5A => Cmd::Unimplemented(4), // AARC、RARC
-                0x5C | 0x5E => Cmd::Unimplemented(6), // AEARC、REARC
-                0x64 => Cmd::Unimplemented(0),        // PAINT
+                0x54 => Cmd::Crcl { cw },
+                0x56 => Cmd::Elps { cw },
+                0x58 => Cmd::Arc { rel: false, cw },
+                0x5A => Cmd::Arc { rel: true, cw },
+                0x5C => Cmd::Earc { rel: false, cw },
+                0x5E => Cmd::Earc { rel: true, cw },
+                0x64 => Cmd::Paint,
                 _ => match op >> 10 {
                     0x01 => Cmd::Org,
                     0x02 => Cmd::Wpr((op & 0x1F) as u8),
@@ -159,14 +150,17 @@ impl Cmd {
     /// コマンド語の後に、最初にまとめて読むパラメータの数。
     fn params(self) -> usize {
         match self {
-            Cmd::Rpr(_) | Cmd::Rd | Cmd::Dot => 0,
+            Cmd::Rpr(_) | Cmd::Rd | Cmd::Dot | Cmd::Paint => 0,
+            Cmd::Crcl { .. } | Cmd::Ptn { .. } => 1,
+            Cmd::Elps { .. } => 3,
+            Cmd::Arc { .. } => 4,
+            Cmd::Earc { .. } => 6,
             Cmd::Wpr(_) | Cmd::Wptn(_) | Cmd::Rptn(_) | Cmd::Wt | Cmd::Mod(_) => 1,
             Cmd::Poly { .. } => 1,
             Cmd::Org | Cmd::Drd | Cmd::Dwt | Cmd::Dmod(_) => 2,
             Cmd::Amove | Cmd::Rmove | Cmd::Line { .. } | Cmd::Rect { .. } | Cmd::Frct { .. } => 2,
             Cmd::Clr | Cmd::Sclr(_) => 3,
             Cmd::Cpy { .. } | Cmd::Gcpy { .. } => 4,
-            Cmd::Unimplemented(n) => usize::from(n),
         }
     }
 }
@@ -270,6 +264,10 @@ enum Exec {
         x: Option<u16>,
         stopped: bool,
     },
+    /// PAINT がスタックからあふれた種を、読出し FIFO へ 1 語ずつ出す（U85 p.274）。
+    Emit {
+        words: VecDeque<u16>,
+    },
     /// DRD の最後の語の後。ABT まで止まる（U85 p.128）。
     Hang,
     /// 最後のサイクルを待っている。終わると CED。
@@ -335,7 +333,6 @@ pub struct Hd63484 {
     cycles: u64,
     overruns: u64,
     underruns: u64,
-    unimplemented: u64,
 }
 
 impl Default for Hd63484 {
@@ -390,7 +387,6 @@ impl Hd63484 {
             cycles: 0,
             overruns: 0,
             underruns: 0,
-            unimplemented: 0,
         }
     }
 
@@ -564,9 +560,9 @@ impl Hd63484 {
         self.cycles
     }
 
-    /// 満杯の書込み FIFO に書いた回数、空の読出し FIFO を読んだ回数、未実装のコマンドの数。
-    pub fn error_counts(&self) -> (u64, u64, u64) {
-        (self.overruns, self.underruns, self.unimplemented)
+    /// 満杯の書込み FIFO に書いた回数と、空の読出し FIFO を読んだ回数。
+    pub fn error_counts(&self) -> (u64, u64) {
+        (self.overruns, self.underruns)
     }
 
     // ---- 時間 ----
@@ -667,6 +663,21 @@ impl Hd63484 {
                 x,
                 stopped,
             } => self.poly(op, rel, closed, left, start, x, stopped, vram),
+            Exec::Emit { mut words } => {
+                if self.rfifo.len() >= FIFO_WORDS {
+                    self.exec = Exec::Emit { words };
+                    return 1;
+                }
+                if let Some(w) = words.pop_front() {
+                    self.rfifo.push_back(w);
+                }
+                self.exec = if words.is_empty() {
+                    Exec::Done
+                } else {
+                    Exec::Emit { words }
+                };
+                1
+            }
             Exec::Hang => {
                 self.exec = Exec::Hang;
                 1
@@ -867,9 +878,82 @@ impl Hd63484 {
                 let (pixels, rows) = self.copy_pixels(op, xs, ys, p[2], p[3], s, dsd, vram);
                 (pcost + 2) * pixels + 10 * rows + 70
             }
-            Cmd::Unimplemented(_) => {
-                self.unimplemented += 1;
-                8
+            Cmd::Crcl { cw } => {
+                // r は下位 13 bit（U85 p.248）
+                let r = i64::from(p[0] & 0x1FFF);
+                let c = (i64::from(self.cpx), i64::from(self.cpy));
+                let q = Conic {
+                    kx: 1,
+                    ky: 1,
+                    k: r * r,
+                };
+                let (d, stopped) = self.trace(op, c, q, (r, 0), (r, 0), cw, vram);
+                if !stopped {
+                    self.set_cp(c.0 as i16, c.1 as i16);
+                }
+                8 * d + 66
+            }
+            Cmd::Elps { cw } => {
+                // b·(X−A)² ＋ a·(Y−B)² ＝ b·dX²（U85 p.250 の式 (3)）
+                let (a, b, dx) = (i64::from(p[0]), i64::from(p[1]), i64::from(p[2]));
+                let c = (i64::from(self.cpx), i64::from(self.cpy));
+                let q = Conic {
+                    kx: b,
+                    ky: a,
+                    k: b * dx * dx,
+                };
+                let (d, stopped) = self.trace(op, c, q, (dx, 0), (dx, 0), cw, vram);
+                if !stopped {
+                    self.set_cp(c.0 as i16, c.1 as i16);
+                }
+                10 * d + 90
+            }
+            Cmd::Arc { rel, cw } => {
+                // パラメータは下位 13 bit（U85 p.254、p.257）。符号付きとして広げる [V]
+                let s13 = |v: u16| i64::from(((v << 3) as i16) >> 3);
+                let (o, c, e) = self.arc_points(rel, [s13(p[0]), s13(p[1]), s13(p[2]), s13(p[3])]);
+                let start = (o.0 - c.0, o.1 - c.1);
+                // 半径は CP を通る（U85 p.303）
+                let q = Conic {
+                    kx: 1,
+                    ky: 1,
+                    k: start.0 * start.0 + start.1 * start.1,
+                };
+                let (d, stopped) = self.trace(op, c, q, start, (e.0 - c.0, e.1 - c.1), cw, vram);
+                if !stopped {
+                    self.set_cp(e.0 as i16, e.1 as i16);
+                }
+                8 * d + 18
+            }
+            Cmd::Earc { rel, cw } => {
+                let (a, b) = (i64::from(p[0]), i64::from(p[1]));
+                let s16 = |v: u16| i64::from(v as i16);
+                let (o, c, e) = self.arc_points(rel, [s16(p[2]), s16(p[3]), s16(p[4]), s16(p[5])]);
+                let start = (o.0 - c.0, o.1 - c.1);
+                // b·x² ＋ a·y² が CP で取る値の曲線（U85 p.260 の式 (3)、p.306）
+                let q = Conic {
+                    kx: b,
+                    ky: a,
+                    k: b * start.0 * start.0 + a * start.1 * start.1,
+                };
+                let (d, stopped) = self.trace(op, c, q, start, (e.0 - c.0, e.1 - c.1), cw, vram);
+                if !stopped {
+                    self.set_cp(e.0 as i16, e.1 as i16);
+                }
+                10 * d + 96
+            }
+            Cmd::Paint => {
+                let (cost, words) = self.paint(op, vram);
+                if !words.is_empty() {
+                    self.exec = Exec::Emit {
+                        words: words.into(),
+                    };
+                }
+                cost
+            }
+            Cmd::Ptn { sl, sd } => {
+                let (pixels, rows) = self.pattern_rect(op, p[0], sl, sd, vram);
+                pcost * pixels + 10 * rows + 20
             }
         }
     }
@@ -1393,6 +1477,272 @@ impl Hd63484 {
         }
     }
 
+    /// 弧のコマンドの (CP, 中心, 終点)。相対のコマンドは CP からの差（U85 p.256）。
+    fn arc_points(&self, rel: bool, v: [i64; 4]) -> ((i64, i64), (i64, i64), (i64, i64)) {
+        let o = (i64::from(self.cpx), i64::from(self.cpy));
+        let base = if rel { o } else { (0, 0) };
+        (
+            o,
+            (base.0 + v[0], base.1 + v[1]),
+            (base.0 + v[2], base.1 + v[3]),
+        )
+    }
+
+    /// 中心 `c` の曲線 `q` を、相対の点 `start` から、`end` に達する手前までたどって描く（U85 p.248–264）。
+    /// 曲線は 8 近傍で 1 画素ずつたどる。`end` と同じ区分に入り、主の向きの座標が `end` に達するか越えたら、
+    /// その点は描かずに終える。描いた点の数と、領域の判定で止まったかを返す [V]。
+    #[allow(clippy::too_many_arguments)]
+    fn trace(
+        &mut self,
+        op: u16,
+        c: (i64, i64),
+        q: Conic,
+        start: (i64, i64),
+        end: (i64, i64),
+        cw: bool,
+        vram: &mut impl Vram,
+    ) -> (u32, bool) {
+        // 半径 0、軸の比が 0 の楕円は描かない [V]
+        if start == (0, 0) || q.k <= 0 || q.kx <= 0 || q.ky <= 0 {
+            return (0, false);
+        }
+        let target = q.region(end);
+        let (tx, ty) = q.tangent(end, cw);
+        let dir = if target.0 { tx.signum() } else { ty.signum() };
+        let reached = |p: (i64, i64)| {
+            let lead = if target.0 { p.0 - end.0 } else { p.1 - end.1 };
+            dir != 0 && q.region(p) == target && lead * dir >= 0
+        };
+        let mut p = start;
+        let mut was = reached(p);
+        let mut d = 0;
+        for step in 0..TRACE_LIMIT {
+            if step > 0 {
+                let now = reached(p);
+                // 終点に達した。終点が曲線から外れていても、1 周したら止める
+                if (now && !was) || p == start || p == (0, 0) {
+                    break;
+                }
+                was = now;
+            }
+            let (hx, hy) = ((c.0 + p.0) as i16, (c.1 + p.1) as i16);
+            d += 1;
+            match self.area(op, hx, hy) {
+                Area::Stop => {
+                    self.set_cp(hx, hy);
+                    return (d, true);
+                }
+                Area::Skip => {}
+                Area::Draw => {
+                    let col = self.pattern_color(op);
+                    self.plot(op, hx, hy, col, vram);
+                }
+            }
+            self.advance_x();
+            p = q.next(p, cw);
+        }
+        (d, false)
+    }
+
+    /// PTN。パターンを、SD で決まる向き（45° 単位）の行で描き、行は SL＝0 なら 90°、SL＝1 なら 45° の向きへ送る
+    /// （U85 p.284–292、表 C36-1）。描いた画素の数と行の数を返す。
+    fn pattern_rect(
+        &mut self,
+        op: u16,
+        sz: u16,
+        sl: bool,
+        sd: u8,
+        vram: &mut impl Vram,
+    ) -> (u32, u32) {
+        const DIRS: [(i32, i32); 8] = [
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+        ];
+        let row = DIRS[usize::from(sd & 7)];
+        let adv = DIRS[usize::from((sd + if sl { 1 } else { 2 }) & 7)];
+        // SZx・SZy の 0〜255 は 1〜256 画素
+        let (a, b) = (i32::from(sz & 0xFF) + 1, i32::from(sz >> 8) + 1);
+        let (x0, y0) = (i32::from(self.cpx), i32::from(self.cpy));
+        let (ppx0, pzcx0) = (self.ppx, self.pzcx);
+        let mut pixels = 0;
+        let mut rows = 0;
+        let mut stopped = false;
+        'rows: for j in 0..b {
+            rows += 1;
+            (self.ppx, self.pzcx) = (ppx0, pzcx0);
+            for i in 0..a {
+                let px = (x0 + i * row.0 + j * adv.0) as i16;
+                let py = (y0 + i * row.1 + j * adv.1) as i16;
+                pixels += 1;
+                match self.area(op, px, py) {
+                    Area::Stop => {
+                        self.set_cp(px, py);
+                        stopped = true;
+                        break 'rows;
+                    }
+                    Area::Skip => {}
+                    Area::Draw => {
+                        let c = self.pattern_color(op);
+                        self.plot(op, px, py, c, vram);
+                    }
+                }
+                self.advance_x();
+            }
+            self.advance_y();
+        }
+        (self.ppx, self.pzcx) = (ppx0, pzcx0);
+        if !stopped {
+            // 終点 Pe は、行を送る向きへ SZy＋1 進んだ点（表 C36-1）
+            self.set_cp((x0 + b * adv.0) as i16, (y0 + b * adv.1) as i16);
+        }
+        (pixels, rows)
+    }
+
+    /// PAINT（U85 p.271–281）。CP を含み、縁の色で囲まれた領域を、行ごとに左から右へ塗る。
+    /// 塗った行の上と下の行で見つけた、塗れる区間の左端を種として内部のスタックに積む。スタックは 4 点
+    /// （読出し FIFO にデータがあれば 2 点 [V]）で、あふれた種は X、Y、パターンの位置（Pr05 の形）の 3 語を
+    /// 読出し FIFO へ出す。所要サイクルと、FIFO へ出す語を返す。
+    fn paint(&mut self, op: u16, vram: &mut impl Vram) -> (u32, Vec<u16>) {
+        // E＝0 は EDG の色が縁、E＝1 は EDG 以外の色が縁（U85 p.271）
+        let e = op & 0x0100 != 0;
+        let cap = if self.rfifo.is_empty() { 4 } else { 2 };
+        let start = (i32::from(self.cpx), i32::from(self.cpy));
+        let pp0 = (self.ppx, self.pzcx, self.ppy, self.pzcy);
+        // このコマンドで塗った物理の画素。同じ画素を 2 度塗らない [V]
+        let mut painted = vec![0u64; 1 << 18];
+        let mut stack: Vec<(i32, i32)> = Vec::new();
+        let mut out = Vec::new();
+        let mut next = Some(start);
+        let (mut spans, mut dots) = (0u32, 0u32);
+        let mut last = None;
+        let mut stop = None;
+        let (lo, hi) = (i32::from(i16::MIN), i32::from(i16::MAX));
+        'fill: while let Some((x, y)) = next.take().or_else(|| stack.pop()) {
+            match self.paintable(op, e, x, y, &painted, vram) {
+                Fill::Stop => {
+                    stop = Some((x, y));
+                    break;
+                }
+                Fill::No => continue,
+                Fill::Yes => {}
+            }
+            let (mut xl, mut xr) = (x, x);
+            while xl > lo {
+                match self.paintable(op, e, xl - 1, y, &painted, vram) {
+                    Fill::Yes => xl -= 1,
+                    Fill::No => break,
+                    Fill::Stop => {
+                        stop = Some((xl - 1, y));
+                        break 'fill;
+                    }
+                }
+            }
+            while xr < hi {
+                match self.paintable(op, e, xr + 1, y, &painted, vram) {
+                    Fill::Yes => xr += 1,
+                    Fill::No => break,
+                    Fill::Stop => {
+                        stop = Some((xr + 1, y));
+                        break 'fill;
+                    }
+                }
+            }
+            for px in xl..=xr {
+                let (addr, bit) = self.pixel_addr(px as i16, y as i16);
+                let key = ((addr << 4) | bit) as usize;
+                painted[key >> 6] |= 1 << (key & 63);
+                // パターンの位置は、CP からのずれで決まる（U85 p.272）
+                self.set_pattern_offset(pp0, px - start.0, y - start.1);
+                let c = self.pattern_color(op);
+                self.plot(op, px as i16, y as i16, c, vram);
+            }
+            spans += 1;
+            dots += (xr - xl + 1) as u32;
+            last = Some((xr, y));
+            for ny in [y + 1, y - 1] {
+                if !(lo..=hi).contains(&ny) {
+                    continue;
+                }
+                let mut px = xl;
+                while px <= xr {
+                    match self.paintable(op, e, px, ny, &painted, vram) {
+                        Fill::Stop => {
+                            stop = Some((px, ny));
+                            break 'fill;
+                        }
+                        Fill::No => px += 1,
+                        Fill::Yes => {
+                            if stack.len() < cap {
+                                stack.push((px, ny));
+                            } else {
+                                self.set_pattern_offset(pp0, px - start.0, ny - start.1);
+                                out.extend([px as u16, ny as u16, self.param(0x05)]);
+                            }
+                            while px <= xr
+                                && self.paintable(op, e, px, ny, &painted, vram) == Fill::Yes
+                            {
+                                px += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (self.ppx, self.pzcx, self.ppy, self.pzcy) = pp0;
+        // 終点 Pe：最後に塗った点。領域の判定で止まったときはその点 [V]
+        if let Some((x, y)) = stop.or(last) {
+            self.set_cp(x as i16, y as i16);
+        }
+        // (18A＋102)B−58 を区間ごとに足す（U85 p.173 の注 1 は矩形の場合）
+        let cost = (18 * dots + 102 * spans).saturating_sub(58).max(44);
+        (cost, out)
+    }
+
+    /// PAINT で、(x, y) を塗れるか。塗った画素、縁の色、CL0・CL1 の色は塗れない（U85 p.271）。
+    fn paintable(
+        &mut self,
+        op: u16,
+        e: bool,
+        x: i32,
+        y: i32,
+        painted: &[u64],
+        vram: &mut impl Vram,
+    ) -> Fill {
+        let (x, y) = (x as i16, y as i16);
+        let (addr, bit) = self.pixel_addr(x, y);
+        let key = ((addr << 4) | bit) as usize;
+        if (painted[key >> 6] >> (key & 63)) & 1 != 0 {
+            return Fill::No;
+        }
+        let m = self.pixel_mask(bit);
+        let v = vram.read(addr) & m;
+        let edge = if e {
+            v != self.edg & m
+        } else {
+            v == self.edg & m
+        };
+        if edge || v == self.cl0 & m || v == self.cl1 & m {
+            return Fill::No;
+        }
+        match self.area(op, x, y) {
+            Area::Draw => Fill::Yes,
+            Area::Skip => Fill::No,
+            Area::Stop => Fill::Stop,
+        }
+    }
+
+    /// パターンの位置を、開始の位置 `pp0`（PPX、PZCX、PPY、PZCY）から (dx, dy) 画素ずれた位置にする。
+    fn set_pattern_offset(&mut self, pp0: (u8, u8, u8, u8), dx: i32, dy: i32) {
+        (self.ppx, self.pzcx) = phase(pp0.0, pp0.1, self.psx, self.pex, self.pzx, dx);
+        (self.ppy, self.pzcy) = phase(pp0.2, pp0.3, self.psy, self.pey, self.pzy, dy);
+    }
+
     fn set_cp(&mut self, x: i16, y: i16) {
         (self.cpx, self.cpy) = (x, y);
         let (dp, dpd) = self.pixel_addr(x, y);
@@ -1425,4 +1775,78 @@ fn pack4(a: u8, b: u8, c: u8, d: u8) -> u16 {
 /// 0 は正の向きとみなす。
 fn step_sign(v: i32) -> i32 {
     if v < 0 { -1 } else { 1 }
+}
+
+/// 曲線をたどる点の数の上限（13 bit の半径の円の周より十分大きい）。
+const TRACE_LIMIT: u32 = 1 << 18;
+
+/// 2 次曲線 kx·x² ＋ ky·y² ＝ k（中心からの相対座標）。円は kx＝ky＝1。
+#[derive(Clone, Copy)]
+struct Conic {
+    kx: i64,
+    ky: i64,
+    k: i64,
+}
+
+impl Conic {
+    fn f(&self, (x, y): (i64, i64)) -> i64 {
+        self.kx * x * x + self.ky * y * y - self.k
+    }
+
+    /// 接線の向き。Y は上向きで、反時計回りは (−ky·y, kx·x)。
+    fn tangent(&self, (x, y): (i64, i64), cw: bool) -> (i64, i64) {
+        let t = (-self.ky * y, self.kx * x);
+        if cw { (-t.0, -t.1) } else { t }
+    }
+
+    /// 区分。主に X が動く（上か下）なら 1 つ目が true。2 つ目は正の側（上か右）か。
+    fn region(&self, (x, y): (i64, i64)) -> (bool, bool) {
+        if (self.ky * y).abs() >= (self.kx * x).abs() {
+            (true, y > 0)
+        } else {
+            (false, x > 0)
+        }
+    }
+
+    /// 8 近傍の次の点。主の向きに 1 進め、副の向きは、式の値が 0 に近いほうを選ぶ（同じなら進めない）[V]。
+    fn next(&self, (x, y): (i64, i64), cw: bool) -> (i64, i64) {
+        let (tx, ty) = self.tangent((x, y), cw);
+        if tx.abs() >= ty.abs() {
+            let nx = x + tx.signum();
+            // 接線が真横なら、中心の側へ曲がる
+            let sy = if ty != 0 { ty.signum() } else { -y.signum() };
+            if self.f((nx, y + sy)).abs() < self.f((nx, y)).abs() {
+                (nx, y + sy)
+            } else {
+                (nx, y)
+            }
+        } else {
+            let ny = y + ty.signum();
+            let sx = if tx != 0 { tx.signum() } else { -x.signum() };
+            if self.f((x + sx, ny)).abs() < self.f((x, ny)).abs() {
+                (x + sx, ny)
+            } else {
+                (x, ny)
+            }
+        }
+    }
+}
+
+/// PAINT の画素の判定。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    Yes,
+    No,
+    /// 領域モード 001・101 で、塗る範囲が領域の外（中）へ出た
+    Stop,
+}
+
+/// パターンの 1 軸の位置（PPX と PZCX など）を、`delta` 画素ずらす。PS から PE へ回る周期で数える。
+/// 開始の位置が PS〜PE の外なら、周期の中へ折り返す [V]。
+fn phase(pos: u8, count: u8, s: u8, e: u8, zoom: u8, delta: i32) -> (u8, u8) {
+    let w = (i32::from(e) - i32::from(s)).rem_euclid(16) + 1;
+    let z = i32::from(zoom) + 1;
+    let off = (i32::from(pos) - i32::from(s)).rem_euclid(16) % w;
+    let phi = (off * z + i32::from(count).min(z - 1) + delta).rem_euclid(w * z);
+    (((i32::from(s) + phi / z) & 15) as u8, (phi % z) as u8)
 }

@@ -1,5 +1,7 @@
 //! HD63484 ACRTC の単体試験（仕様書 §12 段階 1：描画・COPY・FIFO）。
-//! 期待値は台帳 `docs/parts/HD63484.md` の追補 2（U85 の記述と実行例）から取る。「(n)」は追補 2 の節。
+//! 期待値は台帳 `docs/parts/HD63484.md` の追補 2・追補 3（U85 の記述と実行例）から取る。「(n)」は追補 2 の節。
+
+use std::collections::BTreeSet;
 
 use fc85_chips::hd63484::{Hd63484, SR_ARD, SR_CED, SR_CER, SR_RFF, SR_RFR, SR_WFE, SR_WFR, Vram};
 
@@ -26,9 +28,17 @@ const ARCT: u16 = 0x9000;
 const APLL: u16 = 0x9800;
 const RPLL: u16 = 0x9C00;
 const APLG: u16 = 0xA000;
+const CRCL: u16 = 0xA800;
+const ELPS: u16 = 0xAC00;
+const AARC: u16 = 0xB000;
+const RARC: u16 = 0xB400;
+const AEARC: u16 = 0xB800;
+const REARC: u16 = 0xBC00;
 const AFRCT: u16 = 0xC000;
 const RFRCT: u16 = 0xC400;
+const PAINT: u16 = 0xC800;
 const DOT: u16 = 0xCC00;
+const PTN: u16 = 0xD000;
 const AGCPY: u16 = 0xE000;
 const RGCPY: u16 = 0xF000;
 
@@ -44,6 +54,8 @@ const RWPH: u16 = 0x0C;
 const RWPL: u16 = 0x0D;
 
 // コマンド語の下位 8 bit（AREA、COL、OPM）
+/// 円・楕円・弧の C＝1（時計回り）
+const CW: u16 = 0x0100;
 const COL01: u16 = 0x08;
 const COL10: u16 = 0x10;
 const COL11: u16 = 0x18;
@@ -752,6 +764,558 @@ fn rgcpy_mirrors_with_dsd() {
     let got: Vec<u16> = (0..4).map(|x| r.pix(x, 5)).collect();
     assert_eq!(got, [4, 3, 2, 1]);
     assert_eq!(r.a.cp(), (3, 6));
+}
+
+// ---- 円・楕円・弧（追補 3 の (1)） ----
+
+/// (x, y) を中心とした相対座標の、0 でない画素の集合。
+fn lit_set(r: &Rig, c: (i32, i32), half: i32) -> BTreeSet<(i32, i32)> {
+    let mut s = BTreeSet::new();
+    for y in -half..=half {
+        for x in -half..=half {
+            if r.pix(c.0 + x, c.1 + y) != 0 {
+                s.insert((x, y));
+            }
+        }
+    }
+    s
+}
+
+fn circle(r: i64) -> BTreeSet<(i32, i32)> {
+    let mut rig = Rig::drawing(0x40, 0x8020);
+    rig.wpr(CL0, 0xFFFF);
+    rig.run(&[CRCL, r as u16]);
+    lit_set(&rig, (0, 0), (r & 0x1FFF) as i32 + 2)
+}
+
+fn ellipse(a: u16, b: u16, dx: u16) -> BTreeSet<(i32, i32)> {
+    let mut rig = Rig::drawing(0x40, 0x8020);
+    rig.wpr(CL0, 0xFFFF);
+    rig.run(&[ELPS, a, b, dx]);
+    lit_set(&rig, (0, 0), 20)
+}
+
+/// 8 近傍でつながった閉じた線か：どの点にも、隣の点が 2 つ以上ある。
+fn closed(s: &BTreeSet<(i32, i32)>) -> bool {
+    s.iter().all(|&(x, y)| {
+        let n = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ]
+        .iter()
+        .filter(|(dx, dy)| s.contains(&(x + dx, y + dy)))
+        .count();
+        n >= 2
+    })
+}
+
+#[test]
+fn crcl_example_draws_a_closed_circle_around_cp() {
+    // U85 p.249 の例：CP＝(0, 0)、r＝7
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    let cycles = r.run(&[CRCL, 7]);
+    let s = lit_set(&r, (0, 0), 10);
+    assert_eq!(cycles, 8 * s.len() as u64 + 66, "d は描いた点の数");
+    assert_eq!(r.a.cp(), (0, 0), "CP は中心に戻る");
+    for p in [(7, 0), (0, 7), (-7, 0), (0, -7)] {
+        assert!(s.contains(&p), "{p:?}");
+    }
+    for &(x, y) in &s {
+        assert!(
+            (x * x + y * y - 49).abs() <= 7,
+            "({x}, {y}) が円から離れている"
+        );
+        for q in [(-x, y), (x, -y), (y, x)] {
+            assert!(s.contains(&q), "({x}, {y}) と対称な {q:?} がない");
+        }
+    }
+    assert!(closed(&s));
+    // 時計回りでも同じ画素
+    let mut c = Rig::drawing(0x40, 0x8020);
+    c.wpr(CL0, 0xFFFF);
+    assert_eq!(c.run(&[CRCL | CW, 7]), cycles);
+    assert!(c.m.0 == r.m.0);
+    // r は下位 13 bit
+    assert_eq!(circle(0x2003), circle(3));
+}
+
+#[test]
+fn crcl_of_radius_zero_draws_nothing() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    assert_eq!(r.run(&[CRCL, 0]), 66);
+    assert_eq!(r.lit(-3..=3, -3..=3), 0);
+}
+
+#[test]
+fn elps_example() {
+    // U85 p.252 の例：CP＝(16, 10)、a＝9、b＝4、dX＝9（dY＝6）
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 16, 10]);
+    let cycles = r.run(&[ELPS, 9, 4, 9]);
+    let s = lit_set(&r, (16, 10), 12);
+    assert_eq!(cycles, 10 * s.len() as u64 + 90);
+    assert_eq!(r.a.cp(), (16, 10));
+    for p in [(9, 0), (0, 6), (-9, 0), (0, -6)] {
+        assert!(s.contains(&p), "{p:?}");
+    }
+    for &(x, y) in &s {
+        // 4x² ＋ 9y² ＝ 324 から、半画素ぶん以内
+        let f = 4 * x * x + 9 * y * y - 324;
+        assert!(f.abs() <= 60, "({x}, {y}) が楕円から離れている（{f}）");
+        assert!(s.contains(&(-x, y)) && s.contains(&(x, -y)));
+    }
+    assert!(closed(&s));
+    assert_eq!(s, ellipse(9, 4, 9), "CP の位置によらない");
+}
+
+#[test]
+fn aarc_example_draws_three_quarters() {
+    // U85 p.254–255 の例：CP＝(12, 4)、中心 (12, 10)、Pe＝(6, 10)、C＝0（反時計回り）
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 12, 4]);
+    let cycles = r.run(&[AARC, 12, 10, 6, 10]);
+    let s = lit_set(&r, (12, 10), 8);
+    assert_eq!(cycles, 8 * s.len() as u64 + 18);
+    assert_eq!(r.a.cp(), (6, 10));
+    // 円の右・上を回り、左下の 4 分の 1 と終点を描かない
+    let want: BTreeSet<_> = circle(6)
+        .into_iter()
+        .filter(|&(x, y)| !(x < 0 && y < 0) && (x, y) != (-6, 0))
+        .collect();
+    assert_eq!(s, want);
+}
+
+#[test]
+fn aarc_clockwise_takes_the_short_way() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 12, 4]);
+    r.run(&[AARC | CW, 12, 10, 6, 10]);
+    let want: BTreeSet<_> = circle(6)
+        .into_iter()
+        .filter(|&(x, y)| (x < 0 && y < 0) || (x, y) == (0, -6))
+        .collect();
+    assert_eq!(lit_set(&r, (12, 10), 8), want);
+    assert_eq!(r.a.cp(), (6, 10));
+}
+
+#[test]
+fn rarc_example() {
+    // U85 p.257–258 の例：CP＝(6, 10)、dXc＝6、dYc＝0、dXe＝6、dYe＝6、C＝0
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 6, 10]);
+    r.run(&[RARC, 6, 0, 6, 6]);
+    assert_eq!(r.a.cp(), (12, 16));
+    let want: BTreeSet<_> = circle(6)
+        .into_iter()
+        .filter(|&(x, y)| !(x < 0 && y > 0) && (x, y) != (0, 6))
+        .collect();
+    assert_eq!(lit_set(&r, (12, 10), 8), want);
+}
+
+#[test]
+fn arc_with_pe_equal_to_cp_draws_the_whole_circle() {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 6, 0]);
+    r.run(&[AARC, 0, 0, 6, 0]);
+    assert_eq!(lit_set(&r, (0, 0), 8), circle(6));
+    assert_eq!(r.a.cp(), (6, 0));
+}
+
+#[test]
+fn aearc_quarter_and_rearc_agree() {
+    // a＝9、b＝4 の楕円（dX＝9、dY＝6）を、(25, 10) から (16, 16) まで反時計回りに
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0xFFFF);
+    r.run(&[AMOVE, 25, 10]);
+    let cycles = r.run(&[AEARC, 9, 4, 16, 10, 16, 16]);
+    let s = lit_set(&r, (16, 10), 12);
+    assert_eq!(cycles, 10 * s.len() as u64 + 96);
+    assert_eq!(r.a.cp(), (16, 16));
+    let want: BTreeSet<_> = ellipse(9, 4, 9)
+        .into_iter()
+        .filter(|&(x, y)| x > 0 && y >= 0)
+        .collect();
+    assert_eq!(s, want);
+
+    let mut q = Rig::drawing(0x40, 0x8020);
+    q.wpr(CL0, 0xFFFF);
+    q.run(&[AMOVE, 25, 10]);
+    q.run(&[REARC, 9, 4, neg(-9), 0, neg(-9), 6]);
+    assert_eq!(q.a.cp(), (16, 16));
+    assert!(q.m.0 == r.m.0);
+}
+
+#[test]
+fn curves_advance_the_line_pattern() {
+    // 線のコマンドとして、描いた点ごとにパターンの X が進む（U85 p.168）
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x0000);
+    r.wpr(CL1, 0xFFFF);
+    r.run(&[WPTN, 1, 0b01]);
+    r.wpr(PRC2, 0x0010); // PEX＝1：1 点おき
+    r.run(&[CRCL, 7]);
+    let n = lit_set(&r, (0, 0), 10).len();
+    let d = circle(7).len();
+    assert_eq!(n, d.div_ceil(2));
+}
+
+// ---- パターン（追補 3 の (2)） ----
+
+/// 6×8 の、左右・上下とも対称でない模様（語 y の bit x が点 (x, y)）。
+const PTN6X8: [u16; 8] = [
+    0b000001, 0b000011, 0b000101, 0b001001, 0b010001, 0b100001, 0b111111, 0b100100,
+];
+
+fn ptn_rig() -> Rig {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x2222);
+    r.wpr(CL1, 0xFFFF);
+    let mut w = vec![WPTN, 8];
+    w.extend(PTN6X8);
+    r.run(&w);
+    r.wpr(PRC2, 0x7050); // PEY＝7、PEX＝5
+    r.run(&[AMOVE, 20, 10]);
+    r
+}
+
+fn ptn_bit(i: i32, j: i32) -> u16 {
+    if (PTN6X8[(j % 8) as usize] >> (i % 6)) & 1 != 0 {
+        0xF
+    } else {
+        0x2
+    }
+}
+
+#[test]
+fn ptn_example_copies_the_pattern() {
+    // U85 p.286 の例 (1)：PP＝PS、PZ＝0、SZ＝PE−PS（$0705）、SL＝0、SD＝000
+    let mut r = ptn_rig();
+    let cycles = r.run(&[PTN, 0x0705]);
+    assert_eq!(cycles, (4 * 6 + 10) * 8 + 20);
+    for j in 0..8 {
+        for i in 0..6 {
+            assert_eq!(r.pix(20 + i, 10 + j), ptn_bit(i, j), "({i}, {j})");
+        }
+    }
+    assert_eq!(r.lit(14..=30, 4..=24), 48);
+    assert_eq!(r.a.cp(), (20, 18), "Pe は CP の上、SZy＋1 行先（表 C36-1）");
+}
+
+#[test]
+fn ptn_smaller_and_larger_than_the_pattern() {
+    // U85 p.288 の例 (3)（SZ＝$0403）と p.289 の例 (4)（SZ＝$0F0B）
+    for (sz, w, h) in [(0x0403u16, 4, 5), (0x0F0B, 12, 16)] {
+        let mut r = ptn_rig();
+        r.run(&[PTN, sz]);
+        for j in 0..h {
+            for i in 0..w {
+                assert_eq!(
+                    r.pix(20 + i, 10 + j),
+                    ptn_bit(i, j),
+                    "SZ＝{sz:04X} ({i}, {j})"
+                );
+            }
+        }
+        assert_eq!(r.lit(14..=40, 4..=34), (w * h) as usize);
+    }
+}
+
+#[test]
+fn ptn_zoom_doubles_each_dot() {
+    // U85 p.290 の例 (5)：PZX＝1、PZY＝1、SZ＝$0F0B
+    let mut r = ptn_rig();
+    r.wpr(PRC2, 0x7151); // PEY＝7、PZY＝1、PEX＝5、PZX＝1
+    r.run(&[PTN, 0x0F0B]);
+    for j in 0..16 {
+        for i in 0..12 {
+            assert_eq!(r.pix(20 + i, 10 + j), ptn_bit(i / 2, j / 2), "({i}, {j})");
+        }
+    }
+}
+
+#[test]
+fn ptn_scan_directions() {
+    // 表 C36-1：行の向きは SD×45°、行を送る向きは SL＝0 で＋90°、SL＝1 で＋45°
+    let dirs = [
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+        (-1, 0),
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+    ];
+    for sl in 0..2u16 {
+        for sd in 0..8u16 {
+            let mut r = ptn_rig();
+            r.run(&[PTN | (sl << 11) | (sd << 8), 0x0705]);
+            let row = dirs[sd as usize];
+            let adv = dirs[((sd + 2 - sl) & 7) as usize];
+            for j in 0..8 {
+                for i in 0..6 {
+                    let (x, y) = (20 + i * row.0 + j * adv.0, 10 + i * row.1 + j * adv.1);
+                    assert_eq!(
+                        r.pix(x, y),
+                        ptn_bit(i, j),
+                        "SL＝{sl}、SD＝{sd:03b}、({i}, {j})"
+                    );
+                }
+            }
+            assert_eq!(r.lit(0..=40, -10..=30), 48, "SL＝{sl}、SD＝{sd:03b}");
+            assert_eq!(r.a.cp(), ((20 + 8 * adv.0) as i16, (10 + 8 * adv.1) as i16));
+        }
+    }
+}
+
+// ---- 塗りつぶし（追補 3 の (3)） ----
+
+const EDG: u16 = 0x03;
+
+/// 縁の色 5 の矩形の枠を (0, 0)〜(w, h) に描いた構成。CL0＝A、CL1＝B。
+fn framed(w: u16, h: u16) -> Rig {
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x5555);
+    r.wpr(EDG, 0x5555);
+    r.run(&[ARCT, w, h]);
+    r.wpr(CL0, 0xAAAA);
+    r.wpr(CL1, 0xBBBB);
+    r
+}
+
+#[test]
+fn paint_fills_a_rectangle_inside_the_edge() {
+    let mut r = framed(11, 8);
+    r.run(&[AMOVE, 3, 3]);
+    let cycles = r.run(&[PAINT]);
+    assert_eq!(
+        cycles,
+        (18 * 10 + 102) * 7 - 58,
+        "U85 p.173 の矩形の式（A＝10、B＝7）"
+    );
+    for y in -2..=10 {
+        for x in -2..=13 {
+            let inside = (1..=10).contains(&x) && (1..=7).contains(&y);
+            let frame = (0..=11).contains(&x) && (0..=8).contains(&y) && !inside;
+            let want = if inside {
+                0xA
+            } else if frame {
+                0x5
+            } else {
+                0
+            };
+            assert_eq!(r.pix(x, y), want, "({x}, {y})");
+        }
+    }
+    assert_eq!(r.a.status() & SR_RFR, 0, "塗り残しはない");
+}
+
+#[test]
+fn paint_pattern_follows_the_offset_from_cp() {
+    // 2×2 の市松模様。CP の左と下でも、CP からのずれで模様が決まる（U85 p.272）
+    let mut r = framed(11, 8);
+    r.run(&[WPTN, 2, 0b01, 0b10]);
+    r.wpr(PRC2, 0x1010); // PEY＝1、PEX＝1
+    r.run(&[AMOVE, 4, 3]);
+    r.run(&[PAINT]);
+    for y in 1..=7 {
+        for x in 1..=10 {
+            let one = ((x - 4i32).rem_euclid(2) + (y - 3i32).rem_euclid(2)) % 2 == 0;
+            assert_eq!(r.pix(x, y), if one { 0xB } else { 0xA }, "({x}, {y})");
+        }
+    }
+    assert_eq!(r.a.param(5), 0x0000, "パターンの位置は戻る");
+}
+
+#[test]
+fn paint_inside_a_circle() {
+    // U85 p.278–279 の例（E＝0）：縁の色の円の中を塗る
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x5555);
+    r.wpr(EDG, 0x5555);
+    r.run(&[CRCL, 7]);
+    r.wpr(CL0, 0xAAAA);
+    // CL0・CL1 の色も縁とみなすので、CL1 を背景（0）と違う色にする（U85 p.271）
+    r.wpr(CL1, 0xBBBB);
+    r.run(&[PAINT]);
+    for y in -6..=6 {
+        let xs: Vec<i32> = (-8..=8).filter(|&x| r.pix(x, y) == 5).collect();
+        let (l, h) = (xs[0], xs[xs.len() - 1]);
+        for x in -9..=9 {
+            let want = if r.pix(x, y) == 5 {
+                5
+            } else if x > l && x < h {
+                0xA
+            } else {
+                0
+            };
+            assert_eq!(r.pix(x, y), want, "({x}, {y})");
+        }
+    }
+    assert_eq!(r.lit(-9..=9, 8..=9), 0, "円の外は塗らない");
+    assert_eq!(r.a.status() & SR_RFR, 0);
+}
+
+#[test]
+fn paint_treats_cl0_and_cl1_as_edges() {
+    let mut r = framed(11, 8);
+    r.wpr(CL1, 0x0000); // 背景と同じ色
+    r.run(&[AMOVE, 3, 3]);
+    r.run(&[PAINT]);
+    assert_eq!(
+        r.lit(1..=10, 1..=7),
+        0,
+        "背景の色が CL1 なので、縁とみなして塗らない"
+    );
+}
+
+#[test]
+fn paint_e1_fills_the_region_of_the_edg_color() {
+    // E＝1：EDG 以外の色が縁（U85 p.271–272）
+    let mut r = Rig::drawing(0x40, 0x8020);
+    r.wpr(CL0, 0x5555);
+    r.run(&[AFRCT, 5, 3]);
+    r.wpr(EDG, 0x5555);
+    r.wpr(CL0, 0xAAAA);
+    r.run(&[AMOVE, 2, 1]);
+    r.run(&[PAINT | 0x0100]);
+    assert_eq!(r.lit(-5..=10, -5..=10), 6 * 4);
+    for y in 0..=3 {
+        for x in 0..=5 {
+            assert_eq!(r.pix(x, y), 0xA);
+        }
+    }
+}
+
+/// U85 p.275 の図 C34-6 の手順：PAINT の後、読出し FIFO に座標があれば、それぞれから PAINT をやり直す。
+/// 最初の PAINT で FIFO へ出た種の数を返す。
+fn paint_flow(r: &mut Rig) -> usize {
+    let mut first = None;
+    let mut todo = vec![None];
+    while let Some(seed) = todo.pop() {
+        if let Some((x, y, pp)) = seed {
+            r.wpr(PRC0, pp);
+            r.run(&[AMOVE, x, y]);
+        }
+        r.put(&[PAINT]);
+        let mut words = Vec::new();
+        loop {
+            if r.a.status() & SR_RFR != 0 {
+                words.push(r.fifo());
+            } else if r.a.idle() {
+                break;
+            } else {
+                r.a.tick(&mut r.m);
+            }
+        }
+        assert_eq!(words.len() % 3, 0);
+        first.get_or_insert(words.len() / 3);
+        for w in words.chunks(3) {
+            todo.push(Some((w[0], w[1], w[2])));
+        }
+    }
+    first.unwrap()
+}
+
+#[test]
+fn paint_overflow_seeds_go_to_the_read_fifo() {
+    // 上の通路（y＝9）から、仕切り（x＝3, 6, …, 27）の間の 10 個の部屋が下へ伸びる
+    let mut r = framed(30, 10);
+    r.wpr(CL0, 0x5555);
+    for x in (3..=27).step_by(3) {
+        r.run(&[AMOVE, x, 1]);
+        r.run(&[ALINE, x, 9]);
+    }
+    r.wpr(CL0, 0xAAAA);
+    r.run(&[AMOVE, 1, 9]);
+    let overflow = paint_flow(&mut r);
+    // 通路の行で 10 個の種を見つけ、スタック（4 点）に入らない 6 個を FIFO へ出す。
+    // 18 語は FIFO（8 語）に入りきらず、ホストが読むまで待つ（U85 p.274）
+    assert_eq!(overflow, 6);
+    for y in 1..=9 {
+        for x in 1..=29 {
+            let want = if y < 9 && x % 3 == 0 { 0x5 } else { 0xA };
+            assert_eq!(r.pix(x, y), want, "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn paint_with_data_in_the_read_fifo_has_a_two_point_stack() {
+    let mut r = framed(30, 10);
+    r.wpr(CL0, 0x5555);
+    for x in (3..=27).step_by(3) {
+        r.run(&[AMOVE, x, 1]);
+        r.run(&[ALINE, x, 9]);
+    }
+    r.wpr(CL0, 0xAAAA);
+    r.run(&[RPR | CL0]); // 読出し FIFO に 1 語
+    r.run(&[AMOVE, 1, 9]);
+    r.put(&[PAINT]);
+    r.a.tick(&mut r.m); // PAINT を取り出して実行する
+    let mut words = Vec::new();
+    loop {
+        if r.a.status() & SR_RFR != 0 {
+            words.push(r.fifo());
+        } else if r.a.idle() {
+            break;
+        } else {
+            r.a.tick(&mut r.m);
+        }
+    }
+    assert_eq!(words[0], 0xAAAA);
+    assert_eq!(
+        (words.len() - 1) / 3,
+        8,
+        "10 個の種のうち 2 個だけスタックに入る [V]"
+    );
+}
+
+#[test]
+fn paint_area_modes() {
+    // 縁の矩形 (0, 0)〜(11, 8) の中で、領域を (3, 2)〜(6, 5) にする
+    for (area, painted, ard) in [
+        (0x40u16, 16, false),
+        (0x60, 16, true),
+        (0xC0, 70 - 16, false),
+    ] {
+        let mut r = framed(11, 8);
+        for (i, v) in [3, 2, 6, 5].into_iter().enumerate() {
+            r.wpr(XMIN + i as u16, v);
+        }
+        let start = if area & 0x80 != 0 { (1, 1) } else { (4, 3) };
+        r.run(&[AMOVE, start.0, start.1]);
+        r.run(&[PAINT | area]);
+        let n = (1..=7)
+            .flat_map(|y| (1..=10).map(move |x| (x, y)))
+            .filter(|&(x, y)| r.pix(x, y) == 0xA)
+            .count();
+        assert_eq!(n, painted, "AREA＝{:03b}", area >> 5);
+        assert_eq!(r.a.status() & SR_ARD != 0, ard, "AREA＝{:03b}", area >> 5);
+    }
+    // 001：外へ出ようとしたところで止まり、ARD と CED を 1 にする
+    let mut r = framed(11, 8);
+    for (i, v) in [3, 2, 6, 5].into_iter().enumerate() {
+        r.wpr(XMIN + i as u16, v);
+    }
+    r.run(&[AMOVE, 4, 3]);
+    r.run(&[PAINT | 0x20]);
+    assert_eq!(r.a.status() & (SR_ARD | SR_CED), SR_ARD | SR_CED);
+    let n = r.lit(1..=10, 1..=7);
+    assert!(n < 16, "塗り終える前に止まる（{n} 画素）");
 }
 
 // ---- 保存 ----
