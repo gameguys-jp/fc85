@@ -5,8 +5,9 @@
 ;
 ; - Fabric は Staging RAM を読めるが、カートリッジは読めない（ポートがない）。そこで起動時に CPU が写す。
 ; - TRIGGER は 0（即時）で、ブロック（COUNT 個）を 1 回で送る。FIFO が満杯の間、チャネルは STALL で待つ
-;   （仕様書 §06。DR-018 の「ADPCM への供給は FIFO の満杯待ちで足りる」）。V̄C̄K̄（TRIGGER 5）で 1 byte
-;   ずつ送ると、1 byte に 2 ニブルあるので、送る速さが使う速さの 2 倍になり、取りこぼし（MISS）が出る [P]。
+;   （仕様書 §06。DR-018 の「ADPCM への供給は FIFO の満杯待ちで足りる」）[P]。V̄C̄K̄（TRIGGER 5）で 1 byte
+;   ずつ送ると、1 byte に 2 ニブルあるので、送る速さが使う速さの 2 倍になり、FIFO が満ちた後は引き金の
+;   取りこぼし（MISS）が続くはず（試していない）[V]。
 ; - FORMAT 0（8→8）：port 0 の 8 bit の読出し（偶数番地が上位 byte、DR-046）を、8 bit の port 5 に書く。
 ; - S1・S2（ADPCM の CTRL）で、音ごとに 8・6・4 kHz を選ぶ（sfx.inc の SFXn_CTRL）。
 ; - MSM5205 の RESET は取込み（V̄C̄K̄ の立下りの 6 クロック後）の時点で効く（台帳 MSM5205.md §3.3、エミュレータ
