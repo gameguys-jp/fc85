@@ -37,7 +37,7 @@
 | 種類 | 場所 |
 |---|---|
 | 仕様 | [docs/spec/hardware.md](docs/spec/hardware.md) |
-| 物語 | [docs/story/](docs/story/)：[本筋](docs/story/main.md)、[メーカーの出自](docs/story/company-origin.md)、[音源の差し替え](docs/story/sound-redesign.md) |
+| 物語 | [docs/story/](docs/story/)：[本筋](docs/story/main.md)、[メーカーの出自](docs/story/company-origin.md)、[音源の差し替え](docs/story/sound-redesign.md)、[設計方式の由来](docs/story/architecture.md) |
 | 部品 | [docs/parts/](docs/parts/)：IC ごとの台帳、1985年の供給調査、部品の見直し |
 | デザイン | 未作成（製品名・筐体・ロゴ・UI は未確定） |
 | 実装 | 未作成（エミュレータは未着手） |
