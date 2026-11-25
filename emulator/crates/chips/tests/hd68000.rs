@@ -306,13 +306,29 @@ fn instruction_times_follow_the_tables() {
             reads: 3,
             writes: 2,
         },
-        // 表7-6：ロングで源がレジスタなら 6 が 8 になる。
+        // 表7-6：ロングで源がレジスタか即値なら 6 が 8 になる（即値は M68 の注だけ。台帳 §2.9）。
         Case {
             name: "ADD.l D0,D1",
             prog: &[0xd280],
             setup: no_setup,
             clocks: 8,
             reads: 1,
+            writes: 0,
+        },
+        Case {
+            name: "ADD.l #,D1",
+            prog: &[0xd2bc, 0x1234, 0x5678],
+            setup: no_setup,
+            clocks: 8 + 8,
+            reads: 3,
+            writes: 0,
+        },
+        Case {
+            name: "ADD.l (A0),D1",
+            prog: &[0xd290],
+            setup: |c, _| c.a[0] = 0x2000,
+            clocks: 6 + 8,
+            reads: 3,
             writes: 0,
         },
         // 表7-7
