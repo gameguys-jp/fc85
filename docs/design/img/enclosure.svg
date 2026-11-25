@@ -104,8 +104,8 @@
 <text x="44.0" y="700.0" font-size="8" text-anchor="start" font-weight="normal" fill="#666">後</text>
 <text x="346.0" y="700.0" font-size="8" text-anchor="end" font-weight="normal" fill="#666">前</text>
 <text x="195.0" y="807.0" font-size="9" text-anchor="middle" font-weight="bold" fill="#222">左側面図　奥行き 310</text>
-<text x="20.0" y="372.0" font-size="9" text-anchor="start" font-weight="bold" fill="#222">主な寸法（目安）</text>
-<text x="28.0" y="392.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">幅 430 × 奥行き 310 × 高さ 95（足 7 を除く）</text>
+<text x="20.0" y="372.0" font-size="9" text-anchor="start" font-weight="bold" fill="#222">主な寸法</text>
+<text x="28.0" y="392.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">幅 430 × 奥行き 310 × 高さ 95（足 7 を除く。確定）</text>
 <text x="28.0" y="408.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">量産計画：幅と奥行きは同じ、高さ 約 60</text>
 <text x="28.0" y="424.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">外付けの電源ユニット：約 200×110×60（80 W 級）</text>
 <text x="28.0" y="440.0" font-size="8" text-anchor="start" font-weight="normal" fill="#222">上面の点検蓋：180×135</text>
@@ -179,6 +179,6 @@
 <line x1="393.0" y1="845.0" x2="393.0" y2="868.0" stroke="#666" stroke-width="1.4"/>
 <text x="507.5" y="842.0" font-size="7" text-anchor="middle" font-weight="normal" fill="#222">通風口</text>
 <text x="595.0" y="952.0" font-size="9" text-anchor="middle" font-weight="bold" fill="#222">背面図（後ろから見る。左右が正面図と逆になる）</text>
-<text x="20.0" y="1002.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">外観の大枠 v0.3。構成は [確定]、寸法は見積り [仮]（奥行きは約 330 mm、高さは約 105 mm まで大きくなりうる。spec/board.md §09）。</text>
+<text x="20.0" y="1002.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">外観の大枠 v0.5。構成と外寸は [確定]（DR-047）。ほかの寸法は見積り [仮]。</text>
 <text x="20.0" y="1017.0" font-size="8.5" text-anchor="start" font-weight="normal" fill="#444">寸法は最終試作機（2 枚重ね）。量産計画は幅と奥行きが同じで高さ約 60 mm。色・仕上げ・ロゴ・名称は未定。</text>
 </svg>
