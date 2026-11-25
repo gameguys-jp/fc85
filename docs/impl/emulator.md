@@ -11,7 +11,8 @@
 |---|---|
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
-| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2 と、段階 3 の 68000 から DOC のレジスタへのブリッジも V2。全体は V0→V2、その後 V3（独立実装との比較） |
+| V（検証、現状→目標） | MSM5205、TMS32010、ES5503、HD6850 のコアと、HD63484 のコア（描画と表示）は V2（単体試験）。HD68000 は V2 と、SingleStepTests との照合（V3 の一部、99.4%）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2、68000 から DOC のレジスタへのブリッジ、本体のバス、映像の出力段も V2。全体は V0→V2、その後 V3（独立実装との比較） |
+| 段階（仕様書 §12） | 段階 1・2 は済み。段階 3 は、2026-11-26 にエミュレータの上で合格条件をそろえた：自作の Boot ROM（`firmware/boot`）で起動し、入力、ゲームの描画（`sdk/samples/game`）、文字 ROM、PCM（DOC・本体 DAC）と ADPCM の音声、256×192・4bpp の表示。試験は §04 の「本体のバス」。段階 4（AV／HCI）はまだ |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - ユーザーとの会話は日本語で行う。
 - fc85は、Fictional Machinesの第一世代（1985年）架空コンソールの実装プロジェクト。
-- エミュレータ（`emulator/`、Rust）を段階 1 から書き始めた（DR-040）。ビルドと試験のコマンドは「エミュレータの実装方針」の節。
+- エミュレータ（`emulator/`、Rust）は段階 3（本体で自作の ROM とカートリッジが動く）まで来た（DR-040）。BIOS とサンプルは `firmware/` と `sdk/`。ビルドと試験のコマンドは「エミュレータの実装方針」の節。
 - このリポジトリの外（親ディレクトリ）に関連文書がある。
   - `../fictional-machines/Fictional_Machines.md`：全体の基本構想・分類体系（最上位文書。分類記号の定義はここ。公開版は https://github.com/gameguys-jp/fictional-machines ）
   - `../Fictional_Console_Hardware_v0.1.md`：旧版（1989〜93年想定）。第二世代の資産。**fc85へICやクロックを移植しない**。2つの仕様はIC構成もアドレスマップも異なる（例：Data Fabricは旧版がDMA 4ch、1985年版は初期2ch実装＋4ch分の窓を予約）
