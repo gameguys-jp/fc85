@@ -41,6 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|
 | `docs/spec/hardware.md` | 仕様書（以下「仕様書」）。機械が何であるか。正となる仕様 |
 | `docs/spec/board.md` | 基板の分け方と外形の見積り（最終試作機と量産計画）。筐体の設計の条件。配置図は `docs/spec/img/` |
+| `docs/spec/fabric.md` | Data Fabric（最終試作機）の回路と部品表。PAL の式と PROM の中身は `tools/fabric/fabric_logic.py` で作り、仕様と突き合わせる |
 | `docs/story/` | 開発史・メーカーの出自・音源の差し替えなど。なぜそうなったか |
 | `docs/parts/` | 実在部品の台帳と供給調査。事実だけを書き、本機での使い方は仕様書に書く |
 | `docs/decisions.md` | 決定記録（DR-xxx）。理由と却下した案 |

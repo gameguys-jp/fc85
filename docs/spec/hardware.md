@@ -139,43 +139,53 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 
 通常動作は有限帯域のDMA／FIFOコントローラ。初期は2チャネル実装（アドレス窓は4チャネル分を予約）。分岐は複数転送、フィードバックはRAMまたはFIFOを介す。ゼロ時間の循環接続は禁止。CPU、映像、DOC、DSPのメモリバスを無制約に直結しない。
 
-実装手段 [P]（DR-010）：1985年の最終試作機の2チャネルはPALと74LS／ALSで組み、FIFOはMMI 67401（64×4）を使う。量産計画では国産CMOSゲートアレイ（NEC µPD65060級、約6,500ゲート）1個に置き換える。2チャネルの規模は約4,000〜5,200ゲート、TTLで約140〜180個と推定する [V]（[26] §4.1）。市販のDMAC HD68450-8は代替候補とする [O]（DR-010）。
+実装手段 [P]（DR-010）：1985年の最終試作機の2チャネルはPALと74LS／ALSで組み、FIFOはMMI 67401（64×4）を使う。量産計画では国産CMOSゲートアレイ（NEC µPD65060級、約6,500ゲート）1個に置き換える。2チャネルの規模は約4,000〜5,200ゲート、TTLで約140〜180個と推定する [V]（[26] §4.1）。市販のDMAC HD68450-8は代替候補とする [O]（DR-010）。最終試作機の回路と部品表は [fabric.md](fabric.md)。2チャネルで1組の加算器とレジスタファイルを共有する [P]（DR-046）。
 
 ACRTCとのDMAは1語ごとのサイクルスチールとし、各語の間でCPUのアクセスを優先する。まとめて転送するとCPUを28〜48クロック待たせ、バスエラー判定の64クロックに対して余裕が小さいため [P]（DR-016、[30] §7.4）。
 
 | ID | ポート | 方向・アクセス条件 |
 |---|---|---|
-| 0 | Staging RAM | R/W、byte address、16-bit対応。500 nsごとに1語を保証（4 MB/s）[P]（DR-024） |
+| 0 | Staging RAM | R/W、byte address、16-bit対応。500 nsごとに1語を保証（4 MB/s）[P]（DR-024）。Sのスロットだけで使う。8-bitのアクセスは偶数番地が上位byte（D15–D8）[P]（DR-046） |
 | 1 | ACRTC VRAM stream | R/W。ACRTCのネイティブな連続転送（DWT／DRD／DMODコマンドと、DREQ／DACK／DONE信号）とFIFOを使う [D]（[15]）。矩形（x語×y行）単位。形はCPUが転送の前に出すDWT／DRD／DMODのAX・AYで決まり、行の間隔はRWPのDNが選ぶ画面のMWR [D]（[15]）。Fabric側は逐次ポートで、COUNT＝x·y。DONEとCOUNTが合わなければERROR [P]（DR-022）。表示しない画面のMWRで別の行間隔を使う方法は [O][V] |
 | 2 | DOC Wave RAM | R/W、byte address。DOCサイクルごとのホスト側の窓（E High）でアクセスし、DOCレジスタのアクセスと同じ窓を取り合う。上限は1サイクル1 byte（8 MHzで1.0 MB/s）[D]（[18]）。子基板がないときは本体DACのFIFO（W、16-bit、上位byteがL・下位byteがR、64 words、67401×4）。音声クロック（TRIGGER 3と同じ）で読み、空なら直前の値を保ちUNDERRUNを記録 [P]（DR-019） |
 | 3 / 4 | DSP input / output FIFO | W / R、16-bit、64 wordsずつ（67401×4）[P]（DR-017）。DSPが空の入力FIFOを読むと最後の語が返り、満杯の出力FIFOへの書込みは捨てられる。どちらもUNDERRUN／OVERRUNを記録 [P]（DR-017） |
 | 5 | ADPCM input FIFO | W、8-bit packed、64 bytes（67401×2）[P]（DR-017）。ニブルは上位から。空のときは0x08（0000と1000が交互）を供給しUNDERRUNを記録。CTRLで下位からの順と、置換しない動作（Bend）を選べる [P]（DR-017） |
 | 6 / 7 | Temporal write / read | W / R、8-bit逐次、独立ポインタ |
 | 8 | Capture RAM | R、byte address、完了バッファのみ |
-| 9 | Character ROM | R、byte address、書込み不可 |
+| 9 | Character ROM | R、byte address、書込み不可。bit 15は無視。1回の読出しは2スロット [P]（DR-046） |
 | 10 | Audio input FIFO | R、8-bitサンプル（拡張基板） |
 | 11–15 | 予約 | 拡張モジュール |
 
 #### チャネルレジスタ（0x250000 + ch×0x40）
 
-16-bit big-endian。32-bit値は上位word→下位word。STARTで設定一式をラッチ。チャネル動作中のレジスタ変更は次回STARTから反映する。
+16-bit big-endian。32-bit値は上位word→下位word。SRC_ADDR・DST_ADDR・COUNTは、書いた値（設定値）と動作中の値（作業値）を別に持つ。STARTとLOOPの再開のたびに設定値を作業値へ写し（3スロット）、読むと作業値が返る。ほかのレジスタは書込み専用（読むと0）で、動作中に書き換えると次の要素から効く。ソフトの規約では止めてから書き、動作中の書換えはBendの操作とする [P]（DR-046）。
 
 | Offset (hex) | 名称 | 定義 |
 |---|---|---|
-| 00 / 02 | SRC / DST | ポートID（低4-bit） |
-| 04 / 08 | SRC_ADDR / DST_ADDR | 32-bit byte address（逐次ポートは無視） |
-| 0C | COUNT | 16-bit入力要素数。0は転送なし |
-| 0E / 10 | SRC_STEP / DST_STEP | signed 16-bit byte stride。RAMポートのみ（port 1では無視、DR-022） |
-| 12 | FORMAT | 0=8→8、1=16→16、2=8→16 zero extend、3=16→8 low byte、4=16→8 high byte。未対応はERROR |
-| 14 / 16 | MASK / XOR | データ変換後に AND → XOR（16-bit）。初期値 FFFF / 0000 |
-| 18 | SHIFT | signed 5-bit（-16〜15）、論理シフト。出力幅で切捨て |
-| 1A | TRIGGER | 0=即時、1=VBlank、2=HBlank、3=audio tick（音声クロック8 MHz÷N）、4=external trigger（拡張端子のEXTRIG、§09と共通）、5=ADPCM V̄C̄K̄。いずれも2段FFで同期化し、立上りで1件だけ保留する。保留中に来た分は捨て、取りこぼしをSTATUSに記録 [P]（DR-018） |
-| 1C / 1E | CTRL / STATUS | START/STOP/LOOP/IRQ_EN、BUSY/DONE/STALL/ERROR。終了フラグW1C |
+| 00 / 02 | SRC / DST | ポートID（低4-bit）。書込み専用 |
+| 04 / 08 | SRC_ADDR / DST_ADDR | 32-bit byte address（逐次ポートは無視）。下位16 bitだけを使い、上位wordは書いても無視し、読むと0。16-bitのアクセスはbit 0を無視する [P]（DR-046） |
+| 0C | COUNT | 16-bit入力要素数。0は転送なし（STARTですぐDONE）。読むと作業値＝残りの数−1（終わると0xFFFF）[P]（DR-046） |
+| 0E / 10 | SRC_STEP / DST_STEP | signed 16-bit byte stride。RAMポートのみ（port 1では無視、DR-022）。書込み専用 |
+| 12 | FORMAT | 0=8→8、1=16→16、2=8→16 zero extend、3=16→8 low byte、4=16→8 high byte、5=16→16 回転（SHIFTを回転の量にする。SHIFT 8でbyteの入れ替え）[P]（DR-046）。6・7と、ポートの幅に合わないものはERROR |
+| 14 / 16 | MASK / XOR | データ変換（FORMATとSHIFT）の後に AND → XOR（16-bit）。初期値 FFFF / 0000（リセットでは変わらない。電源投入後にBIOSが書く。エミュレータは電源投入時にこの値にする）[P]（DR-046） |
+| 18 | SHIFT | signed 5-bit（-16〜15）、論理シフト。正は左、負は右で、空いたbitは0。FORMAT 4は上位byteを下位へ移してからシフトする。出力幅で切捨て [P]（DR-046） |
+| 1A | TRIGGER | 0=即時、1=VBlank、2=HBlank、3=audio tick（音声クロック8 MHz÷N）、4=external trigger（拡張端子のEXTRIG、§09と共通）、5=ADPCM V̄C̄K̄。いずれも2段FFで同期化し、立上りで1件だけ保留する。保留中に来た分は捨て、取りこぼしをSTATUSに記録 [P]（DR-018）。bit 2–0が発生源、bit 3がEACH：0はトリガ1回で1ブロック（COUNT個）、1はトリガ1回で1要素。bit 4がLOOP、bit 5がIRQ_EN。STARTで保留を消す。発生源6・7は予約で、トリガは来ない [P]（DR-046） |
+| 1C / 1E | CTRL / STATUS | CTRL（書込み専用）：bit 0 START、bit 1 STOP（どちらも1を書くと実行。同時ならSTOP。動作中のSTARTは無視）。LOOPとIRQ_ENはTRIGGERのbit 4・5。STATUS：bit 0 BUSY、bit 1 DONE、bit 2 STALL（読出し元が空か書込み先が満杯で待つ）、bit 3 ERROR、bit 4 MISS（トリガの取りこぼし）、bit 5 WAIT（トリガ待ち）。DONE・ERROR・MISSはW1C。割込みはIRQ_EN∧(DONE∨ERROR)で、2チャネルのORをレベル3へ [P]（DR-046、DR-028）。仕様書v0.2のCTRLにあったLOOP・IRQ_ENをTRIGGERへ移した（DR-046） |
 | 20–2A | 予約 | 後続版の2D転送・アドレス変換等 |
 
-0x250100以降：グローバルIRQ、チャネル状態、ポートリセット、クロック制御（音声クロックのN [P]（DR-018））、実装されているモジュールのビット（DOC子基板、映像入力、音声入力、拡張11〜15）[P]（DR-019）を予約。実装されていないポートをSTARTするとERROR [P]（DR-019）。初期のベンディングは8/16-bitデータ変換、RAM低位アドレスマスク・XOR、逐次ポインタリセット。アドレス変換はエミュレータの拡張設定として開始し、実機レジスタ割当は次版で定義する。
+0x250100 PORT_RESET（書込み専用。bit nに1を書くとport nのFIFO・ポインタを初期化）、0x250102 AUDIO_N（音声クロックのN、12-bit [P]（DR-018））、0x250104 MODULES（読出し専用。実装されているモジュール：bit 2 DOC子基板、bit 8 映像入力、bit 10 音声入力、bit 11〜15 拡張）[P]（DR-019、DR-046）。チャネル2・3の窓、各チャネルの0x20〜0x3E、0x250106以降はバスエラー [P]（DR-046）。実装されていないポートをSTARTするとERROR [P]（DR-019）。初期のベンディングは8/16-bitデータ変換、RAM低位アドレスマスク・XOR、逐次ポインタリセット。アドレス変換はエミュレータの拡張設定として開始し、実機レジスタ割当は次版で定義する。
 
-Data Fabric側はFIFOのfull/emptyで待機し、データを勝手に生成しない。一定の速さで読み書きするIC（DSP、MSM5205）の側は待てないので、ポートアダプタが空・満杯のときの動作を決め、UNDERRUN／OVERRUNを記録する [P]（DR-017）。STOPで未コミットの転送を破棄。LOOPは元のアドレス・個数で再開し、同期トリガ設定時は次のトリガを待つ。タイムアウトを計測し、DMA異常がCPU・ホスト全体の停止に波及しないようにする。
+#### 転送の時間 [P]（DR-046）
+
+- Fabricは8 MHzで動く。2クロック（250 ns）を「スロット」とし、1スロットにポートのアクセスは1回。スロットはStaging RAMの時分割の枠（DR-024）に合わせ、前半のS（port 0が使える）と後半のXが交互に来る。
+- 1要素は読出しと書込みの2回のアクセスで、最大で2スロットに1要素（16-bitで4 MB/s）。port 0どうしの転送は、Sのスロットを2回使うので4スロットに1要素。
+- 各スロットの頭で、このスロットのレジスタファイルの操作と、次のスロットのアクセスを決める。動いている要素はFabric全体で1つ。優先は、CPUからの設定値・作業値のアクセス、動いている要素の書込み、そのCOUNTの更新、START・LOOPの再設定、新しい要素の順。
+- 調べるチャネル（候補）は1つずつ。要素が動いている間はそのチャネル。要素がなく、2チャネルとも動いていれば、スロットごとに候補を入れ替える。再設定を待つチャネルがあれば、それを先に候補にする。
+- 新しい要素は、候補のチャネルの読出し元にデータがあり、書込み先に空きがあるときだけ始める。準備の信号は1つ前のスロットの中ほどで取り込んだもの。満杯・空の信号を持つポート（port 1〜5、10〜15）にアクセスするスロットと、その次のスロットの頭では、新しい要素を始めない（アクセスの結果が準備の信号に出るのを待つ）。このため、FIFOから読む転送は3スロットに1要素、FIFOへ書く転送は4スロットに1要素が上限になる。
+- port 9の読出しは2スロット。port 1と、port 2でDOCにアクセスするときは、ICの応答まで延び、その間はほかの要素を始めない。32クロック（4 µs）以内に終わらなければ、そのチャネルをERRORにして止める。
+- CPUが設定値・作業値を読み書きすると、Fabricは次のスロットでレジスタファイルをCPUに渡し、CPUはそれまで待つ（2〜3ウェイト [V]）。ほかのレジスタはすぐに書ける。
+
+Data Fabric側はFIFOのfull/emptyで待機し、データを勝手に生成しない。一定の速さで読み書きするIC（DSP、MSM5205）の側は待てないので、ポートアダプタが空・満杯のときの動作を決め、UNDERRUN／OVERRUNを記録する [P]（DR-017）。STOPは次のスロットから効き、書込みの済んでいない要素を破棄する。LOOPは設定値で再開し、EACH＝0の同期トリガでは次のトリガを待つ（ブロックの途中に来たトリガは保留として数える）。ポートのアクセスの時間切れ（32クロック）でチャネルを止め、DMA異常がCPU・ホスト全体の停止に波及しないようにする [P]（DR-046）。
 
 <div class="pagebreak"></div>
 
@@ -314,7 +324,7 @@ DOCの差動電流出力（SIG±）は両側にアンプを入れて加算する
 
 電源ユニットは+5／+12／−12 Vの3出力とする [P]（DR-020）。電源ユニットは本体の外の箱に入れ、多ピンのケーブルでつなぐ。+5 Vはリモートセンスでケーブルの電圧降下を補う [P][V]（DR-037、[board.md](board.md)）。DOCの音量DACの基準−5 Vは子基板で、TDC1048の−5.2 Vは映像入力基板で、それぞれ−12 Vから3端子レギュレータ（NEC µPC7900系。日立の1985年の資料には負電圧品が見当たらない [V]）で作る [P]（DR-020）。−5.2 V側は約0.3 Aで、−12 Vから落とすと約2 Wの損失になり、放熱板が要る（推定 [V]）。±12 VはCD22101、オペアンプ、HA17408（VEE −12 Vで使う [V]）に使う。MSM5205・BA7230LS・映像の抵抗DACの出力段は、+12 Vから作るアナログ+5 Vから給電する [P]（DR-020）。MSM5205の入力（VIH 4.2 V以上）はHD74HC系か、プルアップを付けたTTLで駆動し、V̄C̄K̄（±50 µA）はHD74HC系で受ける [P]（DR-020）。
 
-+5 Vの負荷は67401×14（最大2.2〜2.8 A [V]）、Data FabricのTTL・PAL 約90〜130個（PAL 約30個を含む。DR-041）、DRAM 32個、NMOSの大型ICなどで、合計6〜14 A級と推定する [V]。PALはTTLより消費電流が大きく、PAL 約30個で+5 Vが1〜4 A増える（[board.md](board.md) §06）。容量は試作時に実測する。
++5 Vの負荷は67401×14（最大2.2〜2.8 A [V]）、Data FabricのTTL・PAL・PROM 108個（PAL 26個を含む。DR-041、[fabric.md](fabric.md) §09）、DRAM 32個、NMOSの大型ICなどで、合計6〜14 A級と推定する [V]。Data Fabricだけで、67401を含めて典型 約7.5 A、最大 約11.5 Aになる（fabric.md §10）ので、上限に近い側を見込む [V]。PALはTTLより消費電流が大きく、PAL 約30個で+5 Vが1〜4 A増える（[board.md](board.md) §06）。容量は試作時に実測する。
 
 <div class="pagebreak"></div>
 
