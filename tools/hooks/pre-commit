@@ -7,7 +7,8 @@
 # 個人を特定する文字列（名前、ユーザー名など）は、リポジトリに入れず、
 # .git/info/private-patterns に 1 行 1 つの拡張正規表現で書く（大文字・小文字を区別しない。# で始まる行は注釈）。
 
-added=$(git diff --cached -U0 --no-color -- . ':(exclude)tools/hooks/' | grep '^+' | grep -v '^+++')
+# 行の頭の + は外す（行頭が @ の Python の飾りをメールアドレスと読まないように）
+added=$(git diff --cached -U0 --no-color -- . ':(exclude)tools/hooks/' | grep '^+' | grep -v '^+++' | sed 's/^+//')
 [ -z "$added" ] && exit 0
 
 status=0

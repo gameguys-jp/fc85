@@ -845,6 +845,9 @@ class Assembler:
         return v
 
     def _define(self, name, value, kind):
+        if name.upper() in (".W", ".L"):
+            # f.w は「f の局所ラベル .w」と「abs.W の f」を区別できない（abs.W として読む）
+            raise AsmError(f"局所ラベルに大きさの指定と同じ名前は使えない: {name}")
         full = self._full(name)
         old = self.kinds.get(full)
         if old is not None:

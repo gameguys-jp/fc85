@@ -232,6 +232,14 @@ class Expressions(unittest.TestCase):
         self.assertEqual(asm("\tDC.W 1\n\tORG $1001\n\tEVEN\n"), bytes.fromhex("0001"))
         self.assertEqual(asm("\tORG $100\n\tDC.W 0\n\tDC.L *-2\n"), bytes.fromhex("000000000100"))
 
+    def test_local_labels_named_like_sizes_are_rejected(self):
+        # f.w は abs.W と読むので、局所ラベル .w・.l は定義の時点で拒む（.b はそのまま使える）
+        for name in (".w", ".L"):
+            with self.assertRaises(AsmError):
+                asm(f"f:\n\tBRA.S\tf{name}\n\tNOP\n{name}\tRTS\n")
+        for ref in ("f.b", ".b"):
+            self.assertEqual(asm(f"f:\n\tBRA.S\t{ref}\n\tNOP\n.b\tRTS\n"), bytes.fromhex("60024E714E75"))
+
 
 class Directives(unittest.TestCase):
     def test_labels_and_forward_refs(self):
