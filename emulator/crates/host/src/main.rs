@@ -130,7 +130,8 @@ fn parse_args() -> Args {
 
 /// 入力の台本を読む。1 行に「フレーム 値」（値は 16 進。`$`・`0x` を付けてもよい）。`#` から後は注釈。
 fn read_pad_script(path: &str) -> Vec<(u64, u16)> {
-    let text = String::from_utf8(load(path)).unwrap_or_default();
+    // 注釈が UTF-8 でなくても（cp932 など）数の行は読めるようにする
+    let text = String::from_utf8_lossy(&load(path)).into_owned();
     let mut v = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let line = line.split('#').next().unwrap_or("").trim();
