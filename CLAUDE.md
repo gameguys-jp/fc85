@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - GitHub の公開リポジトリ `gameguys-jp/fc85`。
 - オーナーの環境では、コミットの作成者は gameguys-jp（noreply アドレス）で、このリポジトリのローカル設定に入っている。push には、ローカル設定にある資格情報ヘルパーを使う。gh のキーリングから gameguys-jp のトークンを取り出すので、gh の有効なアカウントは切り替えない。
-- 共同作業者は、自分の GitHub アカウント（リポジトリの collaborator）でコミットし、push する。作成者の名前は公開の履歴に残る。
+- 共同作業者は、自分の GitHub アカウント（リポジトリの collaborator）でも、gameguys-jp のアカウントでも作業してよい。自分のアカウントなら、作成者の名前が公開の履歴に残る。gameguys-jp で作業するときは、作成者を gameguys-jp の noreply アドレスにする（個人のアドレスを履歴に出さない）。
 - 公開されるので、ローカルの絶対パス、ユーザー名、メールアドレスなどの個人情報を書かない。リポジトリ外の作業用一時フォルダは `<scratchpad>` と書く。
 - 資料のPDFはリポジトリに入れない。台帳には書誌とURLを書く。
 - ライセンスはハイブリッド（DR-044、DR-045）。ソフトと文書は MIT（ルートの `LICENSE`）。ハードウェアの設計データ（`hardware/` の PCB、FPGA の HDL と制約、機構）は CERN-OHL-P v2 で、`hardware/` を作るときに `hardware/LICENSE` を置く。外部のコードは `third_party/` に元のライセンスのまま置く。GPL のコア（fx68k、MiSTer の es5503.v、jt5205 など）を組み込んだ成果物を配るときは GPL に従う。組み合わせの条件の確認は OI-014。
