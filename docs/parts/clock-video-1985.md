@@ -345,6 +345,6 @@ fc85のVRAMは16-bit wordで、4bppなら1ワード＝4画素。256画素は64�
 | MM | MAME `src/mame/ensoniq/enmirage.cpp`（L628、ES5503 8000000）、`src/mame/apple/apple2gs.cpp`（L96–98、L4148、A2GS_7M＝28.636363 MHz/4）。**エミュレーション参照**（実機回路の一次資料ではない）。https://github.com/mamedev/mame |
 | DV | Amiga Hardware Database「Digi-View」（NewTek、1986、最古の広告1986年5月）。**後年資料**。https://amiga.resource.cx/exp/digiview |
 | MI1 | David Van Brink, MIDI仕様の要約（1992/1995改訂、**後年資料**）。https://www.cs.cmu.edu/~music/cmp/archives/cmsip/readings/davids-midi-spec.htm |
-| S | fc85 仕様書 `docs/Fictional_Console_1985_Hardware_v0.1.md`（§01, §03, §04, §06, §07, §09, §10, §12, §13, §14） |
+| S | fc85 仕様書 `docs/spec/hardware.md（v0.1 時点）`（§01, §03, §04, §06, §07, §09, §10, §12, §13, §14） |
 
 調査用に取得したPDFは、リポジトリ外の `<scratchpad>\video\` に置いた。リポジトリには入れていない。
