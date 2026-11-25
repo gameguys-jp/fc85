@@ -12,7 +12,7 @@
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
 | V（検証、現状→目標） | MSM5205、TMS32010、ES5503、HD6850 のコアと、HD63484 のコア（描画と表示）は V2（単体試験）。HD68000 は V2 と、SingleStepTests との照合（V3 の一部、99.4%）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2、68000 から DOC のレジスタへのブリッジ、本体のバス、映像の出力段も V2。全体は V0→V2、その後 V3（独立実装との比較） |
-| 段階（仕様書 §12） | 段階 1・2 は済み。段階 3 は、2026-11-26 にエミュレータの上で合格条件をそろえた：自作の Boot ROM（`firmware/boot`）で起動し、入力、ゲームの描画（`sdk/samples/game`）、文字 ROM、PCM（DOC・本体 DAC）と ADPCM の音声、256×192・4bpp の表示。試験は §04 の「本体のバス」。段階 4（AV／HCI）は、30 分の連続試験、DSP をソフトから通すサンプル（`sdk/samples/dsp`、DR-062）、ホストの MIDI の入出力（DR-061。装置との送受信は未確認 [V]）、外部クロックのジャンパ（DR-035）まで |
+| 段階（仕様書 §12） | 段階 1・2 は済み。段階 3 は、2026-11-26 にエミュレータの上で合格条件をそろえた：自作の Boot ROM（`firmware/boot`）で起動し、入力、ゲームの描画（`sdk/samples/game`）、文字 ROM、PCM（DOC・本体 DAC）と ADPCM の音声、256×192・4bpp の表示。試験は §04 の「本体のバス」。段階 4（AV／HCI）は、30 分の連続試験、DSP をソフトから通すサンプル（`sdk/samples/dsp`、DR-062）、ホストの MIDI の入出力（DR-061。装置との送受信は未確認 [V]）、外部クロックのジャンパ（DR-035）、文字 ROM の線のベンド（DR-063）まで |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -24,7 +24,7 @@
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
 | board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3） |
-| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
+| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
 
 ### 約束
 

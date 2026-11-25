@@ -324,7 +324,10 @@ impl System {
                 self.sync(at);
                 let i = ((addr - 0x1_0000) >> 1) as usize & 0x7FFF;
                 let v = match lanes(addr, size) {
-                    (true, _) => upper_lane(self.ports.char_rom[i], size),
+                    (true, _) => {
+                        let p = &mut self.ports;
+                        upper_lane(p.char_lines.read(&p.char_rom, i), size)
+                    }
                     (false, _) => 0xFF,
                 };
                 ok(v, 1)

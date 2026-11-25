@@ -6,10 +6,12 @@
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
-//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N]`
+//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]`
 //!
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
 //! （既定 20 MHz）、MSM5205 の発振（既定 384 kHz）、音声クロックの分周器の入力（既定 8 MHz）。
+//! `--char-bend` は文字 ROM のソケットの線（DR-063）：`A3=0`（GND）、`A3=1`（+5 V）、`A3=Z`（浮かせ）、
+//! `A1=A2,A2=A1`（入替え）。データの線は `D0`〜`D7`。
 
 mod midi;
 
@@ -58,6 +60,8 @@ struct Args {
     /// MIDI の装置の番号（`--midi-list`）。
     midi_in: Option<usize>,
     midi_out: Option<usize>,
+    /// 文字 ROM のソケットの線（`A3=0,D0=D1,D7=Z` の形。DR-063）。
+    char_bend: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -77,12 +81,14 @@ fn parse_args() -> Args {
         clocks: [None; 4],
         midi_in: None,
         midi_out: None,
+        char_bend: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
         match s.as_str() {
             "--boot" => a.boot = it.next(),
             "--char" => a.chars = it.next(),
+            "--char-bend" => a.char_bend = it.next(),
             "--cart" => a.cart = it.next(),
             "--no-doc" => a.doc = false,
             "--scale" => a.scale = it.next().and_then(|v| v.parse().ok()).unwrap_or(3),
@@ -115,7 +121,7 @@ fn parse_args() -> Args {
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]"
                 );
                 std::process::exit(0);
             }
@@ -202,6 +208,12 @@ fn build_console(a: &Args) -> Console {
         let rom = load(&p);
         let n = rom.len().min(c.sys.ports.char_rom.len());
         c.sys.ports.char_rom[..n].copy_from_slice(&rom[..n]);
+    }
+    if let Some(spec) = &a.char_bend
+        && let Err(e) = c.sys.ports.char_lines.parse(spec)
+    {
+        eprintln!("--char-bend: {e}");
+        std::process::exit(2);
     }
     if let Some(p) = &a.cart {
         c.sys.cart = Some(load(p));

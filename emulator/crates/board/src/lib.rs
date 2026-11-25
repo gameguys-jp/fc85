@@ -10,6 +10,7 @@
 pub mod acrtc;
 pub mod adpcm;
 pub mod audio;
+pub mod bend;
 pub mod console;
 pub mod doc;
 pub mod dsp;

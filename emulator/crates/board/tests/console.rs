@@ -488,3 +488,28 @@ fn snapshot_round_trip() {
     );
     assert_eq!(c.sys.fabric, back.fabric);
 }
+
+#[test]
+fn bent_char_rom_lines_are_seen_from_the_cpu_and_port_9_alike() {
+    // 仕様書 §11 のベンド点「文字ROMの線」（DR-063）：ROM の A0 は 68000 の A1
+    let mut c = Cpu::new();
+    c.sys.ports.char_rom[0] = 0x81;
+    c.sys.ports.char_rom[1] = 0x42;
+    c.sys.ports.char_lines.parse("A0=0, D7=1").unwrap();
+    // 0x010002 は ROM の 1 番地だが、A0 を GND に固定したので 0 番地を読む。D7 は +5 V
+    assert_eq!(
+        c.rd(0x01_0002, Size::Byte),
+        BusReply::Ok {
+            data: 0x81,
+            waits: 1
+        }
+    );
+    c.sys.ports.char_lines.parse("normal, D0=D1").unwrap();
+    assert_eq!(
+        c.rd(0x01_0002, Size::Byte),
+        BusReply::Ok {
+            data: 0x43,
+            waits: 1
+        }
+    );
+}

@@ -72,6 +72,9 @@ pub struct FabricPorts {
     pub staging: Vec<u8>,
     /// 文字 ROM（port 9）。
     pub char_rom: Vec<u8>,
+    /// 文字 ROM のソケットの線（ベンド点。DR-063）。68000 からの読みも通る。
+    #[serde(default)]
+    pub char_lines: crate::bend::RomLines,
     pub temporal: TemporalRam,
     /// port 2（DOC 子基板がないとき）：本体 DAC の FIFO。上位 byte が L、下位 byte が R。
     pub dac: Fifo,
@@ -110,6 +113,7 @@ impl FabricPorts {
         Self {
             staging: vec![0; 0x10000],
             char_rom: vec![0; 0x8000],
+            char_lines: crate::bend::RomLines::default(),
             temporal: TemporalRam::new(),
             dac: Fifo::new(16),
             dsp_in: Fifo::new(16),
@@ -263,7 +267,10 @@ impl Ports for FabricPorts {
                 0
             }
             (7, Dir::Read) => self.temporal.read() as u16,
-            (9, Dir::Read) => self.char_rom[(a.addr & 0x7FFF) as usize] as u16,
+            (9, Dir::Read) => {
+                self.char_lines
+                    .read(&self.char_rom, (a.addr & 0x7FFF) as usize) as u16
+            }
             (10, Dir::Read) => self.audio_in.shift_out(),
             // port 1 は ACRTC の応答まで延びる（DACK は `run_slot` で出している）。
             (1, _) => return self.acrtc.port_reply(),
