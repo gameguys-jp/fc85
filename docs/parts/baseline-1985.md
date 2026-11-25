@@ -224,3 +224,24 @@ Phase 0 調査 v0.1 ／ 調査日 2026-11-25
 | EW-7720 | C | 同「NEC μPD7720」 | 参照日の版 | https://en.wikipedia.org/wiki/NEC_μPD7720 |
 | EW-SEGA | C | 同「List of Sega arcade system boards」 | 参照日の版 | https://en.wikipedia.org/wiki/List_of_Sega_arcade_system_boards |
 | EW-SORD | C | 同「Sord Computer Corporation」 | 参照日の版 | https://en.wikipedia.org/wiki/Sord_Computer_Corporation |
+| H85L | B | Hitachi, *Linear IC Data Book* #C10。索引 PDF p.4、HA17008R p.139、HA17408 p.144–145（`review-signal.md` の H85L と同じ資料） | 1985 | http://bitsavers.org/components/hitachi/_dataBooks/1985_C10_Hitachi_Linear_IC_Data_Book.pdf |
+| N81L | A | NEC, *Linear Integrated Circuits Data Book* 1st ed.。索引 PDF p.8、µPC7900H 系 PDF p.201（印刷 p.196）、µPC648 PDF p.236。頁は PDF 頁（`review-signal.md` の N81L と同じ資料） | 1981 | http://bitsavers.org/components/nec/_dataBooks/1981_NEC_Linear_Integrated_Circuits_Data_Book_1st_ed.pdf |
+
+---
+
+## 追補（2026-11-25）
+
+音声用の D/A 変換器と負電圧の 3 端子レギュレータについて、国内品を調べた。ここには事実だけを書く。本機での使い方は `decisions.md`（DR-017〜023）と仕様書に書く。
+
+新しい資料は H85L と N81L（上の出典表）。NEC85SG は既存の資料で、p.5-6（D/A・A/D の表）を使った。
+
+| 品番（メーカー） | 種類と主な値 | 資料（区分） |
+|---|---|---|
+| HA17408P／G（日立） | 8-bit 乗算型 D/A。MC1508／1408、AM1408 と互換。直線性 ±0.19%（±1/2 LSB）、整定 250 ns typ、消費電力 157 mW typ。VCC は＋5 V、VEE は −5 V または −15 V（絶対最大 −16.5 V）。用途の例に CRT display、audio instrument など | [D H85L p.144–145]（B） |
+| HA17008RP／RG（日立） | 8-bit 乗算型 D/A。DAC08 とピン互換。直線性 ±0.19%、整定 85 ns typ、135 mW typ。VCC＋15 V、VEE −15 V。用途の例は HA17408 と同じ | [D H85L p.139]（B） |
+| µPC624（NEC） | 8-bit 高速乗算型 D/A | [D N81L 索引 PDF p.8]（A）。1985年の選択ガイドにも載る [D NEC85SG p.5-6]（B） |
+| µPC648（NEC） | 12-bit 高速乗算型 D/A。電流出力、整定 400 ns typ、微分非直線性 ±0.025%FS max。TTL・CMOS・ECL・NMOS と直結できる | [D N81L PDF p.236]（A）。1985年の選択ガイドにも 12-bit・0.05% で載る [D NEC85SG p.5-6]（B） |
+| µPC7900H 系（NEC） | 3 端子の負電圧レギュレータ。出力 1 A 超、電流制限と過熱保護を内蔵。−5／−8／−12／−15／−18／−24 V | [D N81L 索引 PDF p.8、PDF p.201]（A） |
+
+- 日立の 1985年のリニア IC データブックの索引（PDF p.4）で確認できた 3 端子レギュレータは、正電圧の HA178M 系だけだった。負電圧品は見つけていない [V]。
+- NEC85SG p.5-6 の D/A の表は OCR が崩れている。各品の電源電圧の列は読み取れていない [V]。
