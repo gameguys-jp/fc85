@@ -196,6 +196,21 @@ DAC_STATUS      EQU     $230012         ; bit 7–0 FIFO の残量、bit 8 UNDER
 DAC_DATA        EQU     $230014         ; DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央）
 DAC_CTRL_DIRECT EQU     $0001
 DAC_CENTER      EQU     $8080
+; ADPCM の CTRL と STATUS のビット（DR-053）。S1・S2 は MSM5205 の標本化：S1＝1・S2＝0 で 8 kHz、
+; S1＝0・S2＝1 で 6 kHz、両方 0 で 4 kHz（384 kHz の 1/48・1/64・1/96、台帳 MSM5205.md §3.1）。
+; 両方 1 は Bend（V̄C̄K̄ が入力になる。エミュレータでは取込みが起きない [V]）。RESET は電源投入時 1
+ADPCM_CTL_RESET EQU     $0001
+ADPCM_CTL_S1    EQU     $0002
+ADPCM_CTL_S2    EQU     $0004
+ADPCM_CTL_LOW_FIRST EQU $0008           ; ニブルを下位から
+ADPCM_CTL_NO_REPLACE EQU $0010          ; FIFO が空でも 0x08 に置き換えない（Bend）
+ADPCM_CTL_HALF_IRQ EQU  $0020           ; 半分空きの割込み（レベル 3）
+ADPCM_CTL_8K    EQU     ADPCM_CTL_S1
+ADPCM_CTL_6K    EQU     ADPCM_CTL_S2
+ADPCM_CTL_4K    EQU     $0000
+ADPCM_ST_COUNT  EQU     $007F           ; FIFO の byte 数
+ADPCM_ST_UNDERRUN EQU   $0100           ; W1C
+ADPCM_ST_HALF   EQU     $0200           ; 残りが 32 byte 以下
 
 ; ------------------------------------------------------------------ Temporal（DR-053）
 
