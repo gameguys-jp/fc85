@@ -29,9 +29,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/parts/` | 実在部品の台帳と供給調査。事実だけを書き、本機での使い方は仕様書に書く |
 | `docs/decisions.md` | 決定記録（DR-xxx）。理由と却下した案 |
 | `docs/open-issues.md` | 課題台帳（OI-xxx） |
+| `docs/sources.md` | 部品以外の史実（JIS 改正、キャプテンシステム、Commodore など）の出典台帳 |
 | `docs/design/`・`docs/impl/` | 未作成。製品デザインとエミュレータ等の実装を始めたら作る |
 
 分類：F1／T2:1985（適合は未検証）、D5・D6・D7、Machine/System、L2〜L7、E3目標、M1先行、S2〜S4重視、V2→V3/V4、N3〜4。
+
+## フォルダ構成（実装を始めたら作る）
+
+`../fictional-machines/Documentation_Rules.md` §10 に従う。フォルダは必要になってから作る。仕様書§12 の層構成との対応は次のとおり。
+
+| フォルダ | 中身 |
+|---|---|
+| `emulator/` | §12 の core・chips・board・host と、その単体テスト |
+| `firmware/` | Boot ROM（BIOS）、漢字 ROM の生成元。作中の機械に載る中身 |
+| `sdk/` | §12 の SDK：m68k・DSP のアセンブラ設定、リンカ、ROM builder、MMIO ヘッダ、BIOS ABI の文書、サンプル |
+| `hardware/fpga/`・`hardware/pcb/` | 段階5以降。PCB は基板ごと（メイン、DOC 子基板、映像入力基板など）に分ける |
+| `tests/` | §12 の独立参照モデル・ゴールデンデータ・テスト ROM。エミュレータと FPGA で共通に使う |
+| `tools/`・`third_party/` | 補助スクリプト。外部のコード（MAME、fx68k など）は元のライセンスのまま置く |
+
+- アドレスマップとレジスタ表は、機械が読める形で `docs/spec/` に1か所置き、エミュレータ・SDK・ハードウェアはそこから生成する（置き場所と形式は実装を始めるときに決める）。
+- 実装ごとに `docs/impl/<名前>.md` を置く。
+- ライセンスは後で決める。GPL の FPGA 実装（fx68k、MiSTer の es5503.v、jt5205）を組み込む場合の扱いは OI-014 で扱う。
 
 ## 仕様書を書くときのルール
 
