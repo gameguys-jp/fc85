@@ -16,9 +16,12 @@
 //! - プログラム RAM の /WE は 8〜4095 番地だけ（DR-029 (2)）。TBLW で 0〜7 番地に書くと OUT と同じに
 //!   なる。回数を `io.port_tblw` に数える（エミュレータの警告）。
 //! - BIO は CTRL.BIOSEL で選んだ条件を、CLKOUT で 1 段の FF に取ってから入れる [P]（DR-029 (3)）。
+//! - 音声クロックの拍はラッチに取る（DR-049）。拍の立上りで 1 にし、DSP が IN 2 を読むと 0 にする。
+//!   読んだ値の `STATUS_TICK` に、消す前の値が出る。CTRL.RESET＝1 の間は 0。拍の立上りは、次の
+//!   CLKOUT の頭でまとめて取り込む [P]。IN 2 の読出しと同じ CLKOUT の中に来た拍の競合は扱わない [V]。
 //! - INT はコマンド到着の間 Low [P]。
 //! - 状態ポートのビットと、CPU から見た bridge のレジスタの番地とビットは仕様にない。ここでは
-//!   `STATUS_*` の配置を仮に置く [P]（OI-052）。
+//!   `STATUS_*` の配置を仮に置く [P]（OI-053）。
 //! - スロットの中の DSP のサイクルは、そのスロットの Fabric のアクセスより前に済ませる（`audio` と
 //!   同じ）[P]。
 
@@ -33,13 +36,15 @@ pub const PROG_WORDS: usize = 4096;
 /// RESET から PRGBUS までの CLKOUT の数（台帳 §2.1 の 2.）。
 pub const PRGBUS_DELAY: u8 = 8;
 
-/// IN 2 の状態のビット [P]（OI-052）。
+/// IN 2 の状態のビット [P]（OI-053）。
 pub const STATUS_INPUT_READY: u16 = 0x0001;
 pub const STATUS_OUTPUT_SPACE: u16 = 0x0002;
 pub const STATUS_COMMAND: u16 = 0x0004;
 pub const STATUS_RESPONSE: u16 = 0x0008;
 pub const STATUS_UNDERRUN: u16 = 0x0010;
 pub const STATUS_OVERRUN: u16 = 0x0020;
+/// 拍のラッチ（DR-049）。IN 2 を読むと 0 になる。
+pub const STATUS_TICK: u16 = 0x0040;
 /// bit 15〜8：入力 FIFO の語数（0〜64。アダプタのカウンタ）。
 pub const STATUS_COUNT_SHIFT: u32 = 8;
 
@@ -53,7 +58,7 @@ pub enum BioSel {
     OutputSpace,
     /// メールボックスに着信。
     Mailbox,
-    /// 音声クロックの拍（TRIGGER 3 のレベル）。
+    /// 音声クロックの拍のラッチ（DR-049）。
     AudioTick,
 }
 
@@ -91,6 +96,8 @@ pub struct DspIo {
     pub overruns: u64,
     /// TBLW で 0〜7 番地に書いた回数（OUT と同じになる。DR-029 (2)）。
     pub port_tblw: u64,
+    /// 拍のラッチ（DR-049）。
+    pub tick: bool,
 }
 
 /// 68000 から見た状態（STATUS）。
@@ -119,6 +126,8 @@ pub struct DspPort {
     prgbus: bool,
     /// BIO の同期化の FF（true で BIO が Low）。
     bio_ff: bool,
+    /// ラッチに取り込んだ最後の拍の時刻。
+    tick_seen: Option<Time>,
     /// DSP のサイクルの数（RESET の間も数える）。
     pub cycles: u64,
 }
@@ -142,6 +151,7 @@ impl DspPort {
             reset_cycles: 0,
             prgbus: false,
             bio_ff: false,
+            tick_seen: None,
             cycles: 0,
         }
     }
@@ -214,11 +224,21 @@ impl DspPort {
         while let Some(t) = self.clk.take_before(end) {
             self.cycles += 1;
             self.pins();
+            if let Some(b) = audio.beat_at()
+                && b <= t
+                && self.tick_seen != Some(b)
+            {
+                self.tick_seen = Some(b);
+                self.io.tick = true;
+            }
+            if self.ctrl.reset {
+                self.io.tick = false;
+            }
             self.bio_ff = match self.ctrl.bio {
                 BioSel::InputReady => !input.is_empty(),
                 BioSel::OutputSpace => output.ir(),
                 BioSel::Mailbox => self.io.command,
-                BioSel::AudioTick => audio.level_at(t),
+                BioSel::AudioTick => self.io.tick,
             };
             let mut bus = Bus {
                 prog: &mut self.prog,
@@ -271,6 +291,7 @@ impl Bus<'_> {
             (self.io.responded, STATUS_RESPONSE),
             (self.io.underrun, STATUS_UNDERRUN),
             (self.io.overrun, STATUS_OVERRUN),
+            (self.io.tick, STATUS_TICK),
         ] {
             if on {
                 s |= bit;
@@ -304,7 +325,11 @@ impl tms32010::Bus for Bus<'_> {
                 }
                 self.input.shift_out()
             }
-            2 => self.status(),
+            2 => {
+                let s = self.status();
+                self.io.tick = false;
+                s
+            }
             3 => {
                 self.io.command = false;
                 self.io.mailbox

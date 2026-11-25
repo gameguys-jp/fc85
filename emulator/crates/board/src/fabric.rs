@@ -699,7 +699,7 @@ impl Fabric {
         }
         let candidate = self.dbch;
         let (aop, decision) = self.decide(doc, next_s);
-        self.dbch = self.next_candidate();
+        self.dbch = self.next_candidate(s);
         let starting = self.active.filter(|a| a.elapsed == 0).map(|a| a.acc);
         ports.run_slot(starting.as_ref());
 
@@ -947,17 +947,23 @@ impl Fabric {
     }
 
     /// 判断バスのチャネル：要素が動いていればそのチャネル、再設定を待つチャネルがあればそれ、
-    /// 2 チャネルとも動いていれば入れ替える（DR-046 (2)）。
-    fn next_candidate(&self) -> u8 {
+    /// 2 チャネルとも動いていれば入れ替える（DR-046 (2)）。ただし、候補の読出し元が port 0 で、
+    /// 今が S のスロット（`s`）なら入れ替えない。次の X の頭で要素を始められるようにする（DR-048）。
+    fn next_candidate(&self, s: bool) -> u8 {
         if let Some(e) = &self.elem {
             return e.ch;
         }
         let c = self.dbch as usize;
         let o = 1 - c;
         let reload = |x: usize| matches!(self.ch[x].phase, Phase::Reload(_));
+        let hold = s && self.ch[c].phase == Phase::Run && self.ch[c].regs.src == 0;
         let pick = if reload(c) {
             c
-        } else if reload(o) || self.ch[o].phase == Phase::Run {
+        } else if reload(o) {
+            o
+        } else if hold {
+            c
+        } else if self.ch[o].phase == Phase::Run {
             o
         } else {
             c

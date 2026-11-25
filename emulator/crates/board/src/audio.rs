@@ -76,12 +76,9 @@ impl AudioClock {
         self.high > 0
     }
 
-    /// 時刻 `t` の TRIGGER 3 のレベル。`run` で進めた範囲の中の時刻に使う（DSP の BIO。DR-029 (3)）。
-    pub fn level_at(&self, t: Time) -> bool {
-        let pulse = self
-            .beat_at
-            .is_some_and(|b| t >= b && t < b + 2 * self.clk.period());
-        pulse || (self.level() && self.divisor() <= 2)
+    /// 最後の拍（TRIGGER 3 の立上り）の時刻。DSP の拍のラッチ（DR-049）が使う。
+    pub fn beat_at(&self) -> Option<Time> {
+        self.beat_at
     }
 
     /// `end` より前の入力クロックの立上りを進め、拍の数を返す。

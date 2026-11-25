@@ -582,27 +582,35 @@ fn char_rom_reads_take_two_slots_and_ignore_bit_15() {
 
 #[test]
 fn candidate_alternates_while_both_channels_run() {
-    let mut r = Rig::new();
-    r.setup(
-        0,
-        Cfg {
-            trigger: NEVER,
-            ..Cfg::default()
-        },
-    );
-    r.setup(
-        1,
-        Cfg {
-            trigger: NEVER,
-            ..Cfg::default()
-        },
-    );
-    r.start(0);
-    r.start(1);
-    // 再設定は 3 スロットずつ、ch0 の後に ch1。その後は 1 スロットごとに入れ替わる。
-    r.run(20);
-    let tail: Vec<u8> = r.trace.iter().rev().take(10).map(|x| x.candidate).collect();
-    assert!(tail.windows(2).all(|w| w[0] != w[1]), "{tail:?}");
+    // 読出し元が port 0 でなければ、再設定（3 スロットずつ、ch0 の後に ch1）の後は 1 スロットごとに
+    // 入れ替わる。port 0 から読むチャネルは S の頭で入れ替えない（DR-048）ので、2 チャネルとも port 0
+    // から読むと、S と X の 2 スロットずつ候補になる。
+    for src in [9, 0] {
+        let mut r = Rig::new();
+        for ch in 0..2 {
+            r.setup(
+                ch,
+                Cfg {
+                    src,
+                    trigger: NEVER,
+                    ..Cfg::default()
+                },
+            );
+        }
+        r.start(0);
+        r.start(1);
+        r.run(20);
+        let tail: Vec<&SlotRecord> = r.trace.iter().rev().take(10).rev().collect();
+        for w in tail.windows(2) {
+            let same = w[0].candidate == w[1].candidate;
+            assert_eq!(
+                same,
+                src == 0 && w[0].s,
+                "src {src}：{:?}",
+                tail.iter().map(|x| (x.s, x.candidate)).collect::<Vec<_>>()
+            );
+        }
+    }
 
     // 2 チャネルが交互に要素を始める（Temporal RAM へ、Temporal RAM と文字 ROM から）。
     let mut r = Rig::new();
@@ -1083,11 +1091,11 @@ fn snapshot_round_trip_mid_transfer() {
 }
 
 #[test]
-fn a_staging_channel_starves_while_the_other_channel_waits() {
-    // DR-046 (2) の規則のままの動作（OI-052）。2 チャネルとも動いていると候補はスロットごとに入れ替わり、
-    // S と X の交互と同じ周期になる。port 0 から読む要素は X のスロットの頭でしか始められないので、
-    // 相手が要素を始めない限り、候補が S の頭にだけ来て止まる。
-    let mut done = Vec::new();
+fn a_staging_channel_keeps_its_rate_while_the_other_channel_waits() {
+    // DR-048（OI-052）：port 0 から読むチャネルは S の頭で候補を手放さないので、相手がトリガを待って
+    // 動いているだけなら、1 チャネルのときと同じ 2 スロットに 1 要素で進む。DR-046 (2) のままでは、
+    // 候補が S の頭にだけ来て 2 要素で止まっていた。
+    let mut got = Vec::new();
     for other in [false, true] {
         let mut r = Rig::new();
         r.setup(
@@ -1108,15 +1116,15 @@ fn a_staging_channel_starves_while_the_other_channel_waits() {
                 },
             );
             r.start(1);
+            // ch1 の再設定（3 スロット）を先に済ませる
+            r.run(5);
         }
         r.start(0);
         r.run(400);
-        let n = r
-            .trace
-            .iter()
-            .filter(|x| matches!(x.decision, Decision::Start(0)))
-            .count();
-        done.push((n, r.status(0)));
+        let starts: Vec<(u64, u8)> = r.starts().into_iter().filter(|x| x.1 == 0).collect();
+        let g = gaps(&starts);
+        assert!(g.iter().all(|&x| x == 2), "{g:?}");
+        got.push((starts.len(), r.status(0)));
     }
-    assert_eq!(done, vec![(100, DONE), (2, BUSY)]);
+    assert_eq!(got, vec![(100, DONE), (100, DONE)]);
 }

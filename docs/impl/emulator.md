@@ -1,6 +1,6 @@
 # エミュレータ
 
-**v0.9**  
+**v0.10**  
 2026年11月25日
 
 > 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
@@ -212,7 +212,7 @@
 | 判断と A ファイル（DR-046 (2)、fabric.md §05） | 各スロットの頭で、このスロットの A ファイルの操作と、次のスロットのアクセスを決める。COUNT の更新は、逐次の読出し元なら R の判断、番地を持つ読出し元と逐次の書込み先なら W の判断、両方が番地を持てば W のスロットに置く | fabric.md §05 [P] | `SlotRecord` の列が、PAL の式を書くときの基準になる |
 | 2 スロット以上のアクセス | port 9 の読出しは、2 スロット目の頭で次のアクセスを決める。port 1 と DOC の port 2 は、答えたスロットの次の頭で決める（答えが早くても 2 スロット） | port 9 は終わりが分かっている。fabric.md §06 の「長いアクセスの間は決めない」を、この形に詳しくした（fabric.md v0.2）[P] | port 9 から読む要素は 3 スロットに 1 つ |
 | 満杯・空の信号を持つポート（DR-046 (2)） | アクセスのスロットと、その次のスロットの頭では、新しい要素を始めない。port 2 は DOC 子基板があっても対象 | ATR の FLAG は port 2 の両方の中身で 1 | DOC への書込みの後も 1 スロット空く |
-| 候補の入れ替えと S のスロット（DR-046 (2)） | 規則のとおり、要素がなく 2 チャネルとも動いていれば候補をスロットごとに入れ替える | 仕様どおり | 入れ替えが S・X と同じ周期なので、port 0 から読むチャネルは、相手が要素を始めない限り候補が S の頭にだけ来て、要素を始められない（相手がトリガや空の FIFO を待つだけで止まる）。OI-052 |
+| 候補の入れ替えと S のスロット（DR-046 (2)、DR-048） | 要素がなく 2 チャネルとも動いていれば候補をスロットごとに入れ替える。ただし、候補の読出し元が port 0 で今が S のスロットなら入れ替えない | 仕様どおり | port 0 から読むチャネルは、相手が待っていても 1 チャネルのときと同じ速さで進む。2 チャネルとも port 0 から読むと、S と X の 2 スロットずつ候補になる。DR-048 の前は、相手がトリガや空の FIFO を待つだけで止まった（OI-052） |
 | 動作中の書換え（DR-046 (4)） | 設定のレジスタは、使うスロットの値を使う。R と W の間に SHIFT・MASK・XOR・FORMAT・DST を書き換えると、その要素の W から効く | 回路では、設定のレジスタが変換部と判断バスに直接つながる（fabric.md §02）。仕様書の「次の要素から効く」はおおよその言い方 [P] | 動作中の書換えは Bend の操作 |
 | トリガ（DR-046 (8)） | 2 段の同期化と立上りの検出はスロット単位で、入力の立上りから 2〜3 スロットで保留になる。チャネルが止まっている間の立上りは数えない。保留は START で消す | 同期化の FF のクロックは fabric.md で決めていない [V]。止まっている間に MISS が立つのを避けた [P] | — |
 | START と状態のビット | START は DONE・ERROR・MISS を変えない（W1C でだけ消える） | 仕様書に書いてない [P] | ソフトは START の前に消す |
@@ -265,9 +265,9 @@
 | 時間 | 命令サイクル（CLKOUT、200 ns＝3024 単位）ごとに進める。外部クロックのジャンパは周期の変更（DR-035） | — | スロットの中の DSP のサイクルは、そのスロットの Fabric のアクセスより前に済ませる [P] |
 | RESET と PRGBUS（DR-029 (1)） | CTRL.RESET＝1 で次の CLKOUT から RS を Low にし、8 サイクル目に PRGBUS＝1。0 に戻すと次の CLKOUT で PRGBUS を下げ、その次で RS を解く。電源投入時は RESET＝1 | 台帳 §2.1。電源投入時の値は [P] | PRGBUS＝0 の間のプログラム RAM の読み書きはバスエラー（`None`・`false`）。電源投入時の中身は 0 [V] |
 | I/O（台帳 §2.2） | IN 0 は入力 FIFO（port 3）から取り出し、空なら前の値で UNDERRUN。OUT 1 は出力 FIFO（port 4）へ入れ、満杯なら捨てて OVERRUN（DR-017 (2)）。IN 2 は状態、IN 3 はメールボックス（読むと着信を下げる）、OUT 2 は応答（68000 への要求を上げる） | — | ほかのポートの IN は 0、OUT は捨てる [V]。DSP の側から UNDERRUN・OVERRUN を消す手段はまだない（68000 の W1C だけ）|
-| IN 2 の状態（OI-053） | bit 0 入力 FIFO が空でない、bit 1 出力 FIFO に空き、bit 2 コマンド着信、bit 3 応答が未読、bit 4 UNDERRUN、bit 5 OVERRUN、bit 15〜8 入力 FIFO の語数（アダプタのカウンタ） | 仕様にない。仮の配置 [P] | 仕様で決めたら直す |
+| IN 2 の状態（OI-053） | bit 0 入力 FIFO が空でない、bit 1 出力 FIFO に空き、bit 2 コマンド着信、bit 3 応答が未読、bit 4 UNDERRUN、bit 5 OVERRUN、bit 6 拍のラッチ（読むと消える。DR-049）、bit 15〜8 入力 FIFO の語数（アダプタのカウンタ） | 仕様にない。仮の配置 [P] | 仕様で決めたら直す |
 | TBLW と OUT（DR-029 (2)） | プログラム RAM の /WE は 8〜4095 番地だけ。TBLW で 0〜7 番地に書くと OUT と同じになり、回数を `io.port_tblw` に数える（警告） | DR-029 (2) | — |
-| BIO（DR-029 (3)） | CTRL.BIOSEL の条件を CLKOUT で 1 段の FF に取って BIO に入れる。音声クロックの拍は、その時刻の TRIGGER 3 のレベル（250 ns のパルス） | FF の段数は [P] | 待ちのループでは拍を取りこぼす。N が 8 の倍数だと拍と DSP の位相が固定され、全部取るか全部落とす（OI-053） |
+| BIO（DR-029 (3)、DR-049） | CTRL.BIOSEL の条件を CLKOUT で 1 段の FF に取って BIO に入れる。音声クロックの拍は、拍のラッチ。拍の立上りを次の CLKOUT の頭で取り込んで 1 にし、IN 2 の読出しで 0 にする。CTRL.RESET＝1 の間は 0 | FF の段数と、拍を CLKOUT の頭で取り込むことは [P] | IN 2 の読出しと同時に来た拍の競合は扱わない [V]。DR-049 の前（250 ns のパルスのまま）は、待ちのループで拍を取りこぼした（OI-053） |
 | INT | メールボックスの着信の間 Low | [P] | 立下りで INTF。IN 3 を読むまで Low のまま |
 | bridge のレジスタ | CTRL（RESET、BIOSEL）、STATUS、メールボックス、応答を構造体の値と関数で持つ。CPU から見た番地（0x220000〜）とビットは段階 3 で決める | CPU をつないでいない | — |
 
@@ -362,13 +362,13 @@
 |---|---|---|---|
 | 変換とポートの表 | `transform_follows_dr046`、`port_table_matches_fabric_md` | FORMAT 0〜6、SHIFT の正負と −16、MASK・XOR、8 bit の出力の FD の上位（DR-046 (5)、fabric.md §04）。番地を持つポートは 0・2・8・9、満杯・空の信号は 1〜5・10〜15。向きと幅（fabric.md §06） | 合格 |
 | レジスタ | `registers_read_zero_and_bad_addresses_get_no_dtack`、`register_file_access_waits_for_the_next_slot`、`start_copies_the_settings_in_three_slots`、`count_zero_is_done_without_a_transfer`、`start_checks_the_ports_and_the_format` | 書込み専用のレジスタは 0、MODULES、バスエラーの番地（DR-046 (10)）。A ファイルは次のスロットで許可。再設定は 3 スロットで、COUNT の作業値は残りの数−1。COUNT＝0 は転送せずに DONE。START の検査で ERROR になる 5 通り（DR-046 (9)） | 合格 |
-| 転送の時間 | `staging_to_temporal_moves_one_byte_every_two_slots`、`staging_to_staging_takes_four_slots_per_element`、`count_update_goes_where_the_address_file_is_free`、`fifo_reads_take_three_slots_and_fifo_writes_four`、`char_rom_reads_take_two_slots_and_ignore_bit_15`、`candidate_alternates_while_both_channels_run` | 2 スロットに 1 要素（4 MB/s）、port 0 どうしは 4 スロット、FIFO から読むと 3、FIFO へ書くと 4（仕様書 §06）。port 0 は S のスロットだけ。COUNT の更新の置き場所 4 通り（fabric.md §05）。port 9 は 2 スロット。2 チャネルが交互に候補になり、交互に要素を始める | 合格 |
+| 転送の時間 | `staging_to_temporal_moves_one_byte_every_two_slots`、`staging_to_staging_takes_four_slots_per_element`、`count_update_goes_where_the_address_file_is_free`、`fifo_reads_take_three_slots_and_fifo_writes_four`、`char_rom_reads_take_two_slots_and_ignore_bit_15`、`candidate_alternates_while_both_channels_run` | 2 スロットに 1 要素（4 MB/s）、port 0 どうしは 4 スロット、FIFO から読むと 3、FIFO へ書くと 4（仕様書 §06）。port 0 は S のスロットだけ。COUNT の更新の置き場所 4 通り（fabric.md §05）。port 9 は 2 スロット。2 チャネルが交互に候補になり、交互に要素を始める（port 0 から読むチャネルは DR-048 の例外。「候補の入れ替え」の行） | 合格 |
 | 待ちとトリガ | `empty_source_fifo_stalls_and_resumes`、`each_trigger_moves_one_element`、`block_trigger_with_loop_keeps_one_pending_and_counts_a_miss`、`loop_restarts_from_the_settings`、`stop_discards_the_element_not_yet_written` | STALL と再開。EACH＝1 は 1 回で 1 要素。EACH＝0 と LOOP：ブロックの途中の 1 回は保留、2 回目は MISS。LOOP は設定値から。STOP は書いていない要素を捨て、DONE にしない（DR-046 (6)〜(8)） | 合格 |
 | 延びるアクセス | `a_long_access_times_out_after_32_clocks`、`doc_writes_wait_for_the_answer` | 答えない port 1 は 16 スロットで ERROR と IRQ になり、打ち切りは 1 回。DOC への書込みは答えまで延び、終わった次の頭は満杯・空の信号の規則で空く（DR-046 (1)(2)(9)） | 合格 |
 | CPU と割込み | `cpu_access_to_the_register_file_takes_a_slot_from_the_transfer`、`irq_follows_done_and_irq_en` | 転送中の COUNT の読出しが 1 スロットを取り、転送は正しく終わる。IRQ は IRQ_EN∧DONE で、W1C で消える | 合格 |
 | ポートの細部 | `port0_byte_lanes_and_word_alignment`、`mask_xor_and_shift_apply_on_the_way`、`port_reset_clears_fifos_and_pointers` | 8 bit の偶数番地は上位バイト、16 bit は bit 0 を無視（DR-046 (3)）。0x1234 を 8 回して MASK・XOR で 0x3403。PORT_RESET | 合格 |
 | 保存 | `snapshot_round_trip_mid_transfer` | 2 チャネルの転送の途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
-| 候補の入れ替え | `a_staging_channel_starves_while_the_other_channel_waits` | Staging RAM → Temporal RAM の 100 要素は、ch1 がなければ 400 スロットで終わる。ch1 がトリガを待って動いていると 2 要素で止まる（DR-046 (2) のままの動作。OI-052 で直したら期待値を変える） | 合格 |
+| 候補の入れ替え | `candidate_alternates_while_both_channels_run`、`a_staging_channel_keeps_its_rate_while_the_other_channel_waits` | port 0 を読まない 2 チャネルは 1 スロットごと、port 0 を読む 2 チャネルは S と X の 2 スロットずつ候補になる。Staging RAM → Temporal RAM の 100 要素が、ch1 がトリガを待っていても 2 スロットに 1 要素で終わる（DR-048。前は 2 要素で止まった） | 合格 |
 | port 1 | `dwt_from_staging_ram_fills_the_rectangle`、`drd_to_staging_ram_reads_the_rectangle`、`one_word_takes_six_or_seven_slots_from_temporal_ram`、`count_larger_than_the_rectangle_is_an_error`、`count_smaller_than_the_rectangle_is_an_error_and_abt_clears_the_acrtc`、`the_channel_stalls_until_the_acrtc_requests`、`stop_in_the_middle_of_a_port1_access_releases_dack`、`snapshot_round_trip_mid_port1_transfer` | DWT・DRD の矩形を COUNT＝x·y で運ぶ（DR-022）。1 回のアクセスは 3 スロット、1 語は Staging RAM から 6 か 8、Temporal RAM から 6〜7 スロット（§03 の時刻からの計算。2CLK の位相を 7 通りに変える）。COUNT が大きくても小さくても ERROR、ABT で ACRTC が止まる。DREQ まで STALL。STOP で DACK を戻す。途中で保存して戻せる | 合格 |
 
 期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。fabric.md の順序と状態の PAL の式ができたら、この試験のスロットの列と突き合わせる（OI-050 (1)）。
@@ -393,9 +393,9 @@
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
 | RESET と窓 | `prgbus_follows_reset_and_gates_the_program_window` | PRGBUS は RESET から 8 CLKOUT（6 スロット目）。その前と解除の後の窓はバスエラー。解除すると 0 番地から動き、もう一度 RESET すると止まって始め直す | 合格 |
-| データの流れ | `dsp_processes_a_block_through_the_fabric`、`soft_synthesis_paced_by_output_space` | Fabric が Temporal RAM → port 3 → DSP（2 倍）→ port 4 → Temporal RAM で 16 語を渡し、UNDERRUN・OVERRUN が出ない。出力の空きを BIO にしたソフト合成が、本体 DAC に 0〜149 を欠けずに渡す | 合格 |
+| データの流れ | `dsp_processes_a_block_through_the_fabric`、`dsp_processes_a_block_from_and_to_staging_ram`、`soft_synthesis_paced_by_output_space` | Fabric が Temporal RAM → port 3 → DSP（2 倍）→ port 4 → Temporal RAM で 16 語を渡し、UNDERRUN・OVERRUN が出ない。Staging RAM から Staging RAM でも止まらずに渡す（DR-048）。出力の空きを BIO にしたソフト合成が、本体 DAC に 0〜149 を欠けずに渡す | 合格 |
 | 空と満杯 | `empty_input_returns_the_last_word_and_full_output_drops` | 空の IN 0 は前の値で UNDERRUN 1 回。OUT 1 を 100 回で、64 語が入り 36 回が OVERRUN。W1C は書いたビットだけ消す | 合格 |
 | 状態とメールボックス | `status_port_and_mailbox`、`a_command_interrupts_the_dsp` | IN 2 の値（仮の配置、OI-053）、IN 3 で着信が下がる、OUT 2 で応答。着信で INT が入り、割込みの中で応答を返す | 合格 |
 | TBLW | `tblw_to_addresses_0_to_7_acts_as_out` | 2 番地への TBLW は RAM を書かずに OUT 2 になり、警告を数える。0x80 番地へは書く | 合格 |
-| 拍の BIO | `a_polling_loop_catches_all_or_none_of_the_audio_ticks` | 待ちのループで数えた拍が、N＝40 で 400/400、N＝48 で 0/333（OI-053 の問題を示す。仕様を直したら期待値を変える） | 合格 |
+| 拍のラッチ | `the_tick_latch_counts_every_audio_tick`、`reset_clears_the_tick_latch` | BIO の待ちループと、IN 2 を読み続けるループの両方で、N＝40・41・48・100 の拍を全部数える（区切りの前後で ±1。DR-049）。RESET の間に来た拍は残らない | 合格 |
 | 保存 | `snapshot_round_trip_while_the_dsp_runs` | DSP が動いている途中で保存して戻すと、同じスロットの列と状態になる | 合格 |

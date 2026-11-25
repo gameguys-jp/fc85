@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.5**  
+**v0.6**  
 2026年11月25日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)
 
 ## 01　前提と範囲
 
@@ -165,7 +165,7 @@ ROT0・ROT1 は入力 13 本・出力 8 本、ROT2・ROT3 は入力 10 本・出
 
 ### 判断バスと候補
 
-SEQ が、スロットごとに判断バスのチャネル（DBCH）を選ぶ。要素が動いている間はそのチャネル、再設定を待つチャネルがあればそれ、なければ動いている 2 チャネルを交互に選ぶ（DR-046 (2)）。この入れ替えは S・X と同じ周期なので、port 0 から読むチャネルは、相手が要素を始めない限り候補が S の頭にだけ来て止まる。直し方は [OI-052](../open-issues.md) で決める。DBCH のチャネルの SRC・DST・FORMAT（74LS173 の 3 ステート出力）が判断バスに出る。
+SEQ が、スロットごとに判断バスのチャネル（DBCH）を選ぶ。要素が動いている間はそのチャネル、再設定を待つチャネルがあればそれ、なければ動いている 2 チャネルを交互に選ぶ（DR-046 (2)）。ただし、候補の読出し元が port 0 で今が S のスロットなら、ELG の HOLD で入れ替えない。入れ替えが S・X と同じ周期なので、これがないと port 0 から読むチャネルの候補が S の頭にだけ来て止まる（[OI-052](../open-issues.md)、[DR-048](../decisions.md)）。DBCH のチャネルの SRC・DST・FORMAT（74LS173 の 3 ステート出力）が判断バスに出る。
 
 - RDY が SRC・DST の準備を、スロットの中ほどで取り込む（下の式）。
 - U32（74LS157）が、次のアクセスのポートを選ぶ：要素が動いていなければ SRC（R）、動いていれば DST（W）。
@@ -220,8 +220,8 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 
 | PAL | 働き | 主な入力 | 出力 |
 |---|---|---|---|
-| ELG（20L8A） | このスロットの頭の判断：A ファイルの操作と、次のアクセス。新しい要素は、候補が動いていて（BUSY、再設定と最後の要素が済んでいない）、トリガが許し（ARM）、SRDY・DRDY が 1 で、読出し元が port 0 なら次が S のスロットで、FLAG のポートのアクセスが今のスロットと次のスロットになく、CPU の要求がなく、COUNT の更新の直後で最後と分かった要素でないとき | SRDY、DRDY、SX、ATR（SONLY、ADDR、FLAG）、OP の FLAG、INF、DBCH、ARM0・1、RUN0・1、CUPD、CY、HREQ、OPDN | GO、次の AOP（3）、次のアクセス（2） |
-| SEQ（20R8A） | 判断を登録する。DBCH の交互の切替え、動いている要素（INF）、CPU への許可 | GO、次の AOP、次のアクセス、HREQ、OPDN、TOUT、再設定の要求（ch0・1）、ERROR | DBCH、INF、AOP（3）、アクセス（2）、HGNT |
+| ELG（20L8A） | このスロットの頭の判断：A ファイルの操作と、次のアクセス。新しい要素は、候補が動いていて（BUSY、再設定と最後の要素が済んでいない）、トリガが許し（ARM）、SRDY・DRDY が 1 で、読出し元が port 0 なら次が S のスロットで、FLAG のポートのアクセスが今のスロットと次のスロットになく、CPU の要求がなく、COUNT の更新の直後で最後と分かった要素でないとき | SRDY、DRDY、SX、ATR（SONLY、ADDR、FLAG）、OP の FLAG、INF、DBCH、ARM0・1、RUN0・1、CUPD、CY、HREQ、OPDN | GO、次の AOP（3）、次のアクセス（2）、HOLD（候補の読出し元が port 0 で今が S。DR-048） |
+| SEQ（20R8A） | 判断を登録する。DBCH の交互の切替え（HOLD の間は切り替えない）、動いている要素（INF）、CPU への許可 | GO、次の AOP、次のアクセス、HREQ、OPDN、TOUT、再設定の要求（ch0・1）、ERROR、HOLD | DBCH、INF、AOP（3）、アクセス（2）、HGNT |
 | AFC0・1（20L8A） | AOP と CPU の番地を、A ファイルの番地（4）、/WE、/CS、Cin、B ファイルの選択と番地（3）、SL・U12–U13 の出力の許可、PS・PD・U7–U8 の取込みの信号に直す | AOP、DBCH、HA6、HA3、HA2、R/W、q0・q1 | 15 本 |
 
 - 2 スロット以上のアクセスの間は、新しいアクセスを決めない。port 9 は終わりが分かっているので、2 スロット目の頭で次のアクセスを決める（STB が OPDN を出す）。port 1 と DOC の port 2 は、P1A・P2A の OPDN で終わりを知り、その次のスロットの頭で決める（答えが早くても 2 スロット）[P]。port 1 は、エミュレータの模型（ブリッジの同期化の時刻。[emulator.md](../impl/emulator.md) §03）で、DACK を出してから戻すまで 3 スロット、1 語は 6〜8 スロットになる（OI-051）。U38（74LS393）が 8 MHz を数え、32 クロックで TOUT を出す（DR-046 (9)）。

@@ -1,8 +1,10 @@
 //! DSP のアダプタ（port 3・4、プログラム RAM、DSP bridge）の試験。
 //! 期待値は DR-017、DR-029、台帳 TMS32010.md §2.1・§2.2 と、そこからの手計算で取る。
-//! 状態ポートのビットは仮の配置（OI-052）。
+//! 状態ポートのビットは仮の配置（OI-053）。拍のラッチは DR-049、Fabric の候補の入れ替えは DR-048。
 
-use fc85_board::dsp::{BioSel, DspStatus, STATUS_COMMAND, STATUS_INPUT_READY, STATUS_OUTPUT_SPACE};
+use fc85_board::dsp::{
+    BioSel, DspStatus, STATUS_COMMAND, STATUS_INPUT_READY, STATUS_OUTPUT_SPACE, STATUS_TICK,
+};
 use fc85_board::fabric::{Fabric, HostReply};
 use fc85_board::ports::FabricPorts;
 
@@ -10,7 +12,10 @@ use fc85_board::ports::FabricPorts;
 
 const SRC: u16 = 0x00;
 const DST: u16 = 0x02;
+const SRC_STEP: u16 = 0x0E;
+const DST_ADDR: u16 = 0x0A;
 const COUNT: u16 = 0x0C;
+const DST_STEP: u16 = 0x10;
 const FORMAT: u16 = 0x12;
 const CTRL: u16 = 0x1C;
 const AUDIO_N: u16 = 0x102;
@@ -36,6 +41,7 @@ const IN: u16 = 0x40;
 const OUT: u16 = 0x48;
 const SACL: u16 = 0x50;
 const TBLW: u16 = 0x7D;
+const AND: u16 = 0x79;
 const NOP: u16 = 0x7F80;
 const EINT: u16 = 0x7F82;
 const ZAC: u16 = 0x7F89;
@@ -43,6 +49,7 @@ const RET: u16 = 0x7F8D;
 const BANZ: u16 = 0xF400;
 const BIOZ: u16 = 0xF600;
 const B: u16 = 0xF900;
+const BZ: u16 = 0xFF00;
 
 struct Rig {
     f: Fabric,
@@ -157,7 +164,6 @@ const DOUBLER: [u16; 11] = [
 ];
 
 /// ch0：Temporal RAM（port 7）→ port 3、ch1：port 4 → Temporal RAM（port 6）。
-/// Staging RAM を使わないのは OI-052（S のスロットと候補の入れ替えが噛み合って止まる）のため。
 fn block_channels(r: &mut Rig, input: &[u8], out_at: u16) {
     r.p.temporal.mem[..input.len()].copy_from_slice(input);
     r.p.temporal.rptr = 0;
@@ -185,6 +191,39 @@ fn dsp_processes_a_block_through_the_fabric() {
     assert_eq!(&r.p.temporal.mem[0x100..0x110], &want[..]);
     let s = r.status();
     assert!(!s.underrun && !s.overrun);
+}
+
+#[test]
+fn dsp_processes_a_block_from_and_to_staging_ram() {
+    // ch0 は Staging RAM から読み、ch1 は DSP の出力を待つ。DR-046 (2) のままでは ch0 の候補が S の頭に
+    // だけ来て両方が止まった（OI-052）。DR-048 で、候補を S の頭で手放さないようにした。
+    let mut r = Rig::new();
+    let input: Vec<u16> = (0..16).map(|i| 0x1000 + i * 3).collect();
+    for (i, w) in input.iter().enumerate() {
+        r.p.staging[2 * i..2 * i + 2].copy_from_slice(&w.to_be_bytes());
+    }
+    r.boot(&DOUBLER, BioSel::InputReady);
+    for (off, v) in [(SRC, 0), (DST, 3), (COUNT, 16), (SRC_STEP, 2), (FORMAT, 1)] {
+        r.write(off, v);
+    }
+    for (off, v) in [
+        (SRC, 4),
+        (DST, 0),
+        (DST_ADDR, 0x100),
+        (COUNT, 16),
+        (DST_STEP, 2),
+        (FORMAT, 1),
+    ] {
+        r.write(0x40 + off, v);
+    }
+    r.write(CTRL, 1);
+    r.write(0x40 + CTRL, 1);
+    r.run(400);
+    assert_eq!((r.f.status(0), r.f.status(1)), (DONE, DONE));
+    let got: Vec<u16> = (0..16)
+        .map(|i| u16::from_be_bytes([r.p.staging[0x100 + 2 * i], r.p.staging[0x101 + 2 * i]]))
+        .collect();
+    assert_eq!(got, input.iter().map(|x| x * 2).collect::<Vec<_>>());
 }
 
 #[test]
@@ -326,42 +365,81 @@ fn soft_synthesis_paced_by_output_space() {
     assert_eq!(r.p.dsp.io.overruns, 0);
 }
 
+/// 拍を数えるプログラム（DR-049）。データ RAM の 0 番地が数。
+/// BIO 版：BIO（拍のラッチ）が Low になるのを待ち、IN 2 を読んで消してから 1 足す。
+const TICK_BY_BIO: [u16; 14] = [
+    lack(1),
+    d(SACL, 1),
+    ZAC,
+    d(SACL, 0),
+    BIOZ,
+    8,
+    B,
+    4,
+    d(IN + 2, 2),
+    d(LAC, 0),
+    d(ADD, 1),
+    d(SACL, 0),
+    B,
+    4,
+];
+/// 状態版：IN 2 を読み続け、拍のビットが 1 なら 1 足す（読めば消える）。
+const TICK_BY_STATUS: [u16; 16] = [
+    lack(1),
+    d(SACL, 1),
+    lack(0x40),
+    d(SACL, 3),
+    ZAC,
+    d(SACL, 0),
+    d(IN + 2, 2),
+    d(LAC, 2),
+    d(AND, 3),
+    BZ,
+    6,
+    d(LAC, 0),
+    d(ADD, 1),
+    d(SACL, 0),
+    B,
+    6,
+];
+
 #[test]
-fn a_polling_loop_catches_all_or_none_of_the_audio_ticks() {
+fn the_tick_latch_counts_every_audio_tick() {
+    assert_eq!(STATUS_TICK, 0x40);
     let mut got = Vec::new();
-    for n in [40, 48] {
-        let mut r = Rig::new();
-        // 拍を数える：BIO が Low になったら 1 足し、High に戻るのを待つ
-        r.boot(
-            &[
-                lack(1),
-                d(SACL, 1),
-                ZAC,
-                d(SACL, 0),
-                BIOZ,
-                8,
-                B,
-                4,
-                d(LAC, 0),
-                d(ADD, 1),
-                d(SACL, 0),
-                BIOZ,
-                11,
-                B,
-                4,
-            ],
-            BioSel::AudioTick,
-        );
-        r.write(AUDIO_N, n);
-        r.run(2100);
-        let t0 = r.p.audio.ticks;
-        let c0 = r.p.dsp.dsp.data(0);
-        r.run(8000);
-        got.push((r.p.dsp.dsp.data(0) - c0, r.p.audio.ticks - t0));
+    for (prog, bio) in [
+        (&TICK_BY_BIO[..], BioSel::AudioTick),
+        (&TICK_BY_STATUS[..], BioSel::InputReady),
+    ] {
+        for n in [40, 41, 48, 100] {
+            let mut r = Rig::new();
+            r.boot(prog, bio);
+            r.write(AUDIO_N, n);
+            r.run(2100);
+            let t0 = r.p.audio.ticks;
+            let c0 = r.p.dsp.dsp.data(0);
+            r.run(8000);
+            let counted = u64::from(r.p.dsp.dsp.data(0) - c0);
+            let beats = r.p.audio.ticks - t0;
+            // 区切りの前後の拍が 1 つずれることがある
+            assert!(counted.abs_diff(beats) <= 1, "N={n}：{counted}/{beats}");
+            got.push(beats);
+        }
     }
-    // 拍は 250 ns で、FF を通すと 200 ns か 400 ns。待ちのループは 4 サイクル（800 ns）ごとに BIO を見る。
-    // N が 8 の倍数だと拍と DSP の位相が固定され、全部取るか全部落とす（OI-053）
-    assert_eq!(got, vec![(400, 400), (0, 333)]);
+    // 250 ns のパルスのままでは、BIO の待ちループが N＝41 で 146/391、N＝48 で 0/333 だった（OI-053）
+    assert_eq!(&got[..4], &[400, 391, 333, 160]);
+}
+
+#[test]
+fn reset_clears_the_tick_latch() {
+    let mut r = Rig::new();
+    r.write(AUDIO_N, 40);
+    r.run(2100);
+    assert!(r.p.audio.ticks > 0);
+    assert!(!r.p.dsp.io.tick, "RESET の間は 0");
+    r.boot(&TICK_BY_BIO, BioSel::AudioTick);
+    r.run(20 * 10);
+    assert!(r.p.dsp.dsp.data(0) >= 9);
 }
 
 #[test]
