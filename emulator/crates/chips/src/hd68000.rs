@@ -245,61 +245,39 @@ enum Alu {
     Cmp,
 }
 
-/// DIVU の時間（クロック数。源がデータレジスタのときの命令全体）。
+/// DIVU の時間（クロック数。源がデータレジスタのときの命令全体）。台帳 §2.9 の式。
 ///
-/// 76 を基本に、商を 1 bit ずつ求める 15 回の繰返しで 0・2・4 クロックを足す。桁あふれは 10。
-/// 手順は台帳 §2.9（解析 CWIK を書き起こしたもの）による。
+/// 商の bit 15〜1 を上から 1 bit ずつ決める 15 段は、それぞれ 0・2・4 クロック：段の前の部分剰余が
+/// 0x8000 以上なら 0、そうでなければ商のビットが 1 なら 2、0 なら 4。長除法では、商の bit j を決める
+/// 段の前の部分剰余は (被除数 >> (j＋1)) mod 除数 なので、繰返さずに数えられる。桁あふれは 10。
 fn divu_clocks(dividend: u32, divisor: u16) -> u32 {
-    if dividend >> 16 >= u32::from(divisor) {
+    let d = u32::from(divisor);
+    if dividend >> 16 >= d {
         return 10;
     }
-    let mut cycles = 38;
-    let hdivisor = u32::from(divisor) << 16;
-    let mut rem = dividend;
-    for _ in 0..15 {
-        let carry = rem & 0x8000_0000 != 0;
-        rem <<= 1;
-        if carry {
-            rem = rem.wrapping_sub(hdivisor);
-        } else {
-            cycles += 2;
-            if rem >= hdivisor {
-                rem -= hdivisor;
-                cycles -= 1;
-            }
-        }
-    }
-    cycles * 2
+    let ones = ((dividend / d) & 0xFFFE).count_ones();
+    let high = (2..=16).filter(|&s| (dividend >> s) % d >= 0x8000).count() as u32;
+    136 - 2 * ones - 2 * high
 }
 
-/// DIVS の時間（クロック数。源がデータレジスタのときの命令全体）。手順は台帳 §2.9。商が 16 bit の
-/// 符号付きに収まらないだけの桁あふれ（相対）は、早く終わらない（CWIK。SST とは違う。§03）。
+/// DIVS の時間（クロック数。源がデータレジスタのときの命令全体）。台帳 §2.9 の式。
+///
+/// 被除数と除数の符号で決まる基本の時間に、絶対値どうしの商の bit 15〜1 にある 0 の数の 2 倍を足す。
+/// 被除数の絶対値の上位 16 bit が除数の絶対値以上なら桁あふれで 16（被除数が負なら 18）。商が
+/// 16 bit の符号付きに収まらないだけの桁あふれ（相対）は、早く終わらない（SST とは違う。§03）。
 fn divs_clocks(dividend: i32, divisor: i16) -> u32 {
-    let mut cycles = 6;
-    if dividend < 0 {
-        cycles += 1;
+    let n = dividend.unsigned_abs();
+    let d = u32::from(divisor.unsigned_abs());
+    if n >> 16 >= d {
+        return if dividend < 0 { 18 } else { 16 };
     }
-    let adividend = dividend.unsigned_abs();
-    let adivisor = u32::from(divisor.unsigned_abs());
-    if adividend >> 16 >= adivisor {
-        return (cycles + 2) * 2;
-    }
-    let mut aquot = adividend / adivisor;
-    cycles += 55;
-    if divisor >= 0 {
-        if dividend >= 0 {
-            cycles -= 1;
-        } else {
-            cycles += 1;
-        }
-    }
-    for _ in 0..15 {
-        if aquot & 0x8000 == 0 {
-            cycles += 1;
-        }
-        aquot <<= 1;
-    }
-    cycles * 2
+    let base = match (dividend < 0, divisor < 0) {
+        (false, false) => 120,
+        (false, true) => 122,
+        (true, false) => 126,
+        (true, true) => 124,
+    };
+    base + 2 * (!(n / d) & 0xFFFE).count_ones()
 }
 
 impl Hd68000 {
