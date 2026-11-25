@@ -861,13 +861,20 @@ impl Console {
         self.cpu.reset(&mut self.sys);
     }
 
+    /// 1 命令（または例外処理）を実行する。かかった CPU クロックを返す。基板は最後のバスサイクル
+    /// までしか進まないので、続けて `run_until` か `sys.sync` で追いつかせる。
+    pub fn step(&mut self) -> u32 {
+        let n = self.cpu.step(&mut self.sys);
+        if !self.sys.doc_trace.is_empty() {
+            self.check_doc_rule();
+        }
+        n
+    }
+
     /// CPU クロック `clock` まで命令を実行し、基板もそこまで進める。
     pub fn run_until(&mut self, clock: u64) {
         while self.cpu.clock < clock {
-            self.cpu.step(&mut self.sys);
-            if !self.sys.doc_trace.is_empty() {
-                self.check_doc_rule();
-            }
+            self.step();
         }
         self.sys.sync(clock);
     }

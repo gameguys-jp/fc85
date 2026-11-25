@@ -23,7 +23,7 @@
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
 | board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3） |
-| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。既定は `firmware/` のビルド結果を読む。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
+| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。既定は `firmware/` のビルド結果を読む。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
 
 ### 約束
 

@@ -4,7 +4,7 @@
 //! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
-//! [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
+//! [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--trace N] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ]`
 //!
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
@@ -40,6 +40,8 @@ struct Args {
     doc: bool,
     scale: usize,
     frames: Option<u64>,
+    /// 最初の N 命令の PC と SR を標準エラーに出す。
+    trace: u64,
     headless: bool,
     dump: Option<String>,
     wav: Option<String>,
@@ -55,6 +57,7 @@ fn parse_args() -> Args {
         doc: true,
         scale: 3,
         frames: None,
+        trace: 0,
         headless: false,
         dump: None,
         wav: None,
@@ -72,6 +75,7 @@ fn parse_args() -> Args {
             "--headless" => a.headless = true,
             "--dump" => a.dump = it.next(),
             "--wav" => a.wav = it.next(),
+            "--trace" => a.trace = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--doc-clock" => a.clocks[0] = it.next().and_then(|v| v.parse().ok()),
             "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
             "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
@@ -79,7 +83,7 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
-                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--doc-clock HZ] \
+                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--trace N] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ]"
                 );
                 std::process::exit(0);
@@ -336,9 +340,62 @@ fn pad(w: &minifb::Window) -> u16 {
     v
 }
 
+/// 最初の N 命令を 1 つずつ実行し、実行前の PC と SR、D0〜D3、A7 を出す。
+fn trace(c: &mut Console, n: u64) {
+    for _ in 0..n {
+        let cpu = &c.cpu;
+        eprintln!(
+            "{:>10} PC {:06X} SR {:04X} D0 {:08X} D1 {:08X} D2 {:08X} D3 {:08X} A7 {:08X}",
+            cpu.clock,
+            cpu.pc,
+            cpu.sr,
+            cpu.d[0],
+            cpu.d[1],
+            cpu.d[2],
+            cpu.d[3],
+            if cpu.sr & 0x2000 != 0 {
+                cpu.ssp
+            } else {
+                cpu.usp
+            }
+        );
+        c.step();
+    }
+    let t = c.cpu.clock;
+    c.sys.sync(t);
+}
+
+/// バスの警告が増えたら出す（ホストの表示。仮想機は変えない）。
+fn report(c: &Console, seen: &mut (u64, u64)) {
+    let l = &c.sys.log;
+    if l.bus_errors != seen.0 {
+        if let Some((addr, w)) = l.last_bus_error {
+            eprintln!(
+                "バスエラー {} 回（最後は {addr:06X} の{}）",
+                l.bus_errors,
+                if w { "書込み" } else { "読出し" }
+            );
+        }
+        seen.0 = l.bus_errors;
+    }
+    if l.doc_rule_warnings != seen.1 {
+        if let Some(addr) = l.last_doc_rule {
+            eprintln!(
+                "DOC の窓の規約（DR-030）に反した命令 {} 回（最後は {addr:06X}）",
+                l.doc_rule_warnings
+            );
+        }
+        seen.1 = l.doc_rule_warnings;
+    }
+}
+
 fn main() {
     let a = parse_args();
     let mut c = build_console(&a);
+    let mut seen = (0, 0);
+    if a.trace > 0 {
+        trace(&mut c, a.trace);
+    }
     let mut buf = vec![0u32; VIEW_W * VIEW_H];
 
     if a.headless {
@@ -346,6 +403,7 @@ fn main() {
         let mut pcm = Vec::new();
         for _ in 0..n {
             c.run_frame();
+            report(&c, &mut seen);
             if a.wav.is_some() {
                 pcm.append(&mut c.sys.audio_out);
             } else {
@@ -404,6 +462,7 @@ fn main() {
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {
             break;
         }
+        report(&c, &mut seen);
         frames += 1;
         if a.frames.is_some_and(|n| frames >= n) {
             break;
