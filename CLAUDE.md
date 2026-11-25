@@ -102,6 +102,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 層構成：`core`（時刻・イベント・バス・信号線・IRQ・trace・snapshot）／`chips`／`board`（アドレスマップ・Data Fabric・ポートアダプタ・映像音響経路）／`host`／`SDK`／`tests`。
 - 各クロック領域は整数または有理数の時刻で独立に管理する。core 層の `time` の単位（1/15.12 GHz）で、4 つの発振源の周期がすべて整数になる。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。
 - MAMEの既存実装（68000、HD63484、TMS32010、ES5503、MSM5205、ACIA）を参照してよい。コードは写さず、台帳に書き起こした式とタイミングから書く（V3 の独立性のため、DR-040）。
+- ファームウェアと SDK（Python 3 の標準ライブラリだけ）：`py firmware/charrom/build.py`（文字 ROM）、`py firmware/boot/build.py`（Boot ROM）。ビルドの結果は `firmware/*/build/` でリポジトリに入れない。ホストと board 層の起動の試験（`console_boot.rs`）はこれを読み、なければ飛ばす。試験は `py -m unittest discover -s sdk/m68kasm` と `py -m unittest discover -s firmware`。BIOS が約束することは `sdk/docs/bios-abi.md`（DR-057）。
 - 仮想機が停止するのは許容するが、PCアプリは停止させない。ホスト側の安全層（音声リミッタ、DC除去、表示保持）は仮想機の挙動を変えない別層にする。
 - 開発段階：0 仕様・資料 → 1 Chip sandbox → 2 Data Fabric → 3 Console → 4 AV/HCI → 5 PCB/拡張。各段階の合格条件は仕様書§12の表を参照。
 - 検証目標：正常系はビット列一致（V2）と独立実装との比較（V3）。

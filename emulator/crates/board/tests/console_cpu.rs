@@ -35,7 +35,7 @@ fn rom_with_vblank_counter() -> Vec<u8> {
         (0x88, 0x2703),
         (0x8A, 0x00C0),
         (0xCA, 0x0040),
-        (0x04, 0xC020),
+        (0x04, 0xC008),
     ] {
         prog.extend_from_slice(&[0x32BC, r, 0x337C, v, 0x0002]); // MOVE.W #r,(A1)；MOVE.W #v,2(A1)
     }

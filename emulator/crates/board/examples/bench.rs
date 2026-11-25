@@ -17,7 +17,7 @@ fn with_cpu(doc: bool) {
         (0x88, 0x2703),
         (0x8A, 0x00C0),
         (0xCA, 0x0040),
-        (0x04, 0xC020),
+        (0x04, 0xC008),
     ] {
         prog.extend_from_slice(&[0x32BC, r, 0x337C, v, 0x0002]);
     }
@@ -52,7 +52,7 @@ fn main() {
             (0x88, 0x2703),
             (0x8A, 0x00C0),
             (0xCA, 0x0040),
-            (0x04, 0xC020),
+            (0x04, 0xC008),
         ] {
             s.write(t, 0x20_0000, fc::SUPERVISOR_DATA, Size::Word, r);
             t += 10;

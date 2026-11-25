@@ -549,7 +549,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 
 ### 本体のバス（段階 3）
 
-試験は `emulator/crates/board/tests/console.rs`（68000 のコアを使わず、試験がバスサイクルを直接出す）と `console_cpu.rs`（68000 のコアで手で組んだ ROM を動かす）。期待値は仕様書 §05・§09、DR-016・DR-024・DR-026〜DR-028・DR-052・DR-053、台帳 HD68000.md §2.5、host-acrtc-interface.md §5、HD63484.md §3.4・§4.5 からの手計算。
+試験は `emulator/crates/board/tests/console.rs`（68000 のコアを使わず、試験がバスサイクルを直接出す）、`console_cpu.rs`（68000 のコアで手で組んだ ROM を動かす）、`console_boot.rs`（`firmware/` の Boot ROM で起動する）。ACRTC の案B の OMR は台帳 §3.4 の $C008（GAI＝000）。以前の試験は $C020（GAI＝010）を使っていた。期待値は仕様書 §05・§09、DR-016・DR-024・DR-026〜DR-028・DR-052・DR-053、台帳 HD68000.md §2.5、host-acrtc-interface.md §5、HD63484.md §3.4・§4.5 からの手計算。
 
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
@@ -572,4 +572,5 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | CPU で起動 | `the_cpu_boots_from_rom_and_counts_vblanks` | リセットで SSP と PC を読み、ACRTC の案B を設定し、VBlank ごとにレベル 6 のオートベクタで数える（数はフレームの数 ±1、IACK と同じ） | 合格 |
 | CPU のバスエラー | `an_unassigned_address_takes_the_bus_error_vector` | 割り当てのない番地でベクタ 2 へ。7 語のフレーム | 合格 |
 | DR-030 の警告 | `doc_read_modify_write_is_warned` | CLR.B で DOC の窓を読んで書くと 1 回数え、MOVE.B の書込みは数えない | 合格 |
+| Boot ROM で起動 | `console_boot.rs` の `the_boot_rom_runs_with_the_doc_board`、`..._without_the_doc_board` | `firmware/` で組んだ Boot ROM と文字 ROM で 60 フレーム：CPU が止まらない、バスエラーはカートリッジを調べる $400000 の 1 回だけ、DR-030 の警告なし、表示が動いて 2 色以上、IACK 50 回以上、音が無音でない。ROM がなければ飛ばす | 合格（DOC あり・なし） |
 | 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定） |
