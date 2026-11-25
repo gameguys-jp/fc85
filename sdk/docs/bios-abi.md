@@ -17,6 +17,7 @@
 | アセンブラ | [sdk/m68kasm/](../m68kasm/)（Python 3 の標準ライブラリだけ。§10） |
 | ヘッダ | [fc85.inc](../include/fc85.inc)（MMIO。仕様書 §05・§06・§09 と DR の写し）、[bios.inc](../include/bios.inc)（この文書の約束） |
 | 動かし方 | 両方を組んでから、`emulator/` で `cargo run --release -p fc85-host`。ホストは既定で `firmware/` のビルド結果を読む |
+| 試験 | `python -m unittest firmware/test_firmware.py`（イメージの形）。動作はエミュレータで見る（§08） |
 | 版 | BIOS の版 1（`BIOS_VERSION`＝$0001。ROM の $000480 にも置く）[P] |
 
 ## 02　起動の順
