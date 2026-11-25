@@ -1,6 +1,6 @@
 # エミュレータ
 
-**v0.7**  
+**v0.8**  
 2026年11月25日
 
 > 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
@@ -11,7 +11,7 @@
 |---|---|
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
-| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ（DOC のポートを除く）も V2。全体は V0→V2、その後 V3（独立実装との比較） |
+| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM のアダプタ（DOC と DSP のポートを除く）も V2。全体は V0→V2、その後 V3（独立実装との比較） |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -20,9 +20,9 @@
 
 | 層（仕様書 §12） | crate | 状況 |
 |---|---|---|
-| core | 未作成 | 段階 2 の後半で作る（クロック領域ごとの時刻、イベント、trace、snapshot）。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
+| core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンまで。表示はまだ） |
-| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）。DOC のポート、ポートアダプタはまだ |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）。DOC のポートと DSP のアダプタはまだ |
 | host | 未作成 | 表示・音声・操作 UI のライブラリは未定（SDL3、egui が候補） |
 
 ### 約束
@@ -58,7 +58,7 @@
 | 回路 | 段階 2 の範囲（仕様書 §12） | 状況 |
 |---|---|---|
 | Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 はまだ |
-| ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。FIFO の向こう側のアダプタ（DSP、MSM5205、本体 DAC）と、Temporal RAM の CPU 側のレジスタはまだ |
+| ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ、ブリッジと Temporal RAM の CPU 側のレジスタはまだ |
 
 ## 03　仕様との差
 
@@ -228,6 +228,33 @@
 | DONE と COUNT（DR-022） | port 1 のアクセスが終わったとき、DONE の有無と、要素が最後か（COUNT の桁上げ）が食い違えば ERROR にし、時間切れと同じくチャネルを止める（書いていない要素は捨てる）。DONE は `PortReply::Last` で渡す | DR-022 は ERROR にするとだけ書く [P] | COUNT が矩形より大きいと、DONE の付いた最後の語も書かれない |
 | ACRTC の VRAM | 64K 語。ACRTC の 20 bit の語番地の下位 16 bit を使い、上は折り返す | 仕様書 §05 は 128 KiB とだけ書く [V] | — |
 
+### 時刻（core）
+
+コードは `emulator/crates/core/src/time.rs`。仕様書 §12 の「各クロック領域は整数または有理数の時刻で独立に管理する」を、1 つの整数の単位で行う。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 時間の単位 | 1 単位＝1/15.12 GHz（約 66.1 ps）。16 MHz は 945、8 MHz は 1890、21.47727 MHz は 704、ACRTC の 2CLK は 2816、20 MHz は 756、DSP の命令サイクルは 3024、384 kHz は 39375、DOC の E は 15120、スロットは 3780 | 4 つの発振源（DR-003）の周期がすべて整数になる最小の単位。21.47727 MHz は 945/44 MHz（6fsc）とする | u64 であふれるまで約 1.2×10⁹ 秒 |
+| クロック | `Clock` は周期と次の立上りの時刻を持つ。周期は途中で変えられる（外部クロックのジャンパ。DR-035） | — | 水晶の誤差とずれは扱わない |
+| 進め方 | 今は Data Fabric のスロットが主で、`Ports::run_slot` が各回路を 1 スロットずつ進める | CPU をまだつないでいない | 段階 3 で、CPU とイベントの順を core に移す |
+
+### 音声クロック・本体 DAC・ADPCM のアダプタ
+
+コードは `emulator/crates/board/src/audio.rs`（音声クロック、本体 DAC）と `adpcm.rs`（ADPCM のアダプタ）。動作は DR-017、DR-018、DR-019、DR-035、台帳 MSM5205.md §3・§4.6 に従った。
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 音声クロック（DR-018） | 8 MHz を N で割る。N＝0 は 4096 として数える。N の書換えは次の拍から効く。拍の出力（TRIGGER 3）は入力の 2 クロック High | 分周器の作りは仕様にない [P]。N＝0 は [V] | N が 2 以下では High のままで、トリガの立上りが出ない [V] |
+| 本体 DAC（DR-019） | 拍ごとに port 2 の FIFO から 1 語を取り込む。空なら保ち、UNDERRUN を記録する。DOC 子基板があれば読まない。電源投入時のラッチは 0 | DR-019 (2)(3)。初期値は [V] | — |
+| FIFO の受け渡しの時刻 | 本体 DAC と ADPCM のアダプタの取り出しは、スロットの頭（Fabric のアクセスの前）にまとめる | 簡単のため [P] | ずれは 1 スロット（250 ns）以内 |
+| ADPCM のニブル（DR-017 (2)(3)） | V̄C̄K̄ の立上りで次のニブルを D3〜D0 に置く（取込みは立下りの 6 クロック後）。byte の 1 つ目のニブルで FIFO から取り出す。既定は上位から。空なら 0x08（0000 と 1000 が交互）で UNDERRUN。置換しない Bend では、FIFO の出力に残った前の byte を使う | 立上りで置くのは [P]（台帳 §3.2 の取込みの時刻に間に合う） | — |
+| ADPCM の RESET | 電源投入時は CTRL の RESET＝1。RESET の間は FIFO から取り出さず、解除の後と PORT_RESET の bit 5 の後は、byte の 1 つ目のニブルから始める | [P] | 解除の直後の 1 回は、前に置いたニブル（電源投入時は 0）を取り込むことがある |
+| 半分空きの割込み（DR-017 (4)） | FIFO の残りが 32 byte 以下の間のレベル | 「半分空いたら」をレベルと読んだ [P] | 書き足して 33 byte 以上になると下がる |
+| S1＝S2＝H | V̄C̄K̄ を駆動しないので、取込みは起きない | Bend のモード。外から V̄C̄K̄ を入れる回路は決めていない [V] | — |
+| ブリッジのレジスタ | CTRL を構造体の値（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）で持つ。CPU から見た番地とビット（0x230000〜）は段階 3 で決める | CPU をつないでいない | — |
+| ポートの向こうのトリガ（DR-018） | `Ports::trigger_levels` が TRIGGER 3（音声クロック）と 5（V̄C̄K̄）のレベルを出し、`Fabric::set_trigger_inputs` の値と OR をとる。スロットの終わりのレベルを取り込む | — | 250 ns 以上のパルスは、必ず 1 回取り込まれる |
+| トリガの発生源の選択（fabric.md §06） | 選択器（74LS151）が同期化の前にあるので、選んだ入力が High なら立上りとして伝わる。START の直前に TRIGGER を書くと、最初の要素がすぐ始まる | 回路どおり [P] | ソフトは TRIGGER を書いてから 3 スロット以上あけて START する |
+
 ## 04　テストと判定基準
 
 ### MSM5205
@@ -328,3 +355,16 @@
 | port 1 | `dwt_from_staging_ram_fills_the_rectangle`、`drd_to_staging_ram_reads_the_rectangle`、`one_word_takes_six_or_seven_slots_from_temporal_ram`、`count_larger_than_the_rectangle_is_an_error`、`count_smaller_than_the_rectangle_is_an_error_and_abt_clears_the_acrtc`、`the_channel_stalls_until_the_acrtc_requests`、`stop_in_the_middle_of_a_port1_access_releases_dack`、`snapshot_round_trip_mid_port1_transfer` | DWT・DRD の矩形を COUNT＝x·y で運ぶ（DR-022）。1 回のアクセスは 3 スロット、1 語は Staging RAM から 6 か 8、Temporal RAM から 6〜7 スロット（§03 の時刻からの計算。2CLK の位相を 7 通りに変える）。COUNT が大きくても小さくても ERROR、ABT で ACRTC が止まる。DREQ まで STALL。STOP で DACK を戻す。途中で保存して戻せる | 合格 |
 
 期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。fabric.md の順序と状態の PAL の式ができたら、この試験のスロットの列と突き合わせる（OI-050 (1)）。
+
+### 音声クロック・本体 DAC・ADPCM
+
+試験は `emulator/crates/board/tests/audio.rs`、時刻は `emulator/crates/core/src/time.rs` の単体試験。期待値は DR-017、DR-018、DR-019、台帳 MSM5205.md §3 と、そこからの手計算で取る。
+
+| 分野 | テスト | 判定基準 | 状況 |
+|---|---|---|---|
+| 時刻 | `periods_are_exact`、`clock_edges_within_a_slot` | 各クロックの周期が単位で割り切れる。1 秒は 4,000,000 スロット。立上りの列と周期の変更 | 合格 |
+| 音声クロック | `audio_clock_divides_8mhz_by_n_from_the_next_beat` | N＝0 の最初の拍は 2048 スロット目、N＝100 で 50 スロットごと（8 MHz÷N）。入力を 4 MHz にすると倍（DR-035） | 合格 |
+| 本体 DAC | `main_dac_takes_one_word_per_beat_and_holds_when_empty`、`the_fabric_keeps_the_dac_fifo_filled_from_staging_ram` | 拍ごとに 1 語、上位 byte が L。空なら保って UNDERRUN（DR-019）。Fabric が満杯の FIFO で STALL しながら 100 語を順に渡し、UNDERRUN が出ない | 合格 |
+| ADPCM | `adpcm_uses_the_high_nibble_first_and_0x08_when_empty`、`adpcm_low_first_and_no_replace`、`adpcm_capture_period_follows_s1_s2`、`adpcm_reset_leaves_the_fifo_alone`、`adpcm_half_empty_irq_is_a_level` | 0x12・0x34 から 1、2、3、4 の後に 0、8、0、8。下位から・置換しないで 2、1、4、3、4、3。S1・S2 で 500・667・1000 スロット（384 kHz÷48・64・96）。RESET の間は取り出さない。32 byte 以下で割込み（DR-017） | 合格 |
+| トリガ | `trigger3_paces_one_element_per_beat`、`trigger5_follows_vck`、`selecting_a_high_source_right_before_start_counts_as_an_edge` | 拍（20 スロットごと）と V̄C̄K̄（500 スロットごと）に 1 要素。High の入力を選んで直後に START すると、最初の要素がすぐ始まる | 合格 |
+| 保存 | `snapshot_round_trip_with_audio_running` | 音声クロック、本体 DAC、ADPCM が動いている途中で保存して戻すと、同じスロットの列と状態になる | 合格 |

@@ -4,9 +4,9 @@
 //! `docs/parts/host-acrtc-interface.md` §2.3・§7、DMA の手順は DR-022 と台帳 HD63484.md。
 //!
 //! 模型：
-//! - 時刻の単位は、1 スロット（250 ns）の 1/3780。16 MHz の立上り（q0〜q3）は 945 ごと、ACRTC の 2CLK
-//!   （21.47727 MHz÷4＝5.369318 MHz）の立上りは 2816 ごと（4 MHz のスロットとの比 945/704 から）。
-//!   2 つの発振源の位相は `set_phase` で決める（既定は 0）。実機の水晶のずれは扱わない。
+//! - 時刻は core 層の単位（1 スロットが 3780）。16 MHz の立上り（q0〜q3）は 945 ごと、ACRTC の 2CLK
+//!   （21.47727 MHz÷4＝5.369318 MHz）の立上りは 2816 ごと。2 つの発振源の位相は `set_phase` で決める
+//!   （既定は 0）。実機の水晶のずれは扱わない。
 //! - Fabric の出力（DACK、R/W、データ）は、アクセスを始めるスロットの頭（P1A のクロック）の 20 ns 後に
 //!   変わる [P]。DACK を戻すのも、P1A のクロックの 20 ns 後。
 //! - ACRTC は、立上りの 40 ns 前の DACK を見る（tDAKS）。DREQ は立上りの 50 ns 後（tDRQD2）、DTACK は
@@ -20,26 +20,21 @@
 
 use crate::fabric::{Access, Dir, PortReply};
 use fc85_chips::hd63484::{Hd63484, Vram};
+use fc85_core::time::{Clock, PERIOD_2CLK, PERIOD_16M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
-/// 1 スロットの時刻の単位の数。
-pub const UNITS_PER_SLOT: u64 = 3780;
-/// ACRTC の 2CLK の 1 周期（186.24 ns）。
-pub const UNITS_PER_2CLK: u64 = 2816;
-/// 16 MHz の 1 周期（62.5 ns）。
-const UNITS_PER_Q: u64 = 945;
 /// Fabric の出力の遅れ（20 ns）。
-const T_OUT: u64 = 302;
+const T_OUT: Time = 302;
 /// tDAKS（40 ns）。
-const T_DAKS: u64 = 605;
+const T_DAKS: Time = 605;
 /// tDRQD2（50 ns）。
-const T_DRQD: u64 = 756;
+const T_DRQD: Time = 756;
 /// tDDTZL（70 ns）。
-const T_DDTZL: u64 = 1058;
+const T_DDTZL: Time = 1058;
 /// tDND（50 ns）。
-const T_DND: u64 = 756;
+const T_DND: Time = 756;
 /// 同期化の FF のセットアップ（10 ns）。
-const T_SETUP: u64 = 151;
+const T_SETUP: Time = 151;
 
 /// ACRTC の VRAM：128 KiB（64K 語。HM4864A×16、仕様書 §05）。ACRTC の 20 bit の語番地のうち
 /// 下位 16 bit を使い、上は折り返す [V]。
@@ -72,15 +67,15 @@ impl Vram for VramMem {
 struct Pin {
     level: bool,
     prev: bool,
-    at: u64,
+    at: Time,
 }
 
 impl Pin {
-    fn value(&self, t: u64) -> bool {
+    fn value(&self, t: Time) -> bool {
         if t >= self.at { self.level } else { self.prev }
     }
 
-    fn set(&mut self, level: bool, t: u64) {
+    fn set(&mut self, level: bool, t: Time) {
         if level != self.level {
             self.prev = self.level;
             self.level = level;
@@ -94,10 +89,10 @@ impl Pin {
 pub struct AcrtcBridge {
     pub acrtc: Hd63484,
     pub vram: VramMem,
-    /// 次に進めるスロットの頭の時刻。
-    now: u64,
-    /// 次の 2CLK の立上りの時刻。
-    next_edge: u64,
+    /// 次のスロットの頭の時刻。
+    now: Time,
+    /// 2CLK。
+    clk: Clock,
     dack: Pin,
     /// DMA の R/W（H が ACRTC への書込み）とデータバス。DACK を戻した後も保つ。
     bus_write: bool,
@@ -129,7 +124,7 @@ impl AcrtcBridge {
             acrtc: Hd63484::new(),
             vram: VramMem::new(),
             now: 0,
-            next_edge: 0,
+            clk: Clock::new(PERIOD_2CLK, 0),
             dack: Pin::default(),
             bus_write: false,
             bus_data: 0,
@@ -147,8 +142,8 @@ impl AcrtcBridge {
     }
 
     /// 次の 2CLK の立上りを、次のスロットの頭から `units` 後にする（0〜2815）。
-    pub fn set_phase(&mut self, units: u64) {
-        self.next_edge = self.now + units % UNITS_PER_2CLK;
+    pub fn set_phase(&mut self, units: Time) {
+        self.clk.set_next(self.now + units % PERIOD_2CLK);
     }
 
     /// RDY1：中ほどで取り込んだ、同期化した DREQ。
@@ -178,10 +173,9 @@ impl AcrtcBridge {
         }
     }
 
-    /// 1 スロット進める。`starting` は、このスロットで始まる port 1 のアクセス。
-    pub fn run_slot(&mut self, starting: Option<&Access>) {
-        let t0 = self.now;
-        let end = t0 + UNITS_PER_SLOT;
+    /// `t0` から 1 スロット進める。`starting` は、このスロットで始まる port 1 のアクセス。
+    pub fn run_slot(&mut self, t0: Time, starting: Option<&Access>) {
+        let end = t0 + SLOT;
         self.reply = None;
         if let Some(a) = starting {
             self.active = true;
@@ -194,23 +188,23 @@ impl AcrtcBridge {
         }
         let mut q = 0;
         loop {
-            let ff = (q < 4).then(|| t0 + q * UNITS_PER_Q);
-            let edge = (self.next_edge < end).then_some(self.next_edge);
+            let ff = (q < 4).then(|| t0 + q * PERIOD_16M);
+            let edge = (self.clk.next() < end).then(|| self.clk.next());
             match (ff, edge) {
                 (None, None) => break,
-                (Some(f), Some(e)) if e < f => self.acrtc_edge(e),
+                (Some(f), Some(e)) if e < f => self.acrtc_edge(),
                 (Some(f), _) => {
                     self.ff_edge(f, q);
                     q += 1;
                 }
-                (None, Some(e)) => self.acrtc_edge(e),
+                (None, Some(_)) => self.acrtc_edge(),
             }
         }
         self.now = end;
     }
 
     /// 16 MHz の立上り：同期化の FF と P1A。
-    fn ff_edge(&mut self, t: u64, q: u64) {
+    fn ff_edge(&mut self, t: Time, q: Time) {
         let s = t.saturating_sub(T_SETUP);
         let dtack2 = self.dtack_s[1];
         let done = self.done_ff;
@@ -233,13 +227,15 @@ impl AcrtcBridge {
     }
 
     /// 2CLK の立上り：ACRTC を 1 周期進める。
-    fn acrtc_edge(&mut self, e: u64) {
+    fn acrtc_edge(&mut self) {
+        let Some(e) = self.clk.take_before(Time::MAX) else {
+            return;
+        };
         let dack = self.dack.value(e.saturating_sub(T_DAKS));
         self.acrtc.set_dack(dack, self.bus_write, self.bus_data);
         self.acrtc.tick(&mut self.vram);
         self.dreq.set(self.acrtc.dreq(), e + T_DRQD);
         self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL);
         self.done.set(self.acrtc.done(), e + T_DND);
-        self.next_edge = e + UNITS_PER_2CLK;
     }
 }

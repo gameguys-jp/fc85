@@ -1,6 +1,6 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.3**  
+**v0.4**  
 2026年11月25日
 
 > 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)
@@ -235,7 +235,7 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 | STS0・1（20R8A） | トリガの同期化の 2 段目、前の値、保留、MISS、DONE、ERROR、STALL、ARM | U36 の 1 段目、即時（TRIGGER の発生源が 0）、EACH、STATUS の書込み（W1C：ID1・ID3・ID4）、CHS からの完了・ERROR、START |
 
 - START の検査：再設定の 1 スロット目で読出し元を、2 スロット目で書込み先を、ATR（DOC の有無で OKD か OKN）と U33 で調べる。3 スロット目で、どちらかが使えなければ ERROR、COUNT の設定値が 0（CY＝0）なら DONE にする（DR-046 (9)）。
-- トリガ：U34・U35（74LS151）が TRIGGER の発生源を選び、U36（74LS74）と STS の 2 段で同期化し、立上りで 1 件だけ保留する。保留中の立上りは MISS（DR-018、DR-046 (8)）。発生源 6・7 の入力は Low に固定し、トリガは来ない。
+- トリガ：U34・U35（74LS151）が TRIGGER の発生源を選び、U36（74LS74）と STS の 2 段で同期化し、立上りで 1 件だけ保留する。保留中の立上りは MISS（DR-018、DR-046 (8)）。発生源 6・7 の入力は Low に固定し、トリガは来ない。選択器が同期化の前にあるので、TRIGGER の発生源を替えたとき、選んだ入力が High なら立上りとして伝わる。チャネルが止まっている間の立上りは数えないので、TRIGGER を書いてから 3 スロット以上あけて START する [P]（エミュレータの模型で確かめた。[emulator.md](../impl/emulator.md) §03）。
 - 割込み：IRQ ＝ IRQ_EN0∧(DONE0∨ERROR0) ∨ IRQ_EN1∧(DONE1∨ERROR1) をつなぎのゲートで作り、レベル 3 へ（DR-028）。
 
 ## 07　CPU のインタフェース

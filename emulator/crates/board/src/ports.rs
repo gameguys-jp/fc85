@@ -11,14 +11,18 @@
 //! - port 10：音声入力の FIFO（64×8。拡張基板があるとき）。
 //!
 //! - port 1：ACRTC の DMA。ACRTC と VRAM は `acrtc`（`AcrtcBridge`）が持ち、スロットごとに進める。
+//! - 音声クロック（TRIGGER 3）と、DOC 子基板がないときの本体 DAC（port 2 の FIFO を読む）。`audio`。
+//! - ADPCM のアダプタ（port 5 の FIFO を MSM5205 へ。TRIGGER 5 の V̄C̄K̄）。`adpcm`。
 //!
 //! まだないもの（`ready` は 0、アクセスは何もしない）：DOC 子基板の port 2、port 8（Capture RAM、[O]）、
-//! port 11〜15（拡張）。FIFO の向こう側（DSP、MSM5205、本体 DAC）のアダプタもまだなく、試験や上の層が
-//! FIFO を直接読み書きする。
+//! port 11〜15（拡張）。DSP のアダプタもまだなく、試験や上の層が port 3・4 の FIFO を直接読み書きする。
 
 use crate::acrtc::AcrtcBridge;
+use crate::adpcm::AdpcmPort;
+use crate::audio::{AudioClock, MainDac};
 use crate::fabric::{Access, Dir, PortReply, Ports};
 use crate::fifo::Fifo;
+use fc85_core::time::{SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 /// Temporal RAM（HM6264×8、8 bit。仕様書 §05、DR-031）。
@@ -83,6 +87,14 @@ pub struct FabricPorts {
     pub audio_n: u16,
     /// port 1：ACRTC と VRAM、ブリッジと P1A。
     pub acrtc: AcrtcBridge,
+    /// 音声クロック（TRIGGER 3）。
+    pub audio: AudioClock,
+    /// 本体 DAC（DOC 子基板がないとき port 2 の FIFO を読む）。
+    pub main_dac: MainDac,
+    /// ADPCM のアダプタ（port 5 の FIFO を読む）。
+    pub adpcm_port: AdpcmPort,
+    /// 次のスロットの頭の時刻。
+    now: Time,
 }
 
 impl FabricPorts {
@@ -100,6 +112,10 @@ impl FabricPorts {
             modules: 0,
             audio_n: 0,
             acrtc: AcrtcBridge::new(),
+            audio: AudioClock::new(),
+            main_dac: MainDac::new(),
+            adpcm_port: AdpcmPort::new(),
+            now: 0,
         }
     }
 
@@ -136,7 +152,21 @@ impl Default for FabricPorts {
 
 impl Ports for FabricPorts {
     fn run_slot(&mut self, starting: Option<&Access>) {
-        self.acrtc.run_slot(starting.filter(|a| a.port == 1));
+        let t0 = self.now;
+        let end = t0 + SLOT;
+        self.acrtc.run_slot(t0, starting.filter(|a| a.port == 1));
+        let beats = self.audio.run(end);
+        if !self.doc {
+            for _ in 0..beats {
+                self.main_dac.beat(&mut self.dac);
+            }
+        }
+        self.adpcm_port.run(end, &mut self.adpcm);
+        self.now = end;
+    }
+
+    fn trigger_levels(&self) -> u8 {
+        (u8::from(self.audio.level()) << 3) | (u8::from(self.adpcm_port.vck()) << 5)
     }
 
     fn ready(&self, port: u8, dir: Dir) -> bool {
@@ -225,6 +255,7 @@ impl Ports for FabricPorts {
         }
         if on(5) {
             self.adpcm.reset();
+            self.adpcm_port.restart_byte();
         }
         if on(6) {
             self.temporal.wptr = 0;
@@ -239,5 +270,6 @@ impl Ports for FabricPorts {
 
     fn write_audio_n(&mut self, n: u16) {
         self.audio_n = n;
+        self.audio.set_n(n);
     }
 }

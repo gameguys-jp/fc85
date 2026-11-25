@@ -7,12 +7,21 @@ name = "fc85-board"
 version = "0.1.0"
 dependencies = [
  "fc85-chips",
+ "fc85-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "fc85-chips"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fc85-core"
 version = "0.1.0"
 dependencies = [
  "serde",

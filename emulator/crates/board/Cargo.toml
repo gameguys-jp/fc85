@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 serde.workspace = true
+fc85-core = { path = "../core" }
 fc85-chips = { path = "../chips" }
 
 [dev-dependencies]

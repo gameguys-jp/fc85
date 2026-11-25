@@ -2,9 +2,9 @@
 //! 期待値は仕様書 §06、DR-022、`docs/parts/host-acrtc-interface.md` §2.3・§7 と、`fc85_board::acrtc` の
 //! 模型の前提（ピンの遅れ）からの手計算で取る。
 
-use fc85_board::acrtc::UNITS_PER_2CLK;
 use fc85_board::fabric::{Decision, Fabric, HostReply, Phase, SlotRecord};
 use fc85_board::ports::FabricPorts;
+use fc85_core::time::PERIOD_2CLK;
 
 // Data Fabric のチャネルのオフセット（仕様書 §06）。
 const SRC: u16 = 0x00;
@@ -246,7 +246,7 @@ fn drd_to_staging_ram_reads_the_rectangle() {
 fn one_word_takes_six_or_seven_slots_from_temporal_ram() {
     // Temporal RAM（逐次、S のスロットを待たない）から。位相をずらしても、port 1 のアクセスは 3 スロットで、
     // 要素は 6 か 7 スロットに 1 つ（次の DREQ の同期化が、中ほどの取込みに間に合うかで決まる）
-    for phase in (0..UNITS_PER_2CLK).step_by(400) {
+    for phase in (0..PERIOD_2CLK).step_by(400) {
         let mut r = Rig::new();
         r.p.acrtc.set_phase(phase);
         for i in 0..16 {

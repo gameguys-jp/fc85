@@ -188,6 +188,11 @@ pub trait Ports {
     /// このスロットの間、ポートの向こうの回路（ACRTC のつなぎなど）を進める。スロットの頭の判断の後に
     /// 毎スロット呼び、このスロットで始まるアクセスを渡す。準備の信号とアクセスの応答は、この後に問う。
     fn run_slot(&mut self, _starting: Option<&Access>) {}
+    /// ポートの向こうの回路が出すトリガのレベル（bit n が発生源 n。DR-018）。スロットの終わりに取り込む。
+    /// `Fabric::set_trigger_inputs` の値と OR をとる。
+    fn trigger_levels(&self) -> u8 {
+        0
+    }
     /// 準備の信号（RDY の入力）。スロットの中ほどで、このスロットのアクセスより前の状態を返す。
     fn ready(&self, port: u8, dir: Dir) -> bool;
     /// アクセスを始める。port 1 と DOC の port 2 のほかは、すぐ `Done` を返す。
@@ -770,8 +775,9 @@ impl Fabric {
                 self.block_end(t.ch as usize);
             }
         }
+        let trig = self.trig_in | ports.trigger_levels();
         for c in &mut self.ch {
-            c.sync_trigger(self.trig_in);
+            c.sync_trigger(trig);
         }
         let rec = SlotRecord {
             slot: self.slot,

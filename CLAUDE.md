@@ -94,13 +94,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## エミュレータの実装方針（仕様書§12、DR-040）
 
-- Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（今は chips 層の `fc85-chips` と board 層の `fc85-board`）。ホストのライブラリは未定（SDL3、egui が候補）。
+- Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（今は core 層の `fc85-core`、chips 層の `fc85-chips`、board 層の `fc85-board`）。ホストのライブラリは未定（SDL3、egui が候補）。
 - コマンドは `emulator/` で実行する：`cargo test`（全部）、`cargo test -p fc85-chips --test <IC> <名前>`（1 件。例：`--test tms32010`。board 層は `cargo test -p fc85-board --test fabric <名前>`）、`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`。コミットの前に fmt・clippy・test を通す。
 - IC のコアは `crates/chips/src/<IC>.rs`、試験は `crates/chips/tests/<IC>.rs`。コアは IC のクロック 1 つを `tick` の 1 回とし（TMS32010 は命令サイクル＝CLKOUT の 1 周期、ES5503 は DOC サイクル＝E の 1 周期、HD63484 は 2CLK の 1 周期）、外部ピンの入出力だけを見せる。IC の外のメモリ（波形 RAM、VRAM）はトレイトの向こうに置く。状態は serde で保存・復元できるようにする。
 - board 層の Data Fabric は `crates/board/src/fabric.rs`。`step_slot` の 1 回を 1 スロット（250 ns）とし、ポートの外側は `Ports` トレイトの向こうに置く。ポートの向こうの回路（ACRTC のつなぎ `acrtc.rs` など）は `Ports::run_slot` で毎スロット進める。スロットの列（`SlotRecord`）は、fabric.md の PAL の式を書くときの基準になるので、変えるときは fabric.md と emulator.md §03 も直す。
 - 試験の期待値は台帳（`docs/parts/`）の計算から取り、どの節の値かを書く。台帳で [V] の動作の扱いは `docs/impl/emulator.md` §03 に書く。
 - 層構成：`core`（時刻・イベント・バス・信号線・IRQ・trace・snapshot）／`chips`／`board`（アドレスマップ・Data Fabric・ポートアダプタ・映像音響経路）／`host`／`SDK`／`tests`。
-- 各クロック領域は整数または有理数の時刻で独立に管理する。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。
+- 各クロック領域は整数または有理数の時刻で独立に管理する。core 層の `time` の単位（1/15.12 GHz）で、4 つの発振源の周期がすべて整数になる。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。
 - MAMEの既存実装（68000、HD63484、TMS32010、ES5503、MSM5205、ACIA）を参照してよい。コードは写さず、台帳に書き起こした式とタイミングから書く（V3 の独立性のため、DR-040）。
 - 仮想機が停止するのは許容するが、PCアプリは停止させない。ホスト側の安全層（音声リミッタ、DC除去、表示保持）は仮想機の挙動を変えない別層にする。
 - 開発段階：0 仕様・資料 → 1 Chip sandbox → 2 Data Fabric → 3 Console → 4 AV/HCI → 5 PCB/拡張。各段階の合格条件は仕様書§12の表を参照。

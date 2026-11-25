@@ -1,0 +1,12 @@
+[package]
+name = "fc85-core"
+description = "fc85 の時刻と共通の部品（仕様書 §12 の core 層）"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
