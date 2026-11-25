@@ -230,6 +230,8 @@ Temporal RAMは後年のフィールドメモリICではなくDRAM/SRAM＋独立
 | 7D80–7FFF | 予約 | 640 B |
 | 合計 | 32 KiB | 32,768 B |
 
+JIS78基準では8区（罫線素片32字）は空き枠で、2区にも空きがある。JIS83で記号39字・罫線素片32字・漢字4字が追加された [D]（[28] §01）。8区と2区の追加分はJIS83の差分ROMイメージで埋まる [P]。
+
 区点→第一水準字形offset = 0x1F80 + ((区−16)×94 + (点−1))×8。字形は1行1 byte、MSBが左。空き枠・未作成字は診断用プレースホルダと区別し、ROM生成時に状態を記録する。CPUの字形アドレスは0x010000+offset。
 
 旧JIS78の字形ROMを最終試作機の基準とし、新JIS83の配置・字形は差分ROMイメージとして保存する。双方の切替はエミュレータのROM差替え／仮想基板改造として提供し、1985年型に両方のROMが常時搭載されていたとはしない。実際の改正範囲・空き区点と字形は一次資料により再確認する。
@@ -427,5 +429,6 @@ DIP/SOP/LQFP等の手はんだ、QFN/LFCSP/BGAのPCBA・リフロー、変換基
 | [25] | 部品台帳 [baseline-1985.md](../parts/baseline-1985.md)。1985年の日本製機器の部品構成、68000の国内供給 |
 | [26] | 部品台帳 [review-digital.md](../parts/review-digital.md)。CPU・ACIA・DMA・グルー・FIFO・メモリ・パレットの見直し |
 | [27] | 部品台帳 [review-signal.md](../parts/review-signal.md)。DSP・映像ADC・エンコーダ・同期分離・アナログ部の見直し、現代の入手性 |
+| [28] | 出典台帳 [sources.md](../sources.md)。部品以外の史実（JIS C 6226 の改正、キャプテンシステム、Commodore の日本での生産、X1 の重ね合わせ、設計慣行の類例） |
 
 内部資料：Fictional Machines 基本構想・分類体系 v0.6、先行事例と制作案 v0.1、試作機の文字ROM フォントの試み v0.1、旧ハードウェア設計仕様書 v0.1（1990年前後版）、第一世代基本構想およびDesign Manifesto 1984 暫定案。決定記録は [decisions.md](../decisions.md)、物語は [story/main.md](../story/main.md)、未決の課題は [open-issues.md](../open-issues.md)。
