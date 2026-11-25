@@ -4,7 +4,7 @@
 //! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
-//! [--frames N] [--headless] [--dump out.ppm] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
+//! [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ]`
 //!
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
@@ -42,6 +42,7 @@ struct Args {
     frames: Option<u64>,
     headless: bool,
     dump: Option<String>,
+    wav: Option<String>,
     /// 外部クロック（Hz）：DOC、DSP、ADPCM、音声クロック。
     clocks: [Option<f64>; 4],
 }
@@ -56,6 +57,7 @@ fn parse_args() -> Args {
         frames: None,
         headless: false,
         dump: None,
+        wav: None,
         clocks: [None; 4],
     };
     let mut it = std::env::args().skip(1);
@@ -69,6 +71,7 @@ fn parse_args() -> Args {
             "--frames" => a.frames = it.next().and_then(|v| v.parse().ok()),
             "--headless" => a.headless = true,
             "--dump" => a.dump = it.next(),
+            "--wav" => a.wav = it.next(),
             "--doc-clock" => a.clocks[0] = it.next().and_then(|v| v.parse().ok()),
             "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
             "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
@@ -76,7 +79,7 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
-                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--doc-clock HZ] \
+                     [--scale N] [--frames N] [--headless] [--dump out.ppm] [--wav out.wav] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ]"
                 );
                 std::process::exit(0);
@@ -181,6 +184,31 @@ fn dump_ppm(path: &str, buf: &[u32]) {
 }
 
 // ---------------------------------------------------------------------- 音声
+
+/// 48 kHz・16 bit・ステレオの WAV に書く（headless で音を確かめる）。
+fn write_wav(path: &str, pcm: &[(i16, i16)]) {
+    let bytes = (pcm.len() * 4) as u32;
+    let mut d = Vec::with_capacity(44 + bytes as usize);
+    d.extend_from_slice(b"RIFF");
+    d.extend_from_slice(&(36 + bytes).to_le_bytes());
+    d.extend_from_slice(b"WAVEfmt ");
+    d.extend_from_slice(&16u32.to_le_bytes());
+    d.extend_from_slice(&1u16.to_le_bytes());
+    d.extend_from_slice(&2u16.to_le_bytes());
+    d.extend_from_slice(&AUDIO_RATE.to_le_bytes());
+    d.extend_from_slice(&(AUDIO_RATE * 4).to_le_bytes());
+    d.extend_from_slice(&4u16.to_le_bytes());
+    d.extend_from_slice(&16u16.to_le_bytes());
+    d.extend_from_slice(b"data");
+    d.extend_from_slice(&bytes.to_le_bytes());
+    for (l, r) in pcm {
+        d.extend_from_slice(&l.to_le_bytes());
+        d.extend_from_slice(&r.to_le_bytes());
+    }
+    if let Err(e) = std::fs::write(path, d) {
+        eprintln!("{path} に書けない: {e}");
+    }
+}
 
 type Ring = Arc<Mutex<VecDeque<(i16, i16)>>>;
 
@@ -315,13 +343,21 @@ fn main() {
 
     if a.headless {
         let n = a.frames.unwrap_or(60);
+        let mut pcm = Vec::new();
         for _ in 0..n {
             c.run_frame();
-            c.sys.audio_out.clear();
+            if a.wav.is_some() {
+                pcm.append(&mut c.sys.audio_out);
+            } else {
+                c.sys.audio_out.clear();
+            }
         }
         view(&c, &mut buf);
         if let Some(p) = &a.dump {
             dump_ppm(p, &buf);
+        }
+        if let Some(p) = &a.wav {
+            write_wav(p, &pcm);
         }
         println!(
             "{} フレーム、CPU {} クロック、バスエラー {}",
