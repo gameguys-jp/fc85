@@ -1,0 +1,17 @@
+[package]
+name = "fc85-host"
+description = "fc85 のホスト（仕様書 §12 の host 層）：窓、音声、入力"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fc85"
+path = "src/main.rs"
+
+[dependencies]
+fc85-core = { path = "../core" }
+fc85-chips = { path = "../chips" }
+fc85-board = { path = "../board" }
+minifb = "0.28"
+cpal = "0.15"

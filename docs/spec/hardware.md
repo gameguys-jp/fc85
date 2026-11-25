@@ -281,7 +281,7 @@ MIDIは1983年に規格化され、1985年のAtari STにも内蔵端子の例が
 
 | 0x260000からのoffset | レジスタ／用途 |
 |---|---|
-| 00 / 02 | PORT_A / PORT_B：16-bitデジタル状態（active-high論理値） |
+| 00 / 02 | PORT_A / PORT_B：16-bitデジタル状態（active-high論理値）。bit0 上、bit1 下、bit2 左、bit3 右、bit4 A、bit5 B、bit6 C、bit7 START、bit15–8 予約 [P]（DR-055） |
 | 04–12 | AXIS0–7：8個の16-bitレジスタ。初期は8-bitアナログ値を下位に格納 |
 | 14 / 16 | MIDI_STATUS / MIDI_DATA：ACIAの制御・状態、送受信データ、上位byte lane |
 | 18 | INPUT_IRQ_STATUS：bit0 PORT_Aの変化、bit1 PORT_Bの変化、bit2 MIDI受信、bit3 外部trigger [P]（DR-053）。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028） |
