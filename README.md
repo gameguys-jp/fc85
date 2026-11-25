@@ -39,7 +39,7 @@
 | 仕様 | [docs/spec/hardware.md](docs/spec/hardware.md)、基板と外形の見積り [docs/spec/board.md](docs/spec/board.md) |
 | 物語 | [docs/story/](docs/story/)：[本筋](docs/story/main.md)、[メーカーの出自](docs/story/company-origin.md)、[音源の差し替え](docs/story/sound-redesign.md)、[設計方式の由来](docs/story/architecture.md) |
 | 部品 | [docs/parts/](docs/parts/)：IC ごとの台帳、1985年の供給調査、部品の見直し |
-| デザイン | [docs/design/](docs/design/)：[書体（文字 ROM の字形）](docs/design/main.md)。製品名・筐体・ロゴ・UI は未確定 |
+| デザイン | [docs/design/](docs/design/)：[書体（文字 ROM の字形）](docs/design/main.md)、[筐体の外観の大枠](docs/design/enclosure.md)（[仮]）。製品名・ロゴ・UI・意匠の規則は未確定 |
 | 実装 | 未作成（エミュレータは未着手） |
 | 決定記録 | [docs/decisions.md](docs/decisions.md) |
 | 課題台帳 | [docs/open-issues.md](docs/open-issues.md) |
