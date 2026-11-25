@@ -17,7 +17,7 @@
 | 設計境界 | F1／T2:1985（適合は未検証）／D5・D6・D7。1985年末までに入手できた実在の部品と技術に限る。家庭用としての採算は成立条件にしない。Given：実在の IC と1985年の製造技術。Designed：IC 間の接続回路（Data Fabric）、アドレスマップ、BIOS、A/V 経路 |
 | 機械仕様 | Scope：Machine／System。L2〜L7／E3（目標）。異なる用途の実在 IC を独自の転送回路でつなぎ、映像・音響・文字・数値・信号を相互に扱う。詳細は [仕様書](docs/spec/hardware.md) |
 | SF前提 | 物理法則・技術水準からの逸脱はない。架空なのはメーカー、開発史、ES5503 を試作用に入手できた経緯（[DR-006](docs/decisions.md)） |
-| 実装・検証 | M1（PC エミュレータ）から始め、のちに実 IC・FPGA・PCB の混在へ。S2〜S4 重視。現状は MSM5205、TMS32010、ES5503、HD6850 のコアと、HD63484 のコア（描画と表示）、Data Fabric のスロットの模型と、ACRTC の DMA・音声クロック・本体 DAC・ADPCM・DSP のアダプタ・DOC 子基板の port 2・68000 から DOC へのブリッジ、本体のバス（アドレスの解読、待ち、バスエラー、割込み）と映像の出力段が V2（単体試験）。目標は全体の V2（正常系のビット列一致）、その後 V3／V4 |
+| 実装・検証 | M1（PC エミュレータ）から始め、のちに実 IC・FPGA・PCB の混在へ。S2〜S4 重視。現状は MSM5205、TMS32010、ES5503、HD6850、HD68000（SingleStepTests との照合 99.4%）のコアと、HD63484 のコア（描画と表示）、Data Fabric のスロットの模型と、ACRTC の DMA・音声クロック・本体 DAC・ADPCM・DSP のアダプタ・DOC 子基板の port 2・68000 から DOC へのブリッジ、本体のバス（アドレスの解読、待ち、バスエラー、割込み）と映像の出力段が V2（単体試験）。目標は全体の V2（正常系のビット列一致）、その後 V3／V4 |
 | フィクション | N3〜4。開発史と設計文化が部品構成と回路に表れる。詳細は [物語](docs/story/main.md) |
 | 成果物 | 仕様書、部品台帳、物語資料、決定記録、課題台帳。エミュレータのコードとテスト（作業中） |
 
@@ -40,7 +40,7 @@
 | 物語 | [docs/story/](docs/story/)：[本筋](docs/story/main.md)、[メーカーの出自](docs/story/company-origin.md)、[音源の差し替え](docs/story/sound-redesign.md)、[設計方式の由来](docs/story/architecture.md) |
 | 部品 | [docs/parts/](docs/parts/)：IC ごとの台帳、1985年の供給調査、部品の見直し |
 | デザイン | [docs/design/](docs/design/)：[書体（文字 ROM の字形）](docs/design/main.md)、[筐体の外観の大枠](docs/design/enclosure.md)（[仮]）。製品名・ロゴ・UI・意匠の規則は未確定 |
-| 実装 | [emulator/](emulator/)（Rust。段階 1 の MSM5205、TMS32010、ES5503 と、HD63484 の描画コマンドまで。段階 2 の Data Fabric のスロットの模型と、ACRTC の DMA（port 1）、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2。段階 3 の本体のバス、68000 から DOC のレジスタへのブリッジ、ACRTC の表示と映像の出力段、ACIA。ホスト（窓・音声・キーボード）は `cargo run --release -p fc85-host`）。設計と仕様との差は [docs/impl/emulator.md](docs/impl/emulator.md) |
+| 実装 | [emulator/](emulator/)（Rust。段階 1 の MSM5205、TMS32010、ES5503 と、HD63484 の描画コマンドまで。段階 2 の Data Fabric のスロットの模型と、ACRTC の DMA（port 1）、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2。段階 3 の HD68000、本体のバス、68000 から DOC のレジスタへのブリッジ、ACRTC の表示と映像の出力段、ACIA。ホスト（窓・音声・キーボード）は `cargo run --release -p fc85-host`）。設計と仕様との差は [docs/impl/emulator.md](docs/impl/emulator.md) |
 | 決定記録 | [docs/decisions.md](docs/decisions.md) |
 | 課題台帳 | [docs/open-issues.md](docs/open-issues.md) |
 
