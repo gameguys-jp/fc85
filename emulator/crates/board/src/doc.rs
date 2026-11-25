@@ -1,7 +1,8 @@
-//! DOC 子基板（ES5503 と波形 RAM 64 KiB）と、port 2 のアダプタ P2A。
+//! DOC 子基板（ES5503 と波形 RAM 64 KiB）と、port 2 のアダプタ P2A、68000 から DOC のレジスタへの
+//! ブリッジ。
 //!
-//! DR-011、DR-019 (3)、DR-031 (4)、DR-035、DR-050、仕様書 §06（port 2）、fabric.md §06・§08、
-//! 台帳 ES5503.md §2・§3。
+//! DR-011、DR-016、DR-019、DR-030、DR-031 (4)、DR-035、DR-050、仕様書 §05・§06（port 2）、
+//! fabric.md §06・§08、台帳 ES5503.md §2・§3、HD68000.md §2.2、host-acrtc-interface.md §3〜§6。
 //!
 //! 模型：
 //! - DOC のサイクルは E の 1 周期（CLK 8 クロック。8 MHz で 1 µs＝15120 単位）。E の立下りでサイクルが
@@ -14,7 +15,7 @@
 //!   終わり（OPDN）を返す。預かっているものがあれば、その窓が終わるまで Fabric を待たせる。
 //! - E を 16 MHz の 2 段の FF で同期化し、預かったアクセスは、同期化した E の立下り（ラッチと同じ縁を
 //!   含む）で次の E High の窓を取る。窓では CS̄ を出し、書込みはその窓で波形 RAM に書き、読出しは窓の
-//!   終わり（E の立下り）の値を読出しのラッチ（U51 の 74LS374）に取る。同期化した E の次の立下りで
+//!   終わり（E の立下り）の値を読出しのラッチ（U58 の 74LS374）に取る。同期化した E の次の立下りで
 //!   預かりを空け、読出しならそこで Fabric に終わりを返す [P]。続けて書くと、窓の終わりの縁で次の
 //!   書込みをラッチし、すぐ後の窓を取る。窓の前に番地を出しておくのは、台帳 §2 の注意 2（アドレスは
 //!   直前の E Low の間に出す）による。
@@ -22,14 +23,21 @@
 //!   E が上がった後なら窓のアクセスは行い、答えだけを捨てる [V]。預かった書込みは答えた後なので、
 //!   打ち切りとは関係なく窓で書く。
 //! - 波形 RAM は 64 KiB。DOC の BS（番地の bit 16）はつながず、上下のバンクは同じ RAM（台帳 §2）。
-//! - 68000 から DOC のレジスタへのアクセス（0x210000〜。同じ窓を取り合う）は段階 3 でつなぐ。今は試験と
-//!   上の層が `doc` を直接読み書きする。
+//! - 68000 のブリッジ（段階 3。OI-055）：DOC の窓（0x210000〜0x2101FF）の reg n は 0x210000＋2n で、
+//!   上位バイトレーン（UDS だけ）。ほかの幅と、子基板がないときは DTACK を返さず、バスの時間切れで
+//!   バスエラー（仕様書 §05、DR-019）。ブリッジは CS を S4 の立上りで登録し（DR-016 の ACRTC と同じ形）、
+//!   レジスタの番号・データ・向きを取り込む。P2A と同じ同期化した E を見て、同期化した E の立下り（取り
+//!   込みと同じ縁を含む）で次の窓を取る。P2A と同じ縁で取り合うときは 68000 が先 [P]。窓の終わり
+//!   （E の立下り）で DOC のレジスタに書くか、読んだ値をラッチし、同期化した E の次の立下りで DTACK を
+//!   出す。68000 はその後の最初のクロックの立下りで DTACK を認識する（S4 の終わりより前にはならない）。
+//!   68000 の書込みは預からない（68000 は DTACK まで番地とデータを保つ）[P]。
+//! - 68000 のクロック（8 MHz）は 16 MHz の 2 分周で、立上りは `PERIOD_8M` の倍数の時刻 [P]。
 //! - DOC の出力（SIG±、CA、CSTRB）のサンプルホールドとミキサは段階 4。今は最後の値を記録するだけ。
 
 use crate::acrtc::{T_OUT, T_SETUP};
 use crate::fabric::{Access, Dir, PortReply};
 use fc85_chips::es5503::{Es5503, Slot, WaveBus};
-use fc85_core::time::{Clock, PERIOD_16M, PERIOD_DOC_E, SLOT, Time};
+use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 /// 波形 RAM の大きさ（HM4864A×8。DR-031 (4)）。
@@ -55,10 +63,24 @@ impl Level {
     }
 }
 
-/// P2A の段。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 68000 の DOC の窓。
+pub const HOST_BASE: u32 = 0x21_0000;
+pub const HOST_LAST: u32 = 0x21_01FF;
+
+/// 68000 の番地とデータストローブから、DOC のレジスタの番号を出す。上位バイトレーン（UDS だけ）の
+/// 偶数番地でなければ `None`（DTACK を返さない。仕様書 §05、台帳 ES5503.md §2 の注意 4）。
+pub fn host_register(addr: u32, uds: bool, lds: bool) -> Option<u8> {
+    if !(HOST_BASE..=HOST_LAST).contains(&addr) || addr & 1 != 0 || !uds || lds {
+        return None;
+    }
+    Some(((addr - HOST_BASE) >> 1) as u8)
+}
+
+/// P2A とブリッジの段。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum Stage {
     /// 預かっているアクセスがない。
+    #[default]
     Idle,
     /// 預かった。同期化した E の立下りを待つ。
     Wait,
@@ -74,6 +96,65 @@ struct Request {
     data: u8,
     /// ラッチの時刻。
     at: Time,
+}
+
+/// ブリッジが取り込んだ 68000 のバスサイクル。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct HostReq {
+    reg: u8,
+    write: Option<u8>,
+    /// S0 の立上り。
+    s0: Time,
+    /// S4 の立上り（CS の登録）。
+    at: Time,
+}
+
+/// DTACK を返した 68000 の DOC のアクセス。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostDone {
+    pub reg: u8,
+    pub write: Option<u8>,
+    /// 読んだ値（D15–D8）。
+    pub read: Option<u8>,
+    pub s0: Time,
+    /// 使った窓の E の立上りと立下り。
+    pub rise: Time,
+    pub fall: Time,
+    /// ブリッジが DTACK を出した時刻（16 MHz の立上り）。
+    pub dtack: Time,
+    /// 68000 が DTACK を認識したクロックの立下り。
+    pub recognized: Time,
+    /// 待ちの数（68000 のクロック）。バスサイクルは 4＋waits クロック。
+    pub waits: u32,
+}
+
+/// 68000 が DTACK を認識する立下りと、待ちの数。DTACK はブリッジの FF から出るので、出た時刻と同じ
+/// 立下りには間に合わない（FF の遅れと tASI 20 ns。HD68000.md §2.1 の #47）。
+pub fn host_recognize(s0: Time, dtack: Time) -> (Time, u32) {
+    let half = PERIOD_8M / 2;
+    let s4_end = s0 + 2 * PERIOD_8M + half;
+    let mut f = dtack / PERIOD_8M * PERIOD_8M + half;
+    if f <= dtack {
+        f += PERIOD_8M;
+    }
+    let f = f.max(s4_end);
+    (f, ((f - s4_end) / PERIOD_8M) as u32)
+}
+
+/// 68000 のブリッジ。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Bridge {
+    /// 始まった、まだ S4 の来ていないサイクル。
+    queued: Option<HostReq>,
+    stage: Stage,
+    req: Option<HostReq>,
+    /// 取った窓に E が上がった。
+    owned: bool,
+    /// 窓が済んだ：読んだ値と E の立下りの時刻。
+    op: Option<(Option<u8>, Time)>,
+    /// バスエラーで終わったサイクルの窓。DTACK を出さない。
+    discard: bool,
+    done: Option<HostDone>,
 }
 
 /// DOC が訪れたオシレータの読出し（記録）。
@@ -129,6 +210,9 @@ pub struct DocBoard {
     pub last_window: Option<Window>,
     /// P2A が使った窓の数。
     pub windows: u64,
+    bridge: Bridge,
+    /// 68000 が使った窓の数。
+    pub host_windows: u64,
 }
 
 impl Default for DocBoard {
@@ -167,7 +251,46 @@ impl DocBoard {
             last_sig: 0,
             last_window: None,
             windows: 0,
+            bridge: Bridge::default(),
+            host_windows: 0,
         }
+    }
+
+    /// 68000 のバスサイクルを始める（`host_register` で番号を出した後）。`s0` は S0 の立上りで、次に
+    /// 進めるスロットの頭より前にしない。書込みは `write` に D15–D8。
+    pub fn host_begin(&mut self, s0: Time, reg: u8, write: Option<u8>) {
+        debug_assert!(s0.is_multiple_of(PERIOD_8M));
+        debug_assert!(self.bridge.queued.is_none() && self.bridge.stage == Stage::Idle);
+        self.bridge.queued = Some(HostReq {
+            reg,
+            write,
+            s0,
+            at: s0 + 2 * PERIOD_8M,
+        });
+    }
+
+    /// DTACK を返したアクセス。
+    pub fn host_poll(&mut self) -> Option<HostDone> {
+        self.bridge.done.take()
+    }
+
+    /// バスエラー（時間切れ）でサイクルが終わった。窓を取る前なら取り消す。E が上がった後なら、
+    /// 書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V]。
+    pub fn host_abort(&mut self) {
+        let b = &mut self.bridge;
+        b.queued = None;
+        b.done = None;
+        if b.owned || b.op.is_some() {
+            b.discard = true;
+        } else {
+            b.stage = Stage::Idle;
+            b.req = None;
+        }
+    }
+
+    /// ブリッジがサイクルを持っているか。
+    pub fn host_busy(&self) -> bool {
+        self.bridge.queued.is_some() || self.bridge.stage != Stage::Idle
     }
 
     /// E の立下りの位相（既定は 0）。`now` は次に進めるスロットの頭。
@@ -275,6 +398,9 @@ impl DocBoard {
         if rising {
             self.rise_pending = false;
             self.e.set(true, t);
+            if self.bridge.stage == Stage::Claimed {
+                self.bridge.owned = true;
+            }
             if self.stage == Stage::Claimed {
                 self.owned = true;
                 if let Some(r) = self.req.as_mut().filter(|r| r.write) {
@@ -301,6 +427,21 @@ impl DocBoard {
                 self.windows += 1;
             }
         }
+        // 68000 の窓の終わり：レジスタに書くか、読んだ値をラッチする
+        if self.bridge.owned {
+            self.bridge.owned = false;
+            if let Some(r) = self.bridge.req {
+                let read = match r.write {
+                    Some(v) => {
+                        self.doc.write(r.reg, v);
+                        None
+                    }
+                    None => Some(self.doc.read(r.reg)),
+                };
+                self.bridge.op = Some((read, t));
+                self.host_windows += 1;
+            }
+        }
         self.e.set(false, t);
         self.rise_pending = true;
         // DOC のサイクル：E Low で波形 RAM を読む
@@ -312,12 +453,44 @@ impl DocBoard {
         self.last_sig = tick.sig;
     }
 
-    /// 16 MHz の立上り：E の同期化と P2A の段。
+    /// 16 MHz の立上り：E の同期化と、P2A・ブリッジの段。
     fn ff_edge(&mut self, t: Time) {
         let s2_old = self.sync[1];
         self.sync[1] = self.sync[0];
         self.sync[0] = self.e.value(t.saturating_sub(T_SETUP));
         let fell = s2_old && !self.sync[1];
+        // 68000 の窓が終わった：DTACK を出す
+        let b = &mut self.bridge;
+        if fell
+            && b.stage == Stage::Claimed
+            && let Some((read, fall)) = b.op.take()
+        {
+            if let Some(r) = b.req.filter(|_| !b.discard) {
+                let (recognized, waits) = host_recognize(r.s0, t);
+                b.done = Some(HostDone {
+                    reg: r.reg,
+                    write: r.write,
+                    read,
+                    s0: r.s0,
+                    rise: fall - self.fall.period() / 2,
+                    fall,
+                    dtack: t,
+                    recognized,
+                    waits,
+                });
+            }
+            b.discard = false;
+            b.stage = Stage::Idle;
+            b.req = None;
+        }
+        // S4 の立上りで CS を登録する
+        if b.stage == Stage::Idle
+            && let Some(r) = b.queued.filter(|r| r.at <= t)
+        {
+            b.queued = None;
+            b.req = Some(r);
+            b.stage = Stage::Wait;
+        }
         // 窓が終わった：預かりを空ける。読出しはここで答える
         if fell
             && self.stage == Stage::Claimed
@@ -342,9 +515,13 @@ impl DocBoard {
             }
         }
         // 同期化した E の立下りで次の窓を取る（同じ縁でラッチしたものも。番地から E の立上りまで
-        // 365 ns 以上ある）
-        if fell && self.stage == Stage::Wait {
-            self.stage = Stage::Claimed;
+        // 365 ns 以上ある）。68000 と P2A が同じ縁で待っていれば 68000 が先 [P]（OI-055）
+        if fell {
+            if self.bridge.stage == Stage::Wait {
+                self.bridge.stage = Stage::Claimed;
+            } else if self.stage == Stage::Wait {
+                self.stage = Stage::Claimed;
+            }
         }
     }
 }

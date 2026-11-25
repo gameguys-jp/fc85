@@ -1,6 +1,6 @@
 # エミュレータ
 
-**v0.12**  
+**v0.13**  
 2026年11月25日
 
 > 状態：作業中の版。機械仕様は [仕様書](../spec/hardware.md) が正。この文書は実装の設計と、仕様との差を書く。決定記録は [DR-040](../decisions.md)。TMS32010 のサイクル数は [DR-032](../decisions.md)。Data Fabric の動作は [DR-046](../decisions.md)、回路は [fabric.md](../spec/fabric.md)。
@@ -11,7 +11,7 @@
 |---|---|
 | M（実装媒体） | M1（PC 上のソフト） |
 | S（再現忠実度、側面ごと） | chips 層は S1・S2・S3（外部ピンで見える動作、内部状態、IC のクロック単位の時刻）。board 層の Data Fabric は S1・S2 と、スロット（250 ns）単位の S3。S4（DAC の電圧、LPF、アナログ経路）は後の層で足す |
-| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2 も V2。全体は V0→V2、その後 V3（独立実装との比較） |
+| V（検証、現状→目標） | MSM5205、TMS32010、ES5503 のコアと、HD63484 のコア（表示を除く）は V2（単体試験）。Data Fabric のスロットの模型と、ACRTC の DMA（port 1）のつなぎ、音声クロック・本体 DAC・ADPCM・DSP のアダプタ、DOC 子基板の port 2 と、段階 3 の 68000 から DOC のレジスタへのブリッジも V2。全体は V0→V2、その後 V3（独立実装との比較） |
 | 参照する仕様 | [仕様書](../spec/hardware.md) §12（段階と合格条件）、IC ごとの台帳（[docs/parts/](../parts/)） |
 | 言語 | Rust（edition 2024）、cargo の workspace（DR-040） |
 | コード | [emulator/](../../emulator/) |
@@ -22,7 +22,7 @@
 |---|---|---|
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンまで。表示はまだ） |
-| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A） |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3） |
 | host | 未作成 | 表示・音声・操作 UI のライブラリは未定（SDL3、egui が候補） |
 
 ### 約束
@@ -59,6 +59,7 @@
 |---|---|---|
 | Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件） |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ（port 3・4、プログラム RAM、メールボックス、BIO の選択）も実装した（試験 9 件）。ブリッジと Temporal RAM の CPU 側のレジスタの番地はまだ |
+| DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。68000 のコアとバスはまだなく、試験がバスサイクルを直接始める（試験 7 件。規則は OI-055） |
 
 ## 03　仕様との差
 
@@ -271,9 +272,9 @@
 | INT | メールボックスの着信の間 Low | [P] | 立下りで INTF。IN 3 を読むまで Low のまま |
 | bridge のレジスタ | CTRL（RESET、BIOSEL）、STATUS、メールボックス、応答を構造体の値と関数で持つ。CPU から見た番地（0x220000〜）とビットは段階 3 で決める | CPU をつないでいない | — |
 
-### DOC 子基板と port 2
+### DOC 子基板（port 2 と 68000 のブリッジ）
 
-コードは `emulator/crates/board/src/doc.rs`。DOC 子基板（ES5503、波形 RAM 64 KiB）と、port 2 のアダプタ P2A（fabric.md §08）。動作は仕様書 §06（port 2）、DR-011、DR-019 (3)、DR-031 (4)、DR-035、DR-050、台帳 ES5503.md §2・§3 に従った。
+コードは `emulator/crates/board/src/doc.rs`。DOC 子基板（ES5503、波形 RAM 64 KiB）と、port 2 のアダプタ P2A（fabric.md §08）、68000 から DOC のレジスタへのブリッジ（段階 3）。ブリッジは DR-016、DR-019、DR-030、台帳 HD68000.md §2.2、host-acrtc-interface.md §3〜§6 にもよる。動作は仕様書 §06（port 2）、DR-011、DR-019 (3)、DR-031 (4)、DR-035、DR-050、台帳 ES5503.md §2・§3 に従った。
 
 | 仕様の項目 | 実装での扱い | 理由 | 影響 |
 |---|---|---|---|
@@ -285,7 +286,10 @@
 | 打ち切り（時間切れ、STOP） | 待たせているアクセスは取り消す。預かった読出しは、窓を取る前なら取り消し、E が上がった後なら窓のアクセスは行い、答えだけを捨てる。預かった書込みは答えた後なので、打ち切りと関係なく窓で書く | 窓の途中で /CS・/WE を落としたときの DRAM の動きは資料にない [V] | — |
 | E の位相の設定 | `set_phase` と、子基板を後から挿したときは、次の立下りまでの時間から今の E のレベルを決め、同期化の FF もそろえる | 試験の設定で、偽の縁を見ず、最初の縁を落とさないため | — |
 | 波形 RAM | 64 KiB。DOC の BS（番地の bit 16）はつながず、上下のバンクは同じ RAM。電源投入時は 0 | 台帳 §2。電源投入時の中身は [V] | — |
-| 68000 からの DOC のアクセス（0x210000〜） | まだない。試験と上の層が `doc` を直接読み書きする | 段階 3 で、同じ窓を P2A と取り合う調停をつける | 取り合いの規則は段階 3 で決める |
+| 68000 のブリッジ（段階 3、OI-055） | `FabricPorts::doc_host_begin` でバスサイクルを始める（S0 の時刻、番地、UDS・LDS、書込みの値）。reg n は 0x210000＋2n の UDS だけで、ほかの幅と子基板がないときは DTACK を返さない（`BusError`）。CS は S4 の立上りで登録し、P2A と同じ同期化した E の立下り（登録と同じ縁を含む）で次の窓を取る。同じ縁で P2A も待っていれば 68000 が先。窓の終わりでレジスタに書くか、読んだ値をラッチし、同期化した E の次の立下りで DTACK を出す。68000 はその後の最初の立下りで認識する。68000 の書込みは預からない | CS の作り方は DR-016 の ACRTC と同じ。取り合いと DTACK の規則は [P]（OI-055） | 待ちは 8〜16（E の位相 16 通りで、8 と 16 が 1 通り、9〜15 が 2 通りずつ）。1 アクセス 12〜20 クロック |
+| 68000 のクロックの位相 | 68000 のクロックの立上りは `PERIOD_8M` の倍数の時刻（スロットの頭と同じ）[P] | 16 MHz の 2 分周の位相は資料にない | 待ちの数は E との位相で決まる |
+| バスの時間切れ | ブリッジは時間切れを数えない。上の層（今は試験）が数え、`host_abort` を呼ぶ。窓を取る前なら取り消し、E が上がった後なら、書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V] | バスの時間切れの回路は段階 3 のバスで作る。試験は S0 から 64 クロックとした | DOC の CLK を 2 MHz に下げると、E の位相 64 通りのうち 5 通りで時間切れになる。1 MHz ではすべてで時間切れになり、66 通りでは書込みも届かない |
+| 読み書き一体の命令（DR-030） | ブリッジは見分けない | 警告は 68000 のコアとバスを作るときに足す | — |
 | DOC の出力 | 最後のオシレータの読出しと SIG± を記録するだけ | サンプルホールドとミキサは段階 4 | — |
 | 子基板の有無（DR-019） | `doc` が false の間、DOC は進めない。後から true にすると、E の位相を保って今のスロットから動く | 試験の設定のため | — |
 
@@ -418,9 +422,9 @@
 | 拍のラッチ | `the_tick_latch_counts_every_audio_tick`、`reset_clears_the_tick_latch` | BIO の待ちループと、IN 2 を読み続けるループの両方で、N＝40・41・48・100 の拍を全部数える（区切りの前後で ±1。DR-049）。RESET の間に来た拍は残らない | 合格 |
 | 保存 | `snapshot_round_trip_while_the_dsp_runs` | DSP が動いている途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
 
-### DOC 子基板と port 2
+### DOC 子基板（port 2 と 68000 のブリッジ）
 
-試験は `emulator/crates/board/tests/doc_port.rs`。期待値は仕様書 §06（port 2）、DR-035、DR-046 (9)、台帳 ES5503.md §3 と、P2A の模型（§03）からの手計算で取る。
+試験は `emulator/crates/board/tests/doc_port.rs`（port 2）と `emulator/crates/board/tests/doc_bridge.rs`（68000 のブリッジ）。期待値は仕様書 §06（port 2）、DR-035、DR-046 (9)、台帳 ES5503.md §3 と、P2A の模型（§03）からの手計算で取る。
 
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
@@ -435,3 +439,10 @@
 | 書込みの後の読出し | `a_read_waits_for_the_posted_write_before_it` | 波形 RAM の中で 1 byte ずらして写すと、各要素が直前に書いた値を読み、先頭の値が広がる | 合格 |
 | 子基板の有無 | `without_the_daughterboard_the_doc_does_not_run` | 子基板がない間は DOC が進まない。挿すと 4 スロットに 1 サイクル | 合格 |
 | 保存 | `snapshot_round_trip_mid_port2_transfer` | port 2 の転送の途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
+| 窓の番地 | `the_window_decodes_upper_byte_accesses_only` | reg n は 0x210000＋2n の UDS だけ。下位レーン、ワード、奇数番地、窓の外、子基板がないときは DTACK を返さない | 合格 |
+| 読み書き | `the_cpu_writes_and_reads_doc_registers` | 68000 が書いた値を DOC が持ち、読むと D15–D8 に返る | 合格 |
+| 待ち | `waits_follow_the_e_phase` | E の位相 16 通りで、待ちが手計算の 8＋⌈j/2⌉（j は S4 から同期化した E の立下りまでの 16 MHz のクロック数）と一致し、8〜16。番地の登録から E の立上りまで 375 ns 以上、窓は 500 ns | 合格 |
+| 取り合い | `the_cpu_goes_before_p2a_on_the_same_edge` | Fabric が毎回の窓で書いている間に 68000 が書くと、68000 の待ちは Fabric がないときと同じで、Fabric の 64 byte は 4 スロット延びる | 合格 |
+| DOC の設定 | `the_cpu_starts_an_oscillator_through_the_bridge` | 68000 がブリッジでオシレータ 0 を設定すると、DOC が波形 RAM の表を読む | 合格 |
+| 遅い DOC の CLK | `a_slow_doc_clock_can_run_past_the_bus_timeout` | S0 から 64 クロックで時間切れとすると、2 MHz で 64 通りのうち 5 通り（書込みは届く）、1 MHz で 128 通りすべて（届くのは 62 通り）。待ちは手計算と一致 | 合格 |
+| 保存（ブリッジ） | `snapshot_round_trip_with_a_cpu_access_in_flight` | 68000 のアクセスの途中で保存して戻すと、同じ DTACK と状態になる | 合格 |

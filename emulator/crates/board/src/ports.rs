@@ -15,15 +15,16 @@
 //! - ADPCM のアダプタ（port 5 の FIFO を MSM5205 へ。TRIGGER 5 の V̄C̄K̄）。`adpcm`。
 //! - DSP のアダプタ（port 3・4 の FIFO と TMS32010、プログラム RAM）。`dsp`。
 //! - DOC 子基板（`doc` が true のとき）：ES5503 と波形 RAM、port 2 のアダプタ P2A。`doc`（`DocBoard`）。
+//!   68000 から DOC の窓へのバスサイクルは `doc_host_begin`（段階 3 のブリッジ）。
 //!
 //! まだないもの（`ready` は 0、アクセスは何もしない）：port 8（Capture RAM、[O]）、port 11〜15（拡張）。
 
 use crate::acrtc::AcrtcBridge;
 use crate::adpcm::AdpcmPort;
 use crate::audio::{AudioClock, MainDac};
-use crate::doc::DocBoard;
+use crate::doc::{self, DocBoard, HostDone};
 use crate::dsp::DspPort;
-use crate::fabric::{Access, Dir, PortReply, Ports};
+use crate::fabric::{Access, Dir, HostReply, PortReply, Ports};
 use crate::fifo::Fifo;
 use fc85_core::time::{SLOT, Time};
 use serde::{Deserialize, Serialize};
@@ -146,6 +147,37 @@ impl FabricPorts {
         } else {
             self.staging[addr as usize] = v as u8;
         }
+    }
+
+    /// 次に進めるスロットの頭の時刻。
+    pub fn now(&self) -> Time {
+        self.now
+    }
+
+    /// 68000 から DOC の窓（0x210000〜0x2101FF）へのバスサイクルを始める。`s0` は S0 の立上り。
+    /// 子基板がないか、上位バイトレーンの 1 byte でなければ DTACK を返さない（バスの時間切れで
+    /// バスエラー。DR-019、仕様書 §05）。受けたら `Wait` を返し、`doc_host_poll` で終わりを受け取る。
+    pub fn doc_host_begin(
+        &mut self,
+        s0: Time,
+        addr: u32,
+        uds: bool,
+        lds: bool,
+        write: Option<u16>,
+    ) -> HostReply {
+        match doc::host_register(addr, uds, lds) {
+            Some(reg) if self.doc => {
+                self.doc_board
+                    .host_begin(s0, reg, write.map(|w| (w >> 8) as u8));
+                HostReply::Wait
+            }
+            _ => HostReply::BusError,
+        }
+    }
+
+    /// DTACK を返した DOC のアクセス。
+    pub fn doc_host_poll(&mut self) -> Option<HostDone> {
+        self.doc_board.host_poll()
     }
 
     fn present(&self, port: u8) -> bool {
