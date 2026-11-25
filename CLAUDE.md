@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - ユーザーとの会話は日本語で行う。
 - fc85は、Fictional Machinesの第一世代（1985年）架空コンソールの実装プロジェクト。
-- 現時点ではコードはなく、仕様書のみ。ビルド・テスト・lintのコマンドはまだない。実装を始めたらこのファイルに追記する。
+- エミュレータ（`emulator/`、Rust）を段階 1 から書き始めた（DR-040）。ビルドと試験のコマンドは「エミュレータの実装方針」の節。
 - このリポジトリの外（親ディレクトリ）に関連文書がある。
   - `../fictional-machines/Fictional_Machines.md`：全体の基本構想・分類体系（最上位文書。分類記号の定義はここ。公開版は https://github.com/gameguys-jp/fictional-machines ）
   - `../Fictional_Console_Hardware_v0.1.md`：旧版（1989〜93年想定）。第二世代の資産。**fc85へICやクロックを移植しない**。2つの仕様はIC構成もアドレスマップも異なる（例：Data Fabricは旧版がDMA 4ch、1985年版は初期2ch実装＋4ch分の窓を予約）
@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/open-issues.md` | 課題台帳（OI-xxx） |
 | `docs/sources.md` | 部品以外の史実（JIS 改正、キャプテンシステム、Commodore など）の出典台帳 |
 | `docs/design/` | 製品デザイン。書体（`main.md`、文字 ROM の字形の試案 v0.1）と字形データ `glyphs-v0.1.tsv`、筐体の外観の大枠（`enclosure.md`、[仮]、DR-038）。製品名・ロゴ・UI・意匠の規則は未確定 |
-| `docs/impl/` | 未作成。エミュレータ等の実装を始めたら作る |
+| `docs/impl/` | 実装ごとの文書。`emulator.md`：構成、仕様との差、テストと判定基準 |
 
 分類：F1／T2:1985（適合は未検証）、D5・D6・D7、Machine/System、L2〜L7、E3目標、M1先行、S2〜S4重視、V2→V3/V4、N3〜4。
 
@@ -76,12 +76,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **通常モードとBendモードを分ける**。ベンディングは「実ICの外部ピンで可能」「専用グルーロジックで可能」「エミュレータ限定の内部介入」を区別し、仕様外の動作は近似と明記する（§11）。
 - **映像**：256×192・4bpp、ノンインタレース 262 ライン・342 ドット、約 59.92 Hz（DR-002）。スプライト専用ハードはなく、描画／COPYと背景復元でゲームを構成する。
 
-## エミュレータの実装方針（仕様書§12、未着手）
+## エミュレータの実装方針（仕様書§12、DR-040）
 
-- C++20等の独立コア＋SDL等のホストI/Oが候補（言語・ライブラリは未確定）。
+- Rust（edition 2024）の cargo workspace。仕様書§12 の層ごとに crate を分ける（今は chips 層の `fc85-chips` だけ）。ホストのライブラリは未定（SDL3、egui が候補）。
+- コマンドは `emulator/` で実行する：`cargo test`（全部）、`cargo test -p fc85-chips --test msm5205 <名前>`（1 件）、`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`。コミットの前に fmt・clippy・test を通す。
+- IC のコアは `crates/chips/src/<IC>.rs`、試験は `crates/chips/tests/<IC>.rs`。コアは IC のクロック 1 つを `tick` の 1 回とし、外部ピンの入出力だけを見せる。状態は serde で保存・復元できるようにする。
+- 試験の期待値は台帳（`docs/parts/`）の計算から取り、どの節の値かを書く。台帳で [V] の動作の扱いは `docs/impl/emulator.md` §03 に書く。
 - 層構成：`core`（時刻・イベント・バス・信号線・IRQ・trace・snapshot）／`chips`／`board`（アドレスマップ・Data Fabric・ポートアダプタ・映像音響経路）／`host`／`SDK`／`tests`。
 - 各クロック領域は整数または有理数の時刻で独立に管理する。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。
-- MAMEの既存実装（68000、HD63484、TMS32010、ES5503、MSM5205、ACIA）を参照してよい。ただし流用前にファイルごとのライセンスと精度を確認する。
+- MAMEの既存実装（68000、HD63484、TMS32010、ES5503、MSM5205、ACIA）を参照してよい。コードは写さず、台帳に書き起こした式とタイミングから書く（V3 の独立性のため、DR-040）。
 - 仮想機が停止するのは許容するが、PCアプリは停止させない。ホスト側の安全層（音声リミッタ、DC除去、表示保持）は仮想機の挙動を変えない別層にする。
 - 開発段階：0 仕様・資料 → 1 Chip sandbox → 2 Data Fabric → 3 Console → 4 AV/HCI → 5 PCB/拡張。各段階の合格条件は仕様書§12の表を参照。
 - 検証目標：正常系はビット列一致（V2）と独立実装との比較（V3）。
