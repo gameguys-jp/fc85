@@ -6,10 +6,12 @@
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
-//! [--audio-clock HZ]`
+//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N]`
 //!
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
 //! （既定 20 MHz）、MSM5205 の発振（既定 384 kHz）、音声クロックの分周器の入力（既定 8 MHz）。
+
+mod midi;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -53,6 +55,9 @@ struct Args {
     wav: Option<String>,
     /// 外部クロック（Hz）：DOC、DSP、ADPCM、音声クロック。
     clocks: [Option<f64>; 4],
+    /// MIDI の装置の番号（`--midi-list`）。
+    midi_in: Option<usize>,
+    midi_out: Option<usize>,
 }
 
 fn parse_args() -> Args {
@@ -70,6 +75,8 @@ fn parse_args() -> Args {
         dump: None,
         wav: None,
         clocks: [None; 4],
+        midi_in: None,
+        midi_out: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -83,6 +90,12 @@ fn parse_args() -> Args {
             "--headless" => a.headless = true,
             "--dump" => a.dump = it.next(),
             "--wav" => a.wav = it.next(),
+            "--midi-list" => {
+                midi::list();
+                std::process::exit(0);
+            }
+            "--midi-in" => a.midi_in = it.next().and_then(|v| v.parse().ok()),
+            "--midi-out" => a.midi_out = it.next().and_then(|v| v.parse().ok()),
             "--trace" => a.trace = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--pad-script" => {
                 a.pad_script = it.next().map(|p| read_pad_script(&p)).unwrap_or_default()
@@ -102,7 +115,7 @@ fn parse_args() -> Args {
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N]"
                 );
                 std::process::exit(0);
             }
@@ -537,6 +550,7 @@ fn main() {
     // 速さはホストが合わせる（pace）。minifb の 60 fps の制限は仮想機の約 59.92 Hz とずれる。
     w.set_target_fps(0);
     let mut next = std::time::Instant::now();
+    let mut midi = midi::Midi::open(a.midi_in, a.midi_out);
     let mut frames = 0u64;
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
         if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
@@ -546,7 +560,13 @@ fn main() {
             load_state(&mut c);
         }
         c.sys.set_ports(pad(&w), 0);
+        for b in midi.take_received() {
+            c.sys.acia.receive(b);
+        }
         c.run_frame();
+        while let Some(b) = c.sys.acia.take_sent() {
+            midi.send(b);
+        }
         push_audio(&mut c, &ring);
         pace(audio.is_some(), &ring, &mut next);
         view(&c, &mut buf);
