@@ -1,6 +1,6 @@
 //! DOC 子基板の port 2（P2A と波形 RAM）の試験。
-//! 期待値は仕様書 §06（port 2）、DR-035、DR-046 (9)、台帳 ES5503.md §3 と、P2A の模型（emulator.md §03）からの
-//! 手計算で取る。
+//! 期待値は仕様書 §06（port 2）、DR-035、DR-046 (9)、DR-050、台帳 ES5503.md §3 と、P2A の模型
+//! （emulator.md §03）からの手計算で取る。
 
 use fc85_board::fabric::{Decision, Fabric, HostReply, SlotRecord};
 use fc85_board::ports::FabricPorts;
@@ -124,24 +124,57 @@ fn gaps(v: &[u64]) -> Vec<u64> {
 
 #[test]
 fn fabric_writes_wave_ram_through_p2a() {
-    // E の位相が 0：E の立下りは 4 スロットごとのスロット 4m の頭、同期化した立下りは 2 クロック
-    // （16 MHz）後。書込みのアクセスは奇数のスロット w＝4m＋1 で始まり、ラッチの後の最初の立下りで窓を
-    // 取り、その次の立下りで終わる：8 スロット。次の要素は FLAG の規則と S のスロットで 4 スロット後に
-    // 始まり、1 byte が 12 スロット（3 µs）。位相が 4 クロック（250 ns）なら、ラッチの直後の立下りに
-    // 間に合い、5 スロットと 8 スロット（2 µs）
-    for (phase, len, gap) in [(0, 8, 12), (4 * PERIOD_16M, 5, 8)] {
+    // P2A は書込みを預かってすぐ答える（DR-050）。Fabric の要素は、port 0 の S のスロットで読み、
+    // port 2 に 1 スロットで書き、次のスロットの頭で次を決めるので 4 スロット。DOC のサイクルも 4 スロット。
+    // 預かりが空くのは、窓の後の同期化した E の立下り。E の位相が 4 クロック（250 ns）なら、次の書込みが
+    // その縁より前に来て、1 byte が 4 スロット（1 µs、1.0 MB/s）。位相 0 では縁の後に来るので、1 回おきに
+    // 1 サイクル待ち（4 スロット）、4 スロットと 8 スロットが交互（平均 6 スロット、0.67 MB/s）
+    for (phase, lens_cycle, gap_cycle) in [(4 * PERIOD_16M, [1, 1], [4, 4]), (0, [1, 4], [4, 8])] {
         let mut r = Rig::new(phase);
         staging_to_wave(&mut r, 64);
         r.run(1000);
         assert_eq!(r.f.status(0), DONE);
         assert!((0..64).all(|i| r.p.doc_board.wave[0x1000 + i] == i as u8 ^ 0x5A));
         assert_eq!(r.p.doc_board.windows, 64);
+        // 1・2 byte 目は、設定の書込みの終わりで始まる位置が変わる
         let lens = r.port2_lengths();
-        // 1 byte 目は、設定の書込みの終わりで始まる位置が変わる
-        assert!(lens[1..].iter().all(|&x| x == len), "{lens:?}");
+        assert!(
+            lens[2..]
+                .iter()
+                .enumerate()
+                .all(|(i, &x)| x == lens_cycle[i % 2]),
+            "{lens:?}"
+        );
         let g = gaps(&r.starts());
-        assert!(g[2..].iter().all(|&x| x == gap), "{g:?}");
+        assert!(
+            g[2..]
+                .iter()
+                .enumerate()
+                .all(|(i, &x)| x == gap_cycle[i % 2]),
+            "{g:?}"
+        );
     }
+}
+
+#[test]
+fn posted_writes_keep_pace_with_the_doc_in_6_of_16_phases() {
+    // E の位相 16 通り（16 MHz の 1 クロックずつ）で 64 byte を書く。最初の要素から最後の要素までが
+    // 252〜254 スロット（1 byte 4 スロット）の位相が 6 通り、374〜376 スロット（4 と 8 の交互）が 10 通り
+    let mut fast = 0;
+    let mut slow = 0;
+    for k in 0..16 {
+        let mut r = Rig::new(k * PERIOD_16M);
+        staging_to_wave(&mut r, 64);
+        r.run(1000);
+        assert_eq!(r.f.status(0), DONE, "位相 {k}");
+        let s = r.starts();
+        match s[63] - s[0] {
+            252..=254 => fast += 1,
+            374..=376 => slow += 1,
+            x => panic!("位相 {k}：{x}"),
+        }
+    }
+    assert_eq!((fast, slow), (6, 10));
 }
 
 #[test]
@@ -244,65 +277,116 @@ fn the_doc_plays_what_the_fabric_wrote() {
 }
 
 #[test]
-fn a_slow_doc_clock_times_out() {
-    // DR-035 の外部クロック：E の周期が長いと、窓を待つ間に 32 クロック（16 スロット）を超え、ERROR で
-    // 止まる（DR-046 (9)）。3 MHz では 2 byte の後に、2 MHz では 1 byte 目で止まる。打ち切った分は書かない。
-    // 4 MHz なら 1 回のアクセスは最長 14 スロットで、時間切れにならない
-    for (clk, done, written) in [(3780, DONE, 4), (5040, ERROR, 2), (7560, ERROR, 0)] {
-        let mut r = Rig::new(0);
-        r.p.doc_board.set_clock_period(clk);
-        r.p.staging[..4].copy_from_slice(&[1, 2, 3, 4]);
-        channel(
-            &mut r,
-            &[
-                (SRC, 0),
-                (DST, 2),
-                (DST_ADDR, 0x100),
-                (COUNT, 4),
-                (SRC_STEP, 1),
-                (DST_STEP, 1),
-                (FORMAT, 0),
-            ],
-        );
-        r.run(400);
-        assert_eq!(r.f.status(0), done, "CLK {clk}");
-        let w = &r.p.doc_board.wave[0x100..0x104];
-        let want: Vec<u8> = (1..=4).map(|x| if x <= written { x } else { 0 }).collect();
-        assert_eq!(w, &want[..], "CLK {clk}");
-        assert!(r.port2_lengths().iter().all(|&x| x <= 16));
+fn a_slow_doc_clock_can_time_out_on_the_second_write() {
+    // DR-035 の外部クロック：E の周期が長いと、2 byte 目は、預かった 1 byte 目の窓が終わるまで待つ。
+    // 待ちは「1 byte 目のラッチから次の同期化した E の立下りまで」＋「E の 1 周期」−「要素の間隔」で、
+    // 32 クロック（16 スロット）を超えると ERROR で止まる（DR-046 (9)）。その後は窓の直後にラッチして
+    // すぐ答えるので、待ちは E の 1 周期より短い。E の位相（16 MHz の 1 クロックずつ）をすべて試し、
+    // 終わる位相と止まる位相を数える。止まったときも、預かった 1 byte 目は書く
+    for (clk, done, error) in [
+        (3780, 32, 0),
+        (5040, 36, 6),
+        (7560, 15, 49),
+        (15120, 0, 128),
+    ] {
+        let mut n = (0, 0);
+        for k in 0..8 * clk / PERIOD_16M {
+            let mut r = Rig::new(0);
+            r.p.doc_board.set_clock_period(clk);
+            r.p.doc_board.set_phase(0, k * PERIOD_16M);
+            staging_to_wave(&mut r, 16);
+            r.run(1500);
+            let written = (0..16)
+                .filter(|&i| r.p.doc_board.wave[0x1000 + i] == i as u8 ^ 0x5A)
+                .count();
+            match r.f.status(0) {
+                DONE => {
+                    assert_eq!(written, 16);
+                    n.0 += 1;
+                }
+                ERROR => {
+                    assert_eq!(written, 1, "CLK {clk} 位相 {k}");
+                    n.1 += 1;
+                }
+                x => panic!("CLK {clk} 位相 {k}：{x:#x}"),
+            }
+            assert!(r.port2_lengths().iter().all(|&x| x <= 16));
+            assert!(!r.p.doc_board.busy());
+        }
+        assert_eq!(n, (done, error), "CLK {clk}");
     }
 }
 
 #[test]
-fn stop_cancels_a_waiting_port2_access() {
+fn stop_cancels_a_waiting_read() {
     let mut r = Rig::new(0);
-    r.p.staging[0] = 0x77;
+    r.p.doc_board.wave[0x2000] = 0x33;
+    r.p.temporal.mem[0] = 0xEE;
+    let regs = [
+        (SRC, 2),
+        (DST, 6),
+        (SRC_ADDR, 0x2000),
+        (COUNT, 1),
+        (FORMAT, 0),
+    ];
+    channel(&mut r, &regs);
+    // port 2 の読出しが始まったら、窓を取る前に止める
+    while r.step().access.is_none_or(|a| a.port != 2) {}
+    r.write(CTRL, 2);
+    r.run(40);
+    assert_eq!(r.p.temporal.mem[0], 0xEE);
+    assert_eq!(r.p.doc_board.windows, 0);
+    assert!(!r.p.doc_board.busy());
+    // P2A は空いていて、次の転送は通る
+    channel(&mut r, &regs);
+    r.run(40);
+    assert_eq!(r.p.temporal.mem[0], 0x33);
+}
+
+#[test]
+fn stop_keeps_a_posted_write_and_cancels_the_next() {
+    // DOC の CLK が 2 MHz なら、2 byte 目は 1 byte 目の窓を長く待つ。そこで止めると、2 byte 目は
+    // 取り消し、預かった 1 byte 目は窓で書く
+    let mut r = Rig::new(0);
+    r.p.doc_board.set_clock_period(7560);
+    staging_to_wave(&mut r, 4);
+    let mut n = 0;
+    while n < 2 {
+        if r.step().access.is_some_and(|a| a.port == 2) {
+            n += 1;
+        }
+    }
+    assert!(r.p.doc_board.busy());
+    assert_eq!(r.p.doc_board.windows, 0);
+    r.write(CTRL, 2);
+    r.run(100);
+    assert_eq!(&r.p.doc_board.wave[0x1000..0x1004], &[0x5A, 0, 0, 0]);
+    assert_eq!(r.p.doc_board.windows, 1);
+    assert!(!r.p.doc_board.busy());
+}
+
+#[test]
+fn a_read_waits_for_the_posted_write_before_it() {
+    // 波形 RAM の中で 1 byte ずらして写す。読出しは預かった書込みの窓の後になるので、各要素は直前に
+    // 書いた値を読み、先頭の値が広がる
+    let mut r = Rig::new(0);
+    r.p.doc_board.wave[0x500..0x505].copy_from_slice(&[9, 1, 2, 3, 4]);
     channel(
         &mut r,
         &[
-            (SRC, 0),
+            (SRC, 2),
             (DST, 2),
-            (DST_ADDR, 0x40),
-            (COUNT, 1),
+            (SRC_ADDR, 0x500),
+            (DST_ADDR, 0x501),
+            (COUNT, 4),
             (SRC_STEP, 1),
+            (DST_STEP, 1),
             (FORMAT, 0),
         ],
     );
-    // port 2 のアクセスが始まるまで進め、窓を取る前に止める
-    loop {
-        let r2 = r.step();
-        if r2.access.is_some_and(|a| a.port == 2) {
-            break;
-        }
-    }
-    r.write(CTRL, 2);
-    r.run(40);
-    assert_eq!(r.p.doc_board.wave[0x40], 0);
-    assert_eq!(r.p.doc_board.windows, 0);
-    // P2A は空いていて、次の転送は通る
-    r.write(CTRL, 1);
-    r.run(40);
-    assert_eq!(r.p.doc_board.wave[0x40], 0x77);
+    r.run(200);
+    assert_eq!(r.f.status(0), DONE);
+    assert_eq!(&r.p.doc_board.wave[0x500..0x505], &[9; 5]);
 }
 
 #[test]

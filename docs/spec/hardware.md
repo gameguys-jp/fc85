@@ -147,7 +147,7 @@ ACRTCとのDMAは1語ごとのサイクルスチールとし、各語の間でCP
 |---|---|---|
 | 0 | Staging RAM | R/W、byte address、16-bit対応。500 nsごとに1語を保証（4 MB/s）[P]（DR-024）。Sのスロットだけで使う。8-bitのアクセスは偶数番地が上位byte（D15–D8）[P]（DR-046） |
 | 1 | ACRTC VRAM stream | R/W。ACRTCのネイティブな連続転送（DWT／DRD／DMODコマンドと、DREQ／DACK／DONE信号）とFIFOを使う [D]（[15]）。矩形（x語×y行）単位。形はCPUが転送の前に出すDWT／DRD／DMODのAX・AYで決まり、行の間隔はRWPのDNが選ぶ画面のMWR [D]（[15]）。Fabric側は逐次ポートで、COUNT＝x·y。DONEとCOUNTが合わなければERROR [P]（DR-022）。表示しない画面のMWRで別の行間隔を使う方法は [O][V] |
-| 2 | DOC Wave RAM | R/W、byte address。DOCサイクルごとのホスト側の窓（E High）でアクセスし、DOCレジスタのアクセスと同じ窓を取り合う。上限は1サイクル1 byte（8 MHzで1.0 MB/s）[D]（[18]）。子基板がないときは本体DACのFIFO（W、16-bit、上位byteがL・下位byteがR、64 words、67401×4）。音声クロック（TRIGGER 3と同じ）で読み、空なら直前の値を保ちUNDERRUNを記録 [P]（DR-019） |
+| 2 | DOC Wave RAM | R/W、byte address。DOCサイクルごとのホスト側の窓（E High）でアクセスし、DOCレジスタのアクセスと同じ窓を取り合う。上限は1サイクル1 byte（8 MHzで1.0 MB/s）[D]（[18]）。Data Fabricからは、P2Aが書込みを1 byte預かってすぐ答え、続くアクセスは預かりが空くまで待つ。読出しは窓の終わりの値をラッチして答える。実効は書込みで0.67〜1.0 MB/s（DOCのEとFabricのスロットの位相による）、読出しで0.5 MB/s [P]（DR-050）。子基板がないときは本体DACのFIFO（W、16-bit、上位byteがL・下位byteがR、64 words、67401×4）。音声クロック（TRIGGER 3と同じ）で読み、空なら直前の値を保ちUNDERRUNを記録 [P]（DR-019） |
 | 3 / 4 | DSP input / output FIFO | W / R、16-bit、64 wordsずつ（67401×4）[P]（DR-017）。DSPが空の入力FIFOを読むと最後の語が返り、満杯の出力FIFOへの書込みは捨てられる。どちらもUNDERRUN／OVERRUNを記録 [P]（DR-017） |
 | 5 | ADPCM input FIFO | W、8-bit packed、64 bytes（67401×2）[P]（DR-017）。ニブルは上位から。空のときは0x08（0000と1000が交互）を供給しUNDERRUNを記録。CTRLで下位からの順と、置換しない動作（Bend）を選べる [P]（DR-017） |
 | 6 / 7 | Temporal write / read | W / R、8-bit逐次、独立ポインタ |
@@ -194,7 +194,7 @@ Data Fabric側はFIFOのfull/emptyで待機し、データを勝手に生成し�
 | クロック領域 | 初期値・方針 |
 |---|---|
 | 発振源 | 16 MHz、21.47727 MHz（6fsc）、20 MHz、384 kHzの4つ [P]（DR-003） |
-| CPU / Fabric / DOC / ACIA | 16 MHz系。CPUとFabricは8 MHz（÷2）、DOCは8 MHz（÷2を子基板へ流用）、ACIAは500 kHz（÷32）。CPUとDOCは同じ源だが、DOCのブリッジとport 2のアダプタは、DOCのEを2段のFFで16 MHz系へ同期化して待つ。本体のクロックでは待ちが一定で、DOCのクロックを外部に替えても正しく動く。port 2の上限（1.0 MB/s）はDOCのクロックに比例する [P]（DR-035）。音声クロックは8 MHz÷N（Nは12-bit。÷144で55.6 kHz＝DOCの16オシレータのレート、÷1000で8 kHz）[P]（DR-018） |
+| CPU / Fabric / DOC / ACIA | 16 MHz系。CPUとFabricは8 MHz（÷2）、DOCは8 MHz（÷2を子基板へ流用）、ACIAは500 kHz（÷32）。CPUとDOCは同じ源だが、DOCのブリッジとport 2のアダプタは、DOCのEを2段のFFで16 MHz系へ同期化して待つ。本体のクロックでは待ちが一定で、DOCのクロックを外部に替えても正しく動く。port 2の上限（1.0 MB/s）はDOCのクロックに比例する [P]（DR-035）。3 MHz以下まで下げると、port 2に続けて書く転送は時間切れで止まることがある [P]（DR-050）。音声クロックは8 MHz÷N（Nは12-bit。÷144で55.6 kHz＝DOCの16オシレータのレート、÷1000で8 kHz）[P]（DR-018） |
 | ACRTC / Video | 21.47727 MHz系。ACRTCの2CLKとドットクロックは5.369318 MHz（÷4）、色副搬送波3.579545 MHz（÷6）、映像取り込み2.6847 MHz（÷8）[P]（DR-003、DR-004）。色副搬送波はBA7230LSのVC端子へ入れ、1ライン228 fsc・ドットクロック1.5 fscで画素と色信号の位相を固定する [P][V]（DR-015） |
 | DSP | 20 MHz（専用の発振源）[P]（DR-003）、200 ns命令サイクル級。外部プログラムメモリ速度を検証 [V]。外部クロックをジャンパで選べる（6.67〜20.5 MHz）[P]（DR-035） |
 | ADPCM | MSM5205は384 kHz（専用の発振子）、出力8 kHz [P]（DR-003）。XTに外部クロックをジャンパで選べる（384〜768 kHz）[P]（DR-035） |
@@ -212,7 +212,7 @@ Fabricの理論予算：16-bit幅、8 MHz、1要素の読み書き計4クロッ�
 | 同30 Hz片方向／往復 | 約0.74 / 1.47 MB/s |
 | 128×96、8-bit、15 Hz捕捉 | 約0.18 MB/s |
 | ADPCM 4-bit、8 kHz | 4 kB/s |
-| DOC wave RAM 64 KiBの書換え | 上限1.0 MB/s、65.5 ms以上（§06 port 2）[D]（[18]） |
+| DOC wave RAM 64 KiBの書換え | 上限1.0 MB/s、65.5 ms以上（§06 port 2）[D]（[18]）。Data Fabricで書くと65.5〜98 ms（位相による）[P]（DR-050） |
 | 生CVBS 8-bit、4fsc | 約14.32 MB/s。第一世代の目標に含めない。入力のバーストにロックしたVCXO（ゲンロックと共通、DR-013）と専用RAMで取り込む映像拡張基板の候補 [O]（DR-023）。4fscは21.47727 MHzの整数分周で作れない（3fscは÷2）（計算） |
 
 上の表はFabric側の量。ACRTC側にも上限がある。DWTで256×192・4bppの全画面を書くと、表示との競合を除いても2CLK 5.369 MHzで約14.0 msかかる [D]（[15]の値からの計算）。1フレーム約16.7 msのうち表示との競合を考えると、全画面を60 Hzで転送する運用は成り立たない見込み [V]。
@@ -324,7 +324,7 @@ DOCの差動電流出力（SIG±）は両側にアンプを入れて加算する
 
 電源ユニットは+5／+12／−12 Vの3出力とする [P]（DR-020）。電源ユニットは本体の外の箱に入れ、多ピンのケーブルでつなぐ。+5 Vはリモートセンスでケーブルの電圧降下を補う [P][V]（DR-037、[board.md](board.md)）。DOCの音量DACの基準−5 Vは子基板で、TDC1048の−5.2 Vは映像入力基板で、それぞれ−12 Vから3端子レギュレータ（NEC µPC7900系。日立の1985年の資料には負電圧品が見当たらない [V]）で作る [P]（DR-020）。−5.2 V側は約0.3 Aで、−12 Vから落とすと約2 Wの損失になり、放熱板が要る（推定 [V]）。±12 VはCD22101、オペアンプ、HA17408（VEE −12 Vで使う [V]）に使う。MSM5205・BA7230LS・映像の抵抗DACの出力段は、+12 Vから作るアナログ+5 Vから給電する [P]（DR-020）。MSM5205の入力（VIH 4.2 V以上）はHD74HC系か、プルアップを付けたTTLで駆動し、V̄C̄K̄（±50 µA）はHD74HC系で受ける [P]（DR-020）。
 
-+5 Vの負荷は67401×14（最大2.2〜2.8 A [V]）、Data FabricのTTL・PAL・PROM 108個（PAL 26個を含む。DR-041、[fabric.md](fabric.md) §09）、DRAM 32個、NMOSの大型ICなどで、合計6〜14 A級と推定する [V]。Data Fabricだけで、67401を含めて典型 約7.5 A、最大 約11.5 Aになる（fabric.md §10）ので、上限に近い側を見込む [V]。PALはTTLより消費電流が大きく、PAL 約30個で+5 Vが1〜4 A増える（[board.md](board.md) §06）。容量は試作時に実測する。
++5 Vの負荷は67401×14（最大2.2〜2.8 A [V]）、Data FabricのTTL・PAL・PROM 109個（PAL 26個を含む。DR-041、DR-050、[fabric.md](fabric.md) §09）、DRAM 32個、NMOSの大型ICなどで、合計6〜14 A級と推定する [V]。Data Fabricだけで、67401を含めて典型 約7.5 A、最大 約11.5 Aになる（fabric.md §10）ので、上限に近い側を見込む [V]。PALはTTLより消費電流が大きく、PAL 約30個で+5 Vが1〜4 A増える（[board.md](board.md) §06）。容量は試作時に実測する。
 
 <div class="pagebreak"></div>
 

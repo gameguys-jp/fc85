@@ -1,20 +1,26 @@
 //! DOC 子基板（ES5503 と波形 RAM 64 KiB）と、port 2 のアダプタ P2A。
 //!
-//! DR-011、DR-019 (3)、DR-031 (4)、DR-035、仕様書 §06（port 2）、fabric.md §06・§08、台帳 ES5503.md §2・§3。
+//! DR-011、DR-019 (3)、DR-031 (4)、DR-035、DR-050、仕様書 §06（port 2）、fabric.md §06・§08、
+//! 台帳 ES5503.md §2・§3。
 //!
 //! 模型：
 //! - DOC のサイクルは E の 1 周期（CLK 8 クロック。8 MHz で 1 µs＝15120 単位）。E の立下りでサイクルが
 //!   始まり、E Low の間に DOC がオシレータを 1 つ訪れて波形 RAM を読む（`tick`）。E High はホストの窓
 //!   （台帳 §3.3）。E の立下りは `set_phase` で決める（既定は 0）。CLK を外部のクロックに替えるジャンパは
 //!   `set_clock_period`（DR-035）。
-//! - P2A（fabric.md §08）：Fabric が port 2 のアクセスを始めると、番地・データ・向きをラッチする
-//!   （スロットの頭の 20 ns 後の、16 MHz の次の立上り）。E を 16 MHz の 2 段の FF で同期化し、ラッチの後に
-//!   同期化した E の立下りを見たら、次の E High の窓を取る。窓では CS̄ を出し、書込みはその窓で波形 RAM に
-//!   書き、読出しは窓の終わり（E の立下り）の値を取る。同期化した E の次の立下りで、Fabric に終わり
-//!   （OPDN）を返す [P]。窓の前に番地を出しておくのは、台帳 §2 の注意 2（アドレスは直前の E Low の間に
-//!   出す）による。
-//! - 打ち切り（時間切れ、STOP）：窓を取る前なら取り消す。E が上がった後なら、窓のアクセスは行い、
-//!   答えだけを捨てる [V]。
+//! - P2A（fabric.md §08、DR-050）：P2A はアクセスを 1 つ預かる。Fabric が port 2 のアクセスを始め、
+//!   預かっているものがなければ、番地・データ・向きをラッチする（スロットの頭の 20 ns 後の、16 MHz の
+//!   次の立上り。番地は U48–U49、書込みのデータは U50 の 74LS374）。書込みはラッチしたらすぐ Fabric に
+//!   終わり（OPDN）を返す。預かっているものがあれば、その窓が終わるまで Fabric を待たせる。
+//! - E を 16 MHz の 2 段の FF で同期化し、預かったアクセスは、同期化した E の立下り（ラッチと同じ縁を
+//!   含む）で次の E High の窓を取る。窓では CS̄ を出し、書込みはその窓で波形 RAM に書き、読出しは窓の
+//!   終わり（E の立下り）の値を読出しのラッチ（U51 の 74LS374）に取る。同期化した E の次の立下りで
+//!   預かりを空け、読出しならそこで Fabric に終わりを返す [P]。続けて書くと、窓の終わりの縁で次の
+//!   書込みをラッチし、すぐ後の窓を取る。窓の前に番地を出しておくのは、台帳 §2 の注意 2（アドレスは
+//!   直前の E Low の間に出す）による。
+//! - 打ち切り（時間切れ、STOP）：待たせている間なら取り消す。預かった読出しは、窓を取る前なら取り消し、
+//!   E が上がった後なら窓のアクセスは行い、答えだけを捨てる [V]。預かった書込みは答えた後なので、
+//!   打ち切りとは関係なく窓で書く。
 //! - 波形 RAM は 64 KiB。DOC の BS（番地の bit 16）はつながず、上下のバンクは同じ RAM（台帳 §2）。
 //! - 68000 から DOC のレジスタへのアクセス（0x210000〜。同じ窓を取り合う）は段階 3 でつなぐ。今は試験と
 //!   上の層が `doc` を直接読み書きする。
@@ -52,8 +58,9 @@ impl Level {
 /// P2A の段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Stage {
+    /// 預かっているアクセスがない。
     Idle,
-    /// ラッチした。同期化した E の立下りを待つ。
+    /// 預かった。同期化した E の立下りを待つ。
     Wait,
     /// 次の E High の窓を取った。
     Claimed,
@@ -102,8 +109,9 @@ pub struct DocBoard {
     /// E の同期化の FF（16 MHz）。
     sync: [bool; 2],
     stage: Stage,
-    /// Fabric が始めた、まだラッチしていないアクセス。
+    /// Fabric が始めた、まだラッチしていないアクセス（Fabric は待っている）。
     queued: Option<Request>,
+    /// 預かっているアクセス。
     req: Option<Request>,
     /// 取った窓に E が上がった。
     owned: bool,
@@ -166,10 +174,24 @@ impl DocBoard {
     pub fn set_phase(&mut self, now: Time, units: Time) {
         let p = self.fall.period();
         self.fall.set_next(now + units % p);
-        self.rise_pending = false;
+        self.settle(now);
+    }
+
+    /// 次の E の立下りから、`now` の E のレベルと同期化の FF を決める（位相を決めた直後に、偽の縁を
+    /// 見ず、本当の縁を落とさないため）。
+    fn settle(&mut self, now: Time) {
+        let high = self.fall.next() - now <= self.fall.period() / 2;
+        self.e = Level {
+            level: high,
+            prev: high,
+            at: now,
+        };
+        self.rise_pending = !high;
+        self.sync = [high; 2];
     }
 
     /// DOC の CLK の周期（既定は 8 MHz。外部クロックのジャンパ。DR-035）。E の周期はその 8 倍。
+    /// 次の E の立下りは変えない。
     pub fn set_clock_period(&mut self, clk: Time) {
         self.fall.set_period(8 * clk);
     }
@@ -185,13 +207,24 @@ impl DocBoard {
     /// 打ち切り（時間切れ、STOP）。
     pub fn abort(&mut self) {
         self.reply = None;
-        self.queued = None;
-        if self.owned {
-            self.discard = true;
-        } else {
-            self.stage = Stage::Idle;
-            self.req = None;
+        // 待たせているアクセス：取り消す。預かっているもの（前の書込み）はそのまま
+        if self.queued.take().is_some() {
+            return;
         }
+        // 預かった読出し
+        if self.req.is_some_and(|r| !r.write) {
+            if self.owned {
+                self.discard = true;
+            } else {
+                self.stage = Stage::Idle;
+                self.req = None;
+            }
+        }
+    }
+
+    /// 預かっているアクセスがあるか（書込みの窓がまだ）。
+    pub fn busy(&self) -> bool {
+        self.stage != Stage::Idle
     }
 
     /// `t0` から 1 スロット進める。`starting` は、このスロットで始まる port 2 のアクセス。
@@ -202,7 +235,7 @@ impl DocBoard {
         if self.fall.next() + p < t0 {
             let skip = (t0 - self.fall.next()) / p * p;
             self.fall.set_next(self.fall.next() + skip);
-            self.rise_pending = false;
+            self.settle(t0);
         }
         if let Some(a) = starting {
             self.queued = Some(Request {
@@ -281,34 +314,37 @@ impl DocBoard {
 
     /// 16 MHz の立上り：E の同期化と P2A の段。
     fn ff_edge(&mut self, t: Time) {
-        // ラッチ：Fabric の出力が来ていて、前のアクセスが済んでいれば
+        let s2_old = self.sync[1];
+        self.sync[1] = self.sync[0];
+        self.sync[0] = self.e.value(t.saturating_sub(T_SETUP));
+        let fell = s2_old && !self.sync[1];
+        // 窓が終わった：預かりを空ける。読出しはここで答える
+        if fell
+            && self.stage == Stage::Claimed
+            && let Some(v) = self.op_done.take()
+        {
+            if self.req.is_some_and(|r| !r.write) && !self.discard {
+                self.reply = Some(u16::from(v));
+            }
+            self.discard = false;
+            self.stage = Stage::Idle;
+            self.req = None;
+        }
+        // ラッチ：Fabric の出力が来ていて、預かっているものがなければ。書込みはすぐ答える
         if self.stage == Stage::Idle
             && let Some(r) = self.queued.filter(|r| r.at <= t)
         {
             self.queued = None;
             self.req = Some(Request { at: t, ..r });
             self.stage = Stage::Wait;
-        }
-        let s2_old = self.sync[1];
-        self.sync[1] = self.sync[0];
-        self.sync[0] = self.e.value(t.saturating_sub(T_SETUP));
-        let fell = s2_old && !self.sync[1];
-        if !fell {
-            return;
-        }
-        match self.stage {
-            Stage::Wait if self.req.is_some_and(|r| r.at < t) => self.stage = Stage::Claimed,
-            Stage::Claimed => {
-                if let Some(v) = self.op_done.take() {
-                    if !self.discard {
-                        self.reply = Some(u16::from(v));
-                    }
-                    self.discard = false;
-                    self.stage = Stage::Idle;
-                    self.req = None;
-                }
+            if r.write {
+                self.reply = Some(0);
             }
-            _ => {}
+        }
+        // 同期化した E の立下りで次の窓を取る（同じ縁でラッチしたものも。番地から E の立上りまで
+        // 365 ns 以上ある）
+        if fell && self.stage == Stage::Wait {
+            self.stage = Stage::Claimed;
         }
     }
 }
