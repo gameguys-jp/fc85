@@ -9,6 +9,7 @@
 //! ROM の A0 が 68000 の A1 に当たる（仕様書 §08）。
 
 use crate::analog::SigWiring;
+use crate::doc::DocLines;
 use crate::dram::DramEnv;
 use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_384K, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,9 @@ pub struct Bends {
     /// DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。`dram`、DR-072）。
     #[serde(default)]
     pub dram: DramEnv,
+    /// DOC 子基板のバスのテストピン（仕様書 §11 のベンド点「DOC波形RAMの線」。`docbus`）。
+    #[serde(default)]
+    pub doc_lines: DocLines,
 }
 
 impl Bends {
@@ -97,6 +101,7 @@ impl Bends {
             && self.fifos == [FifoPins::default(); 4]
             && self.sig == SigWiring::Both
             && self.dram == DramEnv::default()
+            && self.doc_lines.is_normal()
     }
 
     /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
@@ -107,6 +112,7 @@ impl Bends {
     /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
     /// - `sig both|one`：DOC の SIG± の配線（`one` は SIG+ だけの初期の片側の配線。DR-011）
     /// - `dram unit <N>`・`dram temp <°C>`：DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。DR-072）
+    /// - `docbus A3=0,A4=A5,A5=A4,D7=1,A9=Z`：DOC 子基板のバスのテストピン（`normal` で戻す。`DocLines::parse`）
     /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
     pub fn command(&mut self, line: &str) -> Result<(), String> {
         let line = line.trim();
@@ -125,6 +131,7 @@ impl Bends {
                 }
             }
             "char" => self.char_lines.parse(rest)?,
+            "docbus" => self.doc_lines.parse(rest)?,
             "clock" => {
                 let mut f = rest.split_whitespace();
                 let (Some(which), Some(hz)) = (f.next(), f.next()) else {
@@ -211,7 +218,7 @@ impl Bends {
             }
             _ => {
                 return Err(format!(
-                    "知らない命令（mode・char・clock・fifo・sig・dram・factory）: {line}"
+                    "知らない命令（mode・char・clock・fifo・sig・dram・docbus・factory）: {line}"
                 ));
             }
         }
@@ -226,6 +233,9 @@ impl Bends {
         }];
         if !self.char_lines.is_normal() {
             v.push("文字 ROM の線".into());
+        }
+        if !self.doc_lines.is_normal() {
+            v.push("DOC のバスの線".into());
         }
         let names = ["DOC", "DSP", "ADPCM", "音声"];
         let c = self.clocks;

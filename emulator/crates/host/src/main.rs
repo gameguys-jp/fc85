@@ -12,7 +12,9 @@
 //!
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
-//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`sig both|one`、`factory`。ベンド点を
+//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`sig both|one`、`dram unit N|temp C`、
+//! `docbus A3=0,A4=A5,A5=A4,D7=1,A9=Z`（DOC 子基板のバスのテストピン。A0〜A7 と A8〜A15＝D0〜D7。
+//! `normal` で戻す）、`factory`。ベンド点を
 //! 1 つでも設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
 //! `--bend-script` は「フレーム 命令」の行の台本で、そのフレームの頭で実行する。
 //! `--*-clock HZ` は `--bend "clock … HZ"`、`--char-bend SPEC` は `--bend "char SPEC"`、`--doc-sig one`
@@ -147,7 +149,10 @@ fn parse_args() -> Args {
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
-                     [--audio-tap digital|line] [--doc-sig both|one]"
+                     [--audio-tap digital|line] [--doc-sig both|one]\n\
+                     --bend CMD：mode normal|bend|toggle、char A1=A2,D6=0,D2=Z、clock doc|dsp|adpcm|audio HZ|off、\
+                     fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open、sig both|one、dram unit N|temp C、\
+                     docbus A3=0,A4=A5,D7=1,A9=Z（DOC のバスのテストピン。normal で戻す）、factory"
                 );
                 std::process::exit(0);
             }

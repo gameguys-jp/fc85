@@ -891,6 +891,9 @@ impl System {
         .periods();
         p.doc_board.set_clock_period(doc);
         p.doc_board.sig_wiring = if on { self.bends.sig } else { SigWiring::Both };
+        let now = p.now();
+        p.doc_board
+            .set_bends(on.then_some((&self.bends.doc_lines, self.bends.dram)), now);
         p.dsp.set_input_period(4 * dsp);
         p.adpcm_port.set_input_period(adpcm);
         p.audio.set_input_period(audio);
