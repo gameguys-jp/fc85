@@ -285,6 +285,17 @@ impl Ports for FabricPorts {
         }
     }
 
+    fn ready_lines(&self) -> u32 {
+        // 拡張の XRDY（bit 11）はまだない。
+        let dac = if self.doc { true } else { self.dac.ir() };
+        (self.acrtc.rdy1() as u32) << 1
+            | (dac as u32) << 2
+            | (self.dsp_in.ir() as u32) << 3
+            | (self.dsp_out.or() as u32) << 4
+            | (self.adpcm.ir() as u32) << 5
+            | ((self.present(10) && self.audio_in.or()) as u32) << 10
+    }
+
     fn access(&mut self, a: &Access) -> PortReply {
         let v = match (a.port, a.dir) {
             (0, Dir::Read) => self.staging_read(a.addr, a.word),

@@ -18,7 +18,14 @@
 //! CPU の側は `host_read`・`host_write`（窓 0x250000〜0x250FFF の中のオフセット、16 bit だけ）。
 //! A ファイルの語（SRC_ADDR・DST_ADDR・COUNT）へのアクセスは、次のスロットの頭で許可され、
 //! それまで `HostReply::Wait` を返す。結果は、許可のスロットの後に `host_poll` で受け取る。
+//!
+//! 変換部（ROT0–3、MSK0–1、ANX0–3）、準備の信号（RDY）、ポートの属性（ATR）は、PAL に焼く式と
+//! PROM の中身から生成した `fabric_pal` を通す（DR-084）。
 
+use crate::fabric_pal::{
+    ATR, ATR_ADDR, ATR_F4, ATR_FLAG, ATR_OKD, ATR_OKN, ATR_SONLY, ATR_TWO, ATR_W16, MSK0, MSK1,
+    anx0, anx1, anx2, anx3, rdy, rot0, rot1, rot2, rot3,
+};
 use serde::{Deserialize, Serialize};
 
 /// 実装したチャネルの数（窓は 4 チャネル分を予約。仕様書 §06）。
@@ -44,6 +51,7 @@ pub enum PortWidth {
 }
 
 /// ポートの属性（fabric.md §06 の表。`tools/fabric/fabric_logic.py` の `PORTS` と同じ）。
+/// 人が読む表で、試験で ATR の中身と突き合わせる。Fabric の判断は ATR（`atr`）を使う。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PortAttr {
     pub read: bool,
@@ -83,32 +91,37 @@ pub fn port_attr(port: u8, doc: bool) -> PortAttr {
     }
 }
 
+/// ATR（63S281A）の出力。番地はポート、向き、FORMAT（fabric.md §06）。
+#[inline]
+pub fn atr(port: u8, dir: Dir, format: u8) -> u8 {
+    ATR[(port & 15) as usize | ((dir == Dir::Write) as usize) << 4 | ((format & 7) as usize) << 5]
+}
+
 /// FORMAT の入力が 16 bit か（読出し元の側の W16）。
 pub fn input_is_word(format: u8) -> bool {
-    matches!(format & 7, 1 | 3 | 4 | 5)
+    atr(0, Dir::Read, format) & ATR_W16 != 0
 }
 
 /// FORMAT の出力が 16 bit か（書込み先の側の W16）。
 pub fn output_is_word(format: u8) -> bool {
-    matches!(format & 7, 1 | 2 | 5)
+    atr(0, Dir::Write, format) & ATR_W16 != 0
 }
 
 /// このポートを、この向きと FORMAT で使えるか（ATR の OKD・OKN）。モジュールの有無は見ない。
 pub fn port_ok(port: u8, dir: Dir, format: u8, doc: bool) -> bool {
-    let f = format & 7;
-    if f >= 6 {
-        return false;
-    }
-    let a = port_attr(port, doc);
-    let (can, word) = match dir {
-        Dir::Read => (a.read, input_is_word(f)),
-        Dir::Write => (a.write, output_is_word(f)),
-    };
-    can && match a.width {
-        PortWidth::Either => true,
-        PortWidth::Word => word,
-        PortWidth::Byte => !word,
-    }
+    atr(port, dir, format) & if doc { ATR_OKD } else { ATR_OKN } != 0
+}
+
+/// 番地を持ち、歩進するポートか（ATR の ADDR。向きと FORMAT によらない）。
+#[inline]
+fn has_addr(port: u8) -> bool {
+    atr(port, Dir::Read, 0) & ATR_ADDR != 0
+}
+
+/// S のスロットでだけアクセスするポートか（ATR の SONLY。port 0）。
+#[inline]
+fn s_only(port: u8) -> bool {
+    atr(port, Dir::Read, 0) & ATR_SONLY != 0
 }
 
 /// IC の応答まで延びるアクセス（port 1 と、DOC 子基板があるときの port 2。DR-046 (1)）。
@@ -124,31 +137,29 @@ pub fn shift_amount(shift: u8) -> i32 {
 
 /// 書込みのスロットで FD バスに出る 16 bit（fabric.md §04 の ANX の出力）。
 ///
+/// 回路のとおり、IL → ROT0–1 → ROT2–3 → ANX0–3（MSK0–1、MASK、XOR）を、PAL の式と PROM の中身から
+/// 生成した関数で計算する（DR-084）。回す量 T は SHIFT の下位 4 bit で、T3 ＝ S3 ⊕ F4（74LS86）。
+///
 /// 8 bit の出力の FORMAT では、MSK が上位 8 bit を 0 にするので、上位には XOR の上位 8 bit が出る。
 /// 8 bit のポートは下位バイトだけを使う。FORMAT 6・7 は MSK が 0 なので XOR がそのまま出る
 /// （START の検査で ERROR になるので、動作中の書換えのときだけ）。
+#[inline]
 pub fn fd_value(input: u16, format: u8, shift: u8, mask: u16, xor: u16) -> u16 {
-    let f = format & 7;
-    if f >= 6 {
-        return xor;
-    }
-    let s = shift_amount(shift);
-    let y = if f == 5 {
-        input.rotate_left((s & 15) as u32)
-    } else {
-        let x = match f {
-            0 | 2 | 3 => input & 0xFF,
-            4 => input >> 8,
-            _ => input,
-        } as u32;
-        (if s >= 0 { x << s } else { x >> -s }) as u16
-    };
-    let v = (y & mask) ^ xor;
-    if output_is_word(f) {
-        v
-    } else {
-        (v & 0x00FF) | (xor & 0xFF00)
-    }
+    let f = (format & 7) as usize;
+    let s5 = (shift & 31) as usize;
+    let f4 = atr(0, Dir::Write, format) & ATR_F4 != 0;
+    let t = (s5 as u32 & 15) ^ if f4 { 8 } else { 0 };
+    let d = input as u32;
+    let fine = rot0(d, t).f | rot1(d, t).f;
+    let r = rot2(fine, t).r | rot3(fine, t).r;
+    let a = s5 | f << 5;
+    let m = MSK0[a] as u32 | (MSK1[a] as u32) << 8;
+    let (k, x) = (mask as u32, xor as u32);
+    let q = anx0(r, m, k, x, true).q
+        | anx1(r, m, k, x, true).q
+        | anx2(r, m, k, x, true).q
+        | anx3(r, m, k, x, true).q;
+    q as u16
 }
 
 /// 仕様書 §06・DR-046 (5) の変換：入力（8 bit のポートは下位バイト）→ FORMAT と SHIFT →
@@ -193,8 +204,26 @@ pub trait Ports {
     fn trigger_levels(&self) -> u8 {
         0
     }
-    /// 準備の信号（RDY の入力）。スロットの中ほどで、このスロットのアクセスより前の状態を返す。
+    /// そのポートの準備の信号。スロットの中ほどで、このスロットのアクセスより前の状態を返す。
+    /// Fabric は `ready_lines` を通して見る。
     fn ready(&self, port: u8, dir: Dir) -> bool;
+    /// RDY の PAL の入力の線（fabric.md §06）。bit n が port n の線（1：RDY1、2：RDY2、3：IR3、4：OR4、
+    /// 5：IR5、10：OR10）、bit 11 が拡張の XRDY。既定は `ready` から作る。
+    fn ready_lines(&self) -> u32 {
+        let mut v = 0;
+        for (bit, port, dir) in [
+            (1, 1, Dir::Read),
+            (2, 2, Dir::Write),
+            (3, 3, Dir::Write),
+            (4, 4, Dir::Read),
+            (5, 5, Dir::Write),
+            (10, 10, Dir::Read),
+            (11, 11, Dir::Read),
+        ] {
+            v |= (self.ready(port, dir) as u32) << bit;
+        }
+        v
+    }
     /// アクセスを始める。port 1 と DOC の port 2 のほかは、すぐ `Done` を返す。
     fn access(&mut self, acc: &Access) -> PortReply;
     /// 延びたアクセスの続き。始めた次のスロットから、終わるまで毎スロット呼ぶ。
@@ -698,15 +727,32 @@ impl Fabric {
             self.active = Some(self.begin(sc, doc));
         }
         let candidate = self.dbch;
-        let (aop, decision) = self.decide(doc, next_s);
+        let (aop, decision) = self.decide(next_s);
         self.dbch = self.next_candidate(s);
         let starting = self.active.filter(|a| a.elapsed == 0).map(|a| a.acc);
         ports.run_slot(starting.as_ref());
 
-        // 2. 中ほど：候補の準備の信号
-        let regs = self.ch[self.dbch as usize].regs;
-        self.rdy_s = ports.ready(regs.src, Dir::Read);
-        self.rdy_d = ports.ready(regs.dst, Dir::Write);
+        // 2. 中ほど：候補の準備の信号（RDY の PAL が MCLK で取り込む）。取り込んだ値を見るのは、次の頭で
+        //    要素がなく、候補が動いているときだけ（`decide`）。そうなりえないスロットでは計算を省き、前の値の
+        //    ままにする（判断は変わらない。要素はこの後の頭まで新しくできず、候補が Run になるのは、この
+        //    スロットの再設定の 3 段目だけ）。
+        let c = self.dbch;
+        if self.elem.is_none()
+            && (self.ch[c as usize].phase == Phase::Run || aop == Aop::Reload(c, 2))
+        {
+            let regs = self.ch[c as usize].regs;
+            let lines = ports.ready_lines();
+            let r = rdy(
+                regs.src as u32,
+                regs.dst as u32,
+                lines,
+                lines,
+                lines,
+                lines & 1 << 11 != 0,
+            );
+            self.rdy_s = r.srdy;
+            self.rdy_d = r.drdy;
+        }
 
         // 3. アクセス
         let mut record_access = None;
@@ -807,9 +853,10 @@ impl Fabric {
                 (self.pd, output_is_word(regs.format), fd)
             }
         };
+        let attr = atr(sc.port, sc.dir, regs.format);
         let kind = if is_long(sc.port, doc) {
             Kind::Long
-        } else if sc.port == 9 && sc.dir == Dir::Read {
+        } else if attr & ATR_TWO != 0 {
             Kind::Two
         } else {
             Kind::Single
@@ -825,7 +872,7 @@ impl Fabric {
             },
             kind,
             elapsed: 0,
-            flag: port_attr(sc.port, doc).flag,
+            flag: attr & ATR_FLAG != 0,
             result: None,
             end_mark: false,
         }
@@ -848,7 +895,7 @@ impl Fabric {
 
     /// スロットの頭の判断（fabric.md §06 の ELG・SEQ）。優先は、CPU、動いている要素の W、
     /// その COUNT の更新、再設定、新しい要素の順（DR-046 (2)）。
-    fn decide(&mut self, doc: bool, next_s: bool) -> (Aop, Decision) {
+    fn decide(&mut self, next_s: bool) -> (Aop, Decision) {
         // 2 スロット以上のアクセスの間は、次のアクセスを決めない。port 9 は 2 スロット目の頭で
         // 終わりが分かるので決める。延びるアクセスは、終わった次のスロットの頭で決める。
         let can_decide = match &self.active {
@@ -877,16 +924,16 @@ impl Fabric {
                         .is_some_and(|a| a.acc.dir == Dir::Read && a.acc.ch == e.ch);
                 if r_ends && can_decide {
                     let regs = &self.ch[e.ch as usize].regs;
-                    let (sa, da) = (port_attr(regs.src, doc), port_attr(regs.dst, doc));
+                    let (sa, da) = (has_addr(regs.src), has_addr(regs.dst));
                     // 書込み先が番地を持てば歩進、逐次で読出し元が番地を持てば COUNT の更新（fabric.md §05）。
-                    let need = if da.addr {
+                    let need = if da {
                         Some(Aop::DstStep(e.ch))
-                    } else if sa.addr {
+                    } else if sa {
                         Some(Aop::Count(e.ch))
                     } else {
                         None
                     };
-                    if (regs.dst != 0 || next_s) && (need.is_none() || aop == Aop::None) {
+                    if (!s_only(regs.dst) || next_s) && (need.is_none() || aop == Aop::None) {
                         if let Some(op) = need {
                             aop = op;
                         }
@@ -896,7 +943,7 @@ impl Fabric {
                             dir: Dir::Write,
                         });
                         e.w_decided = true;
-                        e.count_after_w = sa.addr && da.addr;
+                        e.count_after_w = sa && da;
                         decision = Decision::Write(e.ch);
                     }
                 }
@@ -921,9 +968,10 @@ impl Fabric {
                     let ready = self.rdy_s && self.rdy_d;
                     ch.stall = armed && !ready;
                     let src = ch.regs.src;
-                    if armed && ready && (src != 0 || next_s) && !flag_block && aop == Aop::None {
+                    if armed && ready && (!s_only(src) || next_s) && !flag_block && aop == Aop::None
+                    {
                         // 読出し元が番地を持てば歩進、逐次なら COUNT の更新（fabric.md §05）。
-                        aop = if port_attr(src, doc).addr {
+                        aop = if has_addr(src) {
                             Aop::SrcStep(c)
                         } else {
                             Aop::Count(c)

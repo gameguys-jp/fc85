@@ -1,16 +1,18 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.8**  
-2026年11月25日
+**v0.9**  
+2026年11月26日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)
 
 ## 01　前提と範囲
 
 - 対象は B 基板の Data Fabric のブロック（board.md §02 の「Data Fabric」の行）。A 基板の Staging RAM の調停、ACRTC とのブリッジ（DR-016 の同期化の FF）、DSP・ADPCM・本体 DAC のポートアダプタ、Temporal RAM のカウンタは、それぞれのブロックに数える。FIFO の 67401×14 は数だけを書く。
 - 量産計画のゲートアレイ（DR-010）は対象にしない。
 - 式は PALASM の書き方（`/` は否定、`*` は AND、`+` は OR、`:=` は登録出力）。L 型の PAL は出力が反転するので、左辺を `/X` と書き、項に入力の否定を入れて、ピンの論理を正にする。
-- 変換部（ROT、MSK、ANX）と準備の信号（RDY）の式、ポートの属性の PROM（ATR）の中身は、[tools/fabric/fabric_logic.py](../../tools/fabric/fabric_logic.py) で作り、仕様の定義と突き合わせた [P]。順序と状態の PAL（SEQ、ELG、AFC、CHS、STS、STB、HDEC、HACK、TIM、P1A、P2A、PRST）は、入出力と働きまでを決めた。式は、段階 2 のエミュレータのスロットの模型（`emulator/crates/board/src/fabric.rs`、[emulator.md](../impl/emulator.md) §03）と突き合わせて書く [V]（OI-050）。
+- 1 つの PAL は見出しのコメント `; 名前 (型番)` で始め、`PIN` の行にピン 1 から順に信号を並べる（GND・VCC は電源、NC は使わないピン。登録出力の PAL のピン 1 はクロック、/OE をいつも出すなら GND）。`IF (積)` は 3 ステートの出力の許可。`+` で始まる行は前の式の続き [P]（DR-084）。
+- この文書の式のコードブロックは、PAL に焼く式そのもので、[tools/fabric/pal/](../../tools/fabric/pal/) のファイルと同じ。[tools/fabric/fabric_logic.py](../../tools/fabric/fabric_logic.py) が式を読み、ピンと項が型番に収まるかと、仕様の定義と同じ値を出すかを確かめ、エミュレータの `emulator/crates/board/src/fabric_pal.rs` を生成する。ポートの属性の PROM（ATR）と MSK の中身も、同じファイルで作る [P]（DR-084）。
+- 変換部（ROT、MSK、ANX）と準備の信号（RDY）の式、ATR の中身は、仕様の定義と突き合わせた [P]。順序と状態の PAL（SEQ、ELG、AFC、CHS、STS、STB、HDEC、HACK、TIM、P1A、P2A、PRST）は、入出力と働きまでを決めた。式は、段階 2 のエミュレータのスロットの模型（`emulator/crates/board/src/fabric.rs`、[emulator.md](../impl/emulator.md) §03）と突き合わせて書く [V]（OI-050）。
 - 部品の型番は MMI の 1983年の PAL ハンドブックと 1985年のデータブック（[review-digital.md](../parts/review-digital.md) の MMIPAL83、MMI85）と、74LS・74S の標準品から選んだ。日立の同等品の有無は [V]（09）。
 
 ## 02　構成
@@ -73,10 +75,11 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 - MSK0・MSK1（63S281A×2、番地は SHIFT 5 bit と FORMAT 3 bit）が、出力の位置で有効なビットを出す。FORMAT 1 は SHIFT ≥ 0 で j ≥ s、負で j ≤ 15+s。FORMAT 0・2〜4 は s ≤ j ≤ s+7。FORMAT 5 はすべて。8 bit の出力（FORMAT 0・3・4）は上位 8 bit を 0 にする。FORMAT 6・7 は 0（START の検査で ERROR になるので使わない）。
 - ANX は W のスロットだけ FD に出す（WEN。STB が出す）。8 bit のポートは FD の下位バイトを使う。上位バイトには XOR の上位 8 bit が出るが、ポートは使わない。
 
-変換の全体を、仕様の定義（hardware.md §06、DR-046）と 61,056 通りの値で突き合わせた（FORMAT 0〜5 × SHIFT −16〜15 × 入力 318 通り、MASK・XOR は乱数）[P]。ROT と ANX の式も、式そのものを評価して確かめた。
+変換の全体を、下の式そのもの（ROT0–3、ANX0–3）と MSK の中身を評価して、仕様の定義（hardware.md §06、DR-046）と 61,056 通りの値で突き合わせた（FORMAT 0〜5 × SHIFT −16〜15 × 入力 318 通り、MASK・XOR は乱数）[P]。エミュレータは、この式から生成した関数で変換する（DR-084）。生成した経路は、それまでの変換の式と、FORMAT 0〜7 × SHIFT 32 通り × 4,096 通りの値で同じ値を出し、ROT は 16 bit の全部の値と回す量 16 通りのすべてで正しく回る（emulator.md §04）[P]。
 
 ```
 ; ROT0 (PAL20L8A)  入力 D0–D7、D13–D15、T0、T1。細かい段：0〜3 だけ左へ回す
+PIN D0 D1 D2 D3 D4 D5 D6 D7 D13 D14 D15 GND T0 T1 F0 F1 F2 F3 F4 F5 F6 F7 NC VCC
 /F0 = /T1*/T0*/D0 + /T1*T0*/D15 + T1*/T0*/D14 + T1*T0*/D13
 /F1 = /T1*/T0*/D1 + /T1*T0*/D0 + T1*/T0*/D15 + T1*T0*/D14
 /F2 = /T1*/T0*/D2 + /T1*T0*/D1 + T1*/T0*/D0 + T1*T0*/D15
@@ -87,6 +90,7 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 /F7 = /T1*/T0*/D7 + /T1*T0*/D6 + T1*/T0*/D5 + T1*T0*/D4
 
 ; ROT1 (PAL20L8A)  入力 D5–D15、T0、T1
+PIN D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15 GND T0 T1 F8 F9 F10 F11 F12 F13 F14 F15 NC VCC
 /F8 = /T1*/T0*/D8 + /T1*T0*/D7 + T1*/T0*/D6 + T1*T0*/D5
 /F9 = /T1*/T0*/D9 + /T1*T0*/D8 + T1*/T0*/D7 + T1*T0*/D6
 /F10 = /T1*/T0*/D10 + /T1*T0*/D9 + T1*/T0*/D8 + T1*T0*/D7
@@ -97,6 +101,7 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 /F15 = /T1*/T0*/D15 + /T1*T0*/D14 + T1*/T0*/D13 + T1*T0*/D12
 
 ; ROT2 (PAL20L8A)  入力 F0、F1、F4、F5、F8、F9、F12、F13、T2、T3。粗い段：4 の倍数だけ回す
+PIN F0 F1 F4 F5 F8 F9 F12 F13 T2 T3 NC GND NC NC R0 R1 R4 R5 R8 R9 R12 R13 NC VCC
 /R0 = /T3*/T2*/F0 + /T3*T2*/F12 + T3*/T2*/F8 + T3*T2*/F4
 /R1 = /T3*/T2*/F1 + /T3*T2*/F13 + T3*/T2*/F9 + T3*T2*/F5
 /R4 = /T3*/T2*/F4 + /T3*T2*/F0 + T3*/T2*/F12 + T3*T2*/F8
@@ -107,6 +112,7 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 /R13 = /T3*/T2*/F13 + /T3*T2*/F9 + T3*/T2*/F5 + T3*T2*/F1
 
 ; ROT3 (PAL20L8A)  入力 F2、F3、F6、F7、F10、F11、F14、F15、T2、T3
+PIN F2 F3 F6 F7 F10 F11 F14 F15 T2 T3 NC GND NC NC R2 R3 R6 R7 R10 R11 R14 R15 NC VCC
 /R2 = /T3*/T2*/F2 + /T3*T2*/F14 + T3*/T2*/F10 + T3*T2*/F6
 /R3 = /T3*/T2*/F3 + /T3*T2*/F15 + T3*/T2*/F11 + T3*T2*/F7
 /R6 = /T3*/T2*/F6 + /T3*T2*/F2 + T3*/T2*/F14 + T3*T2*/F10
@@ -117,14 +123,35 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 /R15 = /T3*/T2*/F15 + /T3*T2*/F11 + T3*/T2*/F7 + T3*T2*/F3
 
 ; ANX0 (PAL20L8A)  入力 R・M（MSK）・K（MASK）・X（XOR）の 4 bit 分と WEN。Q = (R*M*K) ⊕ X
+PIN R0 R1 R2 R3 M0 M1 M2 M3 K0 K1 K2 GND K3 X0 Q0 Q1 X1 X2 X3 WEN Q2 Q3 NC VCC
 IF (WEN) /Q0 = R0*M0*K0*X0 + /R0*/X0 + /M0*/X0 + /K0*/X0
 IF (WEN) /Q1 = R1*M1*K1*X1 + /R1*/X1 + /M1*/X1 + /K1*/X1
 IF (WEN) /Q2 = R2*M2*K2*X2 + /R2*/X2 + /M2*/X2 + /K2*/X2
 IF (WEN) /Q3 = R3*M3*K3*X3 + /R3*/X3 + /M3*/X3 + /K3*/X3
-; ANX1〜ANX3 は bit 4–7、8–11、12–15 で同じ形
+
+; ANX1 (PAL20L8A)  bit 4–7
+PIN R4 R5 R6 R7 M4 M5 M6 M7 K4 K5 K6 GND K7 X4 Q4 Q5 X5 X6 X7 WEN Q6 Q7 NC VCC
+IF (WEN) /Q4 = R4*M4*K4*X4 + /R4*/X4 + /M4*/X4 + /K4*/X4
+IF (WEN) /Q5 = R5*M5*K5*X5 + /R5*/X5 + /M5*/X5 + /K5*/X5
+IF (WEN) /Q6 = R6*M6*K6*X6 + /R6*/X6 + /M6*/X6 + /K6*/X6
+IF (WEN) /Q7 = R7*M7*K7*X7 + /R7*/X7 + /M7*/X7 + /K7*/X7
+
+; ANX2 (PAL20L8A)  bit 8–11
+PIN R8 R9 R10 R11 M8 M9 M10 M11 K8 K9 K10 GND K11 X8 Q8 Q9 X9 X10 X11 WEN Q10 Q11 NC VCC
+IF (WEN) /Q8 = R8*M8*K8*X8 + /R8*/X8 + /M8*/X8 + /K8*/X8
+IF (WEN) /Q9 = R9*M9*K9*X9 + /R9*/X9 + /M9*/X9 + /K9*/X9
+IF (WEN) /Q10 = R10*M10*K10*X10 + /R10*/X10 + /M10*/X10 + /K10*/X10
+IF (WEN) /Q11 = R11*M11*K11*X11 + /R11*/X11 + /M11*/X11 + /K11*/X11
+
+; ANX3 (PAL20L8A)  bit 12–15
+PIN R12 R13 R14 R15 M12 M13 M14 M15 K12 K13 K14 GND K15 X12 Q12 Q13 X13 X14 X15 WEN Q14 Q15 NC VCC
+IF (WEN) /Q12 = R12*M12*K12*X12 + /R12*/X12 + /M12*/X12 + /K12*/X12
+IF (WEN) /Q13 = R13*M13*K13*X13 + /R13*/X13 + /M13*/X13 + /K13*/X13
+IF (WEN) /Q14 = R14*M14*K14*X14 + /R14*/X14 + /M14*/X14 + /K14*/X14
+IF (WEN) /Q15 = R15*M15*K15*X15 + /R15*/X15 + /M15*/X15 + /K15*/X15
 ```
 
-ROT0・ROT1 は入力 13 本・出力 8 本、ROT2・ROT3 は入力 10 本・出力 8 本、ANX は入力 17 本・出力 4 本（3 ステート）で、PAL20L8 の入力（出力 8 本で 14 本、出力 4 本で 18 本）と項の数（1 出力 7 項）に収まる。
+ROT0・ROT1 は入力 13 本・出力 8 本、ROT2・ROT3 は入力 10 本・出力 8 本、ANX は入力 17 本・出力 4 本（3 ステート）で、PAL20L8 の入力（出力 8 本で 14 本、出力 4 本で 18 本）と項の数（1 出力 7 項）に収まる。PIN の行のピンの割当て（出力は 15〜22、ANX の出力は帰還のない 15・22 と 16・21、入力に使う I/O は 17〜20）も、fabric_logic.py が型番のピンの働きと突き合わせて確かめる [P]（DR-084）。
 
 ## 05　番地と COUNT の経路
 
@@ -210,11 +237,12 @@ FORMAT 6・7 は、どのポートでも OKD・OKN が 0。
 
 ```
 ; RDY (PAL20R4A)  MCLK で取り込む。入力 S3–S0、D3–D0（判断バス）、RDY1、RDY2、OR4、OR10、IR3、IR5、XRDY
+PIN MCLK S0 S1 S2 S3 D0 D1 D2 D3 RDY1 RDY2 GND GND OR4 OR10 IR3 SRDY DRDY NC NC IR5 XRDY NC VCC
 /SRDY := /S3*/S2*/S1*S0*/RDY1 + /S3*/S2*S1*/S0*/RDY2 + /S3*S2*/S1*/S0*/OR4 + S3*/S2*S1*/S0*/OR10 + S3*/S2*S1*S0*/XRDY + S3*S2*/XRDY
 /DRDY := /D3*/D2*/D1*D0*/RDY1 + /D3*/D2*D1*/D0*/RDY2 + /D3*/D2*D1*D0*/IR3 + /D3*D2*/D1*D0*/IR5 + D3*/D2*D1*D0*/XRDY + D3*D2*/XRDY
 ```
 
-ポートの番号の 16 通りと、準備の信号の 128 通りのすべてで、仕様と一致することを確かめた [P]。
+ポートの番号の 16 通りと、準備の信号の 128 通りのすべてで、仕様と一致することを確かめた [P]。RDY の入力の 15 本のうち 3 本（OR10、IR3、IR5）は、組合せの I/O のピン（15、16、21）を入力に使う。エミュレータは、この式から生成した関数で準備を取り込み、ATR の中身もそのまま引く（DR-084）[P]。
 
 ### 順序の PAL（SEQ、ELG、AFC）
 

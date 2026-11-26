@@ -1,20 +1,47 @@
 #!/usr/bin/env python3
-"""Data Fabric（最終試作機）の PAL の式と PROM の中身を作り、仕様と同じ結果になるかを確かめる。
+"""Data Fabric（最終試作機）の PAL の式と PROM の中身を確かめ、エミュレータの Rust を作る。
 
-対象は docs/spec/fabric.md の §04（変換部）と §06（ポートの属性と準備の信号）。
-仕様の定義は docs/spec/hardware.md §06 と DR-046。
+PAL の式の元は `tools/fabric/pal/*.pal`（PALASM。書き方は palasm.py）。PAL に焼く式そのものを読み、
+評価して、仕様の定義（docs/spec/hardware.md §06、DR-046）と突き合わせる。docs/spec/fabric.md の
+式のコードブロックは、このファイルの中身と同じにする（--check で確かめる）。PROM（MSK0・MSK1、ATR）の
+中身は、このファイルの関数で作る。
 
-    python tools/fabric/fabric_logic.py            # 確かめて、式を標準出力へ
-    python tools/fabric/fabric_logic.py --prom DIR # PROM の中身を DIR に書く（1 行 1 番地の 16 進）
+    py tools/fabric/fabric_logic.py            # 確かめて、ピンと項の使い方を標準出力へ
+    py tools/fabric/fabric_logic.py --rust     # 確かめて、emulator/crates/board/src/fabric_pal.rs を書く
+    py tools/fabric/fabric_logic.py --check    # 生成した Rust と fabric.md の式が今の式と同じか
+    py tools/fabric/fabric_logic.py --prom DIR # PROM の中身を DIR に書く（1 行 1 番地の 16 進）
 
-外部のライブラリは使わない。PAL の式は PALASM の書き方（/ は否定、* は AND、+ は OR）。
-L 型の PAL は出力が反転するので、式の左辺を /X と書き、入力の否定を項に入れて、ピンの論理を正にする。
+外部のライブラリは使わない。
 """
 import random
+import re
 import sys
 from pathlib import Path
 
+import palasm
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+PAL_DIR = HERE / 'pal'
+# fabric.md の式のコードブロックの順。
+PAL_FILES = ['transform.pal', 'rdy.pal']
+RUST_OUT = ROOT / 'emulator' / 'crates' / 'board' / 'src' / 'fabric_pal.rs'
+FABRIC_MD = ROOT / 'docs' / 'spec' / 'fabric.md'
+REGEN = 'py tools/fabric/fabric_logic.py --rust'
+
 M16 = 0xFFFF
+
+
+def load_pals():
+    """PAL の名前 → Pal（ファイルの順）。"""
+    pals = {}
+    for f in PAL_FILES:
+        for p in palasm.load(PAL_DIR / f):
+            if p.name in pals:
+                raise palasm.PalError(f'{p.name} が 2 回ある')
+            pals[p.name] = p
+    return pals
+
 
 # ---------------------------------------------------------------- 仕様の定義
 
@@ -60,99 +87,47 @@ def mask_prom(f, s):
     return m
 
 
-def hw_transform(r, f, s5, mask, xor):
-    """回路どおりに計算する。s5 は SHIFT の 5 bit（0〜31）。"""
-    s = s5 - 32 if s5 >= 16 else s5
-    t = (s5 & 15) ^ (8 if f == 4 else 0)            # T3 = S3 xor F4（74LS86）
-    t0, t1, t2, t3 = t & 1, t >> 1 & 1, t >> 2 & 1, t >> 3 & 1
-    fine = sum(((r >> ((i - (t1 * 2 + t0)) % 16)) & 1) << i for i in range(16))      # ROT0/1
-    rot = sum(((fine >> ((i - 4 * (t3 * 2 + t2)) % 16)) & 1) << i for i in range(16))  # ROT2/3
-    pm = mask_prom(f, s)
-    out = 0
-    for i in range(16):                                                                # ANX0..3
-        a = (rot >> i) & (pm >> i) & (mask >> i) & 1
-        out |= (a ^ ((xor >> i) & 1)) << i
+def msk_rom(k):
+    """MSK0（k=0、出力の bit 0–7）・MSK1（k=1、bit 8–15）の 256 番地。番地は SHIFT(bit 4–0) と FORMAT(bit 7–5)。"""
+    out = []
+    for a in range(256):
+        s5, f = a & 31, a >> 5
+        s = s5 - 32 if s5 >= 16 else s5
+        out.append((mask_prom(f, s) >> (8 * k)) & 0xFF)
     return out
 
 
-def lit(name, pos):
-    return name if pos else '/' + name
+def comb_bus(c, buses, out):
+    """組合せの PAL を評価して、出力の bus の値と、出している bit を返す。"""
+    comb, oe, _ = c.run(c.pack(buses))
+    return c.unpack(comb, out), c.unpack(oe, out)
 
 
-def rot_pals():
-    pals = []
-    for p, bits in ((0, range(0, 8)), (1, range(8, 16))):       # 細かい段：0〜3 だけ左へ回す
-        eqs = []
-        for i in bits:
-            terms = [f"{lit('T1', k >> 1)}*{lit('T0', k & 1)}*/D{(i - k) % 16}" for k in range(4)]
-            eqs.append(f"/F{i} = " + " + ".join(terms))
-        pals.append((f'ROT{p}', 'PAL20L8A', eqs))
-    for p, cls in ((2, (0, 1)), (3, (2, 3))):                   # 粗い段：4 の倍数だけ回す
-        eqs = []
-        for i in [i for i in range(16) if i % 4 in cls]:
-            terms = [f"{lit('T3', k >> 1)}*{lit('T2', k & 1)}*/F{(i - 4 * k) % 16}" for k in range(4)]
-            eqs.append(f"/R{i} = " + " + ".join(terms))
-        pals.append((f'ROT{p}', 'PAL20L8A', eqs))
-    return pals
+def pal_transform(cp, r, f, s5, mask, xor, wen=True):
+    """式そのものを評価して、W のスロットで FD に出る 16 bit を返す。cp は PAL の名前 → Compiled。
+    T3 = S3 xor F4（74LS86）。返す値は（FD の値、出している bit）。"""
+    t = (s5 & 15) ^ (8 if f == 4 else 0)
+    fv = comb_bus(cp['ROT0'], {'d': r, 't': t}, 'f')[0] | comb_bus(cp['ROT1'], {'d': r, 't': t}, 'f')[0]
+    rv = comb_bus(cp['ROT2'], {'f': fv, 't': t}, 'r')[0] | comb_bus(cp['ROT3'], {'f': fv, 't': t}, 'r')[0]
+    a = s5 | f << 5
+    m = MSK[0][a] | MSK[1][a] << 8
+    q = oe = 0
+    for k in range(4):
+        v, e = comb_bus(cp[f'ANX{k}'], {'r': rv, 'm': m, 'k': mask, 'x': xor, 'wen': wen}, 'q')
+        q |= v
+        oe |= e
+    return q, oe
 
 
-def anx_pals():
-    pals = []
-    for p in range(4):
-        eqs = ["IF (WEN) " + f"/Q{i} = R{i}*M{i}*K{i}*X{i} + /R{i}*/X{i} + /M{i}*/X{i} + /K{i}*/X{i}"
-               for i in range(4 * p, 4 * p + 4)]
-        pals.append((f'ANX{p}', 'PAL20L8A', eqs))
-    return pals
+MSK = [msk_rom(0), msk_rom(1)]
 
 
-def eval_sop(rhs, env):
-    """PALASM の積和の右辺を評価する。"""
-    for term in rhs.split('+'):
-        ok = True
-        for lt in term.strip().split('*'):
-            neg = lt.startswith('/')
-            v = env[lt.lstrip('/')]
-            if v == neg:
-                ok = False
-                break
-        if ok:
-            return True
-    return False
+def compiled(pals):
+    return {n: palasm.Compiled(p) for n, p in pals.items()}
 
 
-def check_rot_equations():
-    """ROT の式そのものを評価して、回す量 0〜15 で正しく回るかを確かめる。"""
-    pals = dict((n, e) for n, _, e in rot_pals())
-    rnd = random.Random(85)
-    for _ in range(2000):
-        d = rnd.randrange(65536)
-        t = rnd.randrange(16)
-        env = {f'D{i}': bool(d >> i & 1) for i in range(16)}
-        env.update({f'T{k}': bool(t >> k & 1) for k in range(4)})
-        for n in ('ROT0', 'ROT1'):
-            for eq in pals[n]:
-                lhs, rhs = eq.split(' = ')
-                env[lhs.lstrip('/')] = not eval_sop(rhs, env)
-        for n in ('ROT2', 'ROT3'):
-            for eq in pals[n]:
-                lhs, rhs = eq.split(' = ')
-                env[lhs.lstrip('/')] = not eval_sop(rhs, env)
-        got = sum(env[f'R{i}'] << i for i in range(16))
-        assert got == rotl(d, t), (hex(d), t, hex(got))
-
-
-def check_anx_equations():
-    for r in (0, 1):
-        for m in (0, 1):
-            for k in (0, 1):
-                for x in (0, 1):
-                    env = {'R0': bool(r), 'M0': bool(m), 'K0': bool(k), 'X0': bool(x)}
-                    rhs = anx_pals()[0][2][0].split(' = ')[1]
-                    q = not eval_sop(rhs, env)
-                    assert q == bool((r & m & k) ^ x)
-
-
-def check_transform():
+def check_transform(pals):
+    cp = compiled(pals)
     rnd = random.Random(1985)
     n = 0
     for f in range(6):
@@ -161,12 +136,38 @@ def check_transform():
             for r in vals:
                 mask, xor = rnd.randrange(65536), rnd.randrange(65536)
                 a = spec_transform(r, f, s, mask, xor)
-                b = hw_transform(r, f, s & 31, mask, xor)
+                b, oe = pal_transform(cp, r, f, s & 31, mask, xor)
+                assert oe == M16, (f, s, hex(oe))
                 if f not in OUT16:
                     b &= 0xFF      # 8 bit の出力では、上位バイト（XOR の上位）をポートが使わない
                 assert a == b, (f, s, hex(r), hex(a), hex(b))
                 n += 1
     return n
+
+
+def check_rot_equations(pals):
+    """ROT の式そのものを評価して、回す量 0〜15 で正しく回るかを確かめる。"""
+    cp = compiled(pals)
+    rnd = random.Random(85)
+    for _ in range(2000):
+        d = rnd.randrange(65536)
+        t = rnd.randrange(16)
+        fv = comb_bus(cp['ROT0'], {'d': d, 't': t}, 'f')[0] | comb_bus(cp['ROT1'], {'d': d, 't': t}, 'f')[0]
+        rv = comb_bus(cp['ROT2'], {'f': fv, 't': t}, 'r')[0] | comb_bus(cp['ROT3'], {'f': fv, 't': t}, 'r')[0]
+        assert rv == rotl(d, t), (hex(d), t, hex(rv))
+
+
+def check_anx_equations(pals):
+    """ANX0〜3 の 4 bit ずつを、1 bit の 32 通り（R、M、K、X、WEN）で確かめる。"""
+    cp = compiled(pals)
+    for k in range(4):
+        for v in range(32):
+            r, m, kk, x, wen = (v & 1, v >> 1 & 1, v >> 2 & 1, v >> 3 & 1, v >> 4 & 1)
+            for b in range(4 * k, 4 * k + 4):
+                q, oe = comb_bus(cp[f'ANX{k}'], {'r': r << b, 'm': m << b, 'k': kk << b, 'x': x << b,
+                                                 'wen': wen}, 'q')
+                assert bool(q >> b & 1) == bool((r & m & kk) ^ x), (k, b, v)
+                assert bool(oe >> b & 1) == bool(wen), (k, b, v)
 
 
 # ---------------------------------------------------------------- ポートの属性（ATR、63S281A×1）
@@ -224,20 +225,6 @@ def atr_prom(addr):
 
 # ---------------------------------------------------------------- 準備の信号（RDY、PAL20R4A×1）
 
-def nib(name, v, mask=0xF):
-    return '*'.join(lit(f'{name}{b}', v >> b & 1) for b in (3, 2, 1, 0) if mask >> b & 1)
-
-
-RDY_EQS = [
-    "/SRDY := " + " + ".join([
-        nib('S', 1) + '*/RDY1', nib('S', 2) + '*/RDY2', nib('S', 4) + '*/OR4',
-        nib('S', 10) + '*/OR10', nib('S', 11) + '*/XRDY', nib('S', 12, 0b1100) + '*/XRDY']),
-    "/DRDY := " + " + ".join([
-        nib('D', 1) + '*/RDY1', nib('D', 2) + '*/RDY2', nib('D', 3) + '*/IR3',
-        nib('D', 5) + '*/IR5', nib('D', 11) + '*/XRDY', nib('D', 12, 0b1100) + '*/XRDY']),
-]
-
-
 def ready_ref(p, w, lines):
     """そのポートに今アクセスしてよいか（仕様）。準備の信号を持たないポートは常に可。"""
     if 11 <= p <= 15:
@@ -247,49 +234,124 @@ def ready_ref(p, w, lines):
     return lines[table[p]] if p in table else True
 
 
-def check_rdy():
+def check_rdy(pals):
+    p = pals['RDY']
     names = ['RDY1', 'RDY2', 'OR4', 'OR10', 'IR3', 'IR5', 'XRDY']
     for v in range(1 << len(names)):
         lines = {n: bool(v >> i & 1) for i, n in enumerate(names)}
-        for p in range(16):
+        for port in range(16):
             env = dict(lines)
-            env.update({f'S{b}': bool(p >> b & 1) for b in range(4)})
-            env.update({f'D{b}': bool(p >> b & 1) for b in range(4)})
-            srdy = not eval_sop(RDY_EQS[0].split(' := ')[1], env)
-            drdy = not eval_sop(RDY_EQS[1].split(' := ')[1], env)
-            if PORTS.get(p, PORT2_DOC)[0] or p == 2:
-                assert srdy == ready_ref(p, False, lines), ('S', p, lines)
-            if PORTS.get(p, PORT2_DOC)[1] or p == 2:
-                assert drdy == ready_ref(p, True, lines), ('D', p, lines)
+            env.update({f'S{b}': bool(port >> b & 1) for b in range(4)})
+            env.update({f'D{b}': bool(port >> b & 1) for b in range(4)})
+            _, _, nxt = p.eval(env)
+            if PORTS.get(port, PORT2_DOC)[0] or port == 2:
+                assert nxt['SRDY'] == ready_ref(port, False, lines), ('S', port, lines)
+            if PORTS.get(port, PORT2_DOC)[1] or port == 2:
+                assert nxt['DRDY'] == ready_ref(port, True, lines), ('D', port, lines)
+
+
+def check_all(pals=None):
+    pals = pals or load_pals()
+    n = check_transform(pals)
+    check_rot_equations(pals)
+    check_anx_equations(pals)
+    check_rdy(pals)
+    return n
 
 
 # ---------------------------------------------------------------- 出力
 
+def rust_source(pals):
+    out = [
+        '//! Data Fabric の PAL の式と PROM の中身（生成したファイル。手で直さない）。',
+        '//!',
+        '//! 元は `tools/fabric/pal/*.pal`（PALASM の式。`docs/spec/fabric.md` の式と同じ）と、',
+        '//! `tools/fabric/fabric_logic.py` の PROM の中身。作り直すには、リポジトリの根で',
+        f'//! `{REGEN}` を実行する。式と同じかは `py -m unittest discover -s tools/fabric` で確かめる。',
+        '//!',
+        '//! PAL は、入力の bus（名前の末尾の数字が bit）と 1 本の信号（bool）を受けて、出力のピンの値を返す。',
+        '//! 出力は反転する（`/X = 積和` のピン X は積和の否定）。登録出力はクロックの後の値（D の入力）を返し、',
+        '//! 帰還はレジスタの今の値を引数で受ける。3 ステートの出力は、出しているかを `*_oe` で返す。',
+        '',
+    ]
+    for p in pals.values():
+        out.append(palasm.rust_fn(p))
+        out.append('')
+    out.append(palasm.rust_const_u8(
+        'MSK0', 'MSK0（63S281A）：出力の bit 0–7 の有効なビット。番地は SHIFT（bit 4–0）と FORMAT（bit 7–5）。',
+        MSK[0]))
+    out.append('')
+    out.append(palasm.rust_const_u8('MSK1', 'MSK1（63S281A）：出力の bit 8–15 の有効なビット。番地は MSK0 と同じ。',
+                                    MSK[1]))
+    out.append('')
+    out.append(palasm.rust_const_u8(
+        'ATR', 'ATR（63S281A）：ポートの属性。番地は bit 3–0 ポート、bit 4 向き（1 で書込み）、bit 7–5 FORMAT。',
+        [atr_prom(a) for a in range(256)]))
+    out.append('')
+    for i, b in enumerate(ATR_BITS):
+        out.append(f'/// ATR の出力 {b}（bit {i}）。')
+        out.append(f'pub const ATR_{b}: u8 = 1 << {i};')
+    return '\n'.join(out) + '\n'
+
+
+def doc_blocks(text):
+    """fabric.md の、PAL の見出しで始まるコードブロック。"""
+    blocks = re.findall(r'^```\n(.*?)^```$', text, flags=re.S | re.M)
+    return [b for b in blocks if palasm.HEADER.match(b)]
+
+
+def stale():
+    """生成した Rust と fabric.md の式が、今の式と違えばその説明を返す。"""
+    pals = load_pals()
+    msgs = []
+    want = rust_source(pals)
+    have = RUST_OUT.read_bytes().decode('utf-8') if RUST_OUT.exists() else ''
+    if want != have:
+        msgs.append(f'{RUST_OUT.relative_to(ROOT).as_posix()} が古い（{REGEN}）')
+    blocks = doc_blocks(FABRIC_MD.read_text(encoding='utf-8'))
+    files = [(PAL_DIR / f).read_text(encoding='utf-8') for f in PAL_FILES]
+    if len(blocks) != len(files):
+        msgs.append(f'fabric.md の式のブロックが {len(blocks)} 個（ファイルは {len(files)} 個）')
+    for f, b, t in zip(PAL_FILES, blocks, files):
+        if b != t:
+            msgs.append(f'fabric.md の式が pal/{f} と違う')
+    return msgs
+
+
+def fit_table(pals):
+    rows = ['| PAL | 型番 | クロック | 入力 | 出力 | 積（最大） | 空きピン |', '|---|---|---|---:|---:|---:|---:|']
+    for p in pals.values():
+        u = p.usage()
+        limit = max(palasm.TERMS[p.roles[p.pin_of(e.out) - 1]] for e in p.eqs)
+        rows.append(f'| {p.name} | {p.part}{p.grade} | {u["clock"] or "なし"} | {u["inputs"]} | {u["outputs"]} | '
+                    f'{u["max_terms"]}／{limit} | {u["free_pins"]} |')
+    return '\n'.join(rows)
+
+
 def main(argv):
-    n = check_transform()
-    check_rot_equations()
-    check_anx_equations()
-    check_rdy()
+    pals = load_pals()
+    n = check_all(pals)
     print(f'ok: 変換 {n} 通り、ROT・ANX・RDY の式', file=sys.stderr)
+    if '--check' in argv:
+        msgs = stale()
+        for m in msgs:
+            print(m, file=sys.stderr)
+        sys.exit(1 if msgs else 0)
+    if '--rust' in argv:
+        with open(RUST_OUT, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(rust_source(pals))
+        print(f'{RUST_OUT.relative_to(ROOT).as_posix()} を書いた', file=sys.stderr)
+        return
     if len(argv) >= 2 and argv[0] == '--prom':
         out = Path(argv[1])
         out.mkdir(parents=True, exist_ok=True)
         for k in (0, 1):
-            rows = []
-            for a in range(256):
-                s5, f = a & 31, a >> 5
-                s = s5 - 32 if s5 >= 16 else s5
-                rows.append(f'{(mask_prom(f, s) >> (8 * k)) & 0xFF:02X}')
-            (out / f'MSK{k}.hex').write_text('\n'.join(rows) + '\n', encoding='ascii')
+            (out / f'MSK{k}.hex').write_text('\n'.join(f'{v:02X}' for v in MSK[k]) + '\n', encoding='ascii')
         (out / 'ATR.hex').write_text('\n'.join(f'{atr_prom(a):02X}' for a in range(256)) + '\n',
                                      encoding='ascii')
         print(f'PROM を {out} に書いた', file=sys.stderr)
         return
-    for name, part, eqs in rot_pals() + anx_pals() + [('RDY', 'PAL20R4A', RDY_EQS)]:
-        print(f'; {name} ({part})')
-        for e in eqs:
-            print(e)
-        print()
+    print(fit_table(pals))
 
 
 if __name__ == '__main__':

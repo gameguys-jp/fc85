@@ -244,12 +244,14 @@
 
 ### Data Fabric
 
-コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fifo.rs`（67401）、`ports.rs`（ポートの側）、`acrtc.rs`（port 1 のつなぎ）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
+コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fabric_pal.rs`（PAL の式と PROM の中身から生成した関数。DR-084）、`fifo.rs`（67401）、`ports.rs`（ポートの側）、`acrtc.rs`（port 1 のつなぎ）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
 
 ポートの外側（ポート、モジュールの /PRES、PORT_RESET と AUDIO_N の書込みの信号）は `Ports` トレイトの向こう側に置き、board 層（または試験）が実装する。
 
 | 仕様の項目 | 実装での扱い | 理由 | 影響 |
 |---|---|---|---|
+| 変換部・RDY・ATR（DR-084、fabric.md §04・§06） | `tools/fabric/pal/*.pal` の式（PAL に焼くもの）と、fabric_logic.py の PROM の中身（MSK0・MSK1、ATR）から生成した `fabric_pal.rs` を通す。変換は IL → ROT0–3 → ANX0–3（MSK、MASK、XOR）。準備の信号は、ポートの側の線（`Ports::ready_lines`：RDY1、RDY2、IR3、OR4、IR5、OR10、XRDY）を RDY の式に通す。番地を持つか、満杯・空の信号、S のスロットだけか、2 スロットの読出し、W16、F4、START の検査（OKD・OKN）は ATR を引く。式は、同じ形の bus の出力を 16 bit まとめた bit 演算に、入力が少なく積が多い出力を式から作った真理値表にする（値は式と同じ） | 回路の式を 1 つの元にする。実装の速さは、それまでの式とほぼ同じ（変換 1 回 約 14 ns、前は約 12 ns。DR-084） | それまでの模型と違うのは、使えない向きのポートと準備の線のないポート（port 8 など）を、RDY の式どおり「準備ができている」とすることと、port 9 への書込みも ATR の TWO で 2 スロットにすること。どちらも START の検査で ERROR になる設定か、動作中の書換え（Bend）でだけ起きる |
+| 準備の信号の取込みを省く | 次の頭の判断で準備の信号を見ないスロット（要素が動いているか、候補が Run でなく、このスロットで再設定の 3 段目も行わない）では、RDY の式を計算せず、前に取り込んだ値のままにする | 判断の列は、毎スロット取り込むのと同じ。Fabric が止まっているときの手間を DR-084 の前と同じにする | 保存した状態の `rdy_s`・`rdy_d` は、見ないスロットで古い値のまま |
 | 時間の単位（DR-046 (1)） | `step_slot` の 1 回を 1 スロット（8 MHz の 2 クロック、250 ns）にする。スロット 0 を S にする | スロットの中の時刻（q0〜q3）は、順序（頭の判断、中ほどの準備の取込み、アクセス、4 分の 3 の A ファイルの操作、終わり）としてだけ扱う（fabric.md §03） | CPU やほかの IC との時刻の合わせ方は core を作るときに決める |
 | 判断と A ファイル（DR-046 (2)、fabric.md §05） | 各スロットの頭で、このスロットの A ファイルの操作と、次のスロットのアクセスを決める。COUNT の更新は、逐次の読出し元なら R の判断、番地を持つ読出し元と逐次の書込み先なら W の判断、両方が番地を持てば W のスロットに置く | fabric.md §05 [P] | `SlotRecord` の列が、PAL の式を書くときの基準になる |
 | 2 スロット以上のアクセス | port 9 の読出しは、2 スロット目の頭で次のアクセスを決める。port 1 と DOC の port 2 は、答えたスロットの次の頭で決める（答えが早くても 2 スロット） | port 9 は終わりが分かっている。fabric.md §06 の「長いアクセスの間は決めない」を、この形に詳しくした（fabric.md v0.2）[P] | port 9 から読む要素は 3 スロットに 1 つ |
@@ -615,10 +617,11 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 
 ### Data Fabric
 
-試験は `emulator/crates/board/tests/fabric.rs` と、port 1 は `tests/acrtc_port.rs`。期待値は仕様書 §06、DR-022、DR-046、fabric.md の記述と、そこからの手計算で取る。
+試験は `emulator/crates/board/tests/fabric.rs`、生成した PAL の関数は `tests/fabric_pal.rs`、port 1 は `tests/acrtc_port.rs`。期待値は仕様書 §06、DR-022、DR-046、fabric.md の記述と、そこからの手計算で取る。PAL の式そのもの（`tools/fabric/pal/*.pal`）がピンと項に収まり仕様と同じ値を出すこと、生成した `fabric_pal.rs` と fabric.md の式が今の式と同じことは、`py -m unittest discover -s tools/fabric` で確かめる（DR-084）。
 
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
+| 生成した PAL と PROM（DR-084） | `rot_pals_rotate_every_word_by_every_amount`、`anx_pals_are_and_then_xor_with_three_state`、`msk_proms_match_the_valid_bits`、`generated_transform_matches_the_formula`、`atr_prom_matches_the_port_table`、`rdy_pal_selects_the_ready_line_of_each_port` | ROT0–3 が 16 bit の全部の値を 0〜15 回す。ANX が (R∧M∧K)⊕X で、WEN のときだけ出す。MSK の 256 番地が有効なビット。変換が DR-084 の前の式と、FORMAT 0〜7 × SHIFT 32 通り × 4,096 通り（端の値と乱数の入力・MASK・XOR）で同じ。ATR の 256 番地が fabric.md §06 の表（OKD・OKN、ADDR、FLAG、SONLY、TWO、F4、W16）。RDY がポート 16 通り × 線 128 通りで、ポートの線を選ぶ | 合格 |
 | 変換とポートの表 | `transform_follows_dr046`、`port_table_matches_fabric_md` | FORMAT 0〜6、SHIFT の正負と −16、MASK・XOR、8 bit の出力の FD の上位（DR-046 (5)、fabric.md §04）。番地を持つポートは 0・2・8・9、満杯・空の信号は 1〜5・10〜15。向きと幅（fabric.md §06） | 合格 |
 | レジスタ | `registers_read_zero_and_bad_addresses_get_no_dtack`、`register_file_access_waits_for_the_next_slot`、`start_copies_the_settings_in_three_slots`、`count_zero_is_done_without_a_transfer`、`start_checks_the_ports_and_the_format` | 書込み専用のレジスタは 0、MODULES、バスエラーの番地（DR-046 (10)）。A ファイルは次のスロットで許可。再設定は 3 スロットで、COUNT の作業値は残りの数−1。COUNT＝0 は転送せずに DONE。START の検査で ERROR になる 5 通り（DR-046 (9)） | 合格 |
 | 転送の時間 | `staging_to_temporal_moves_one_byte_every_two_slots`、`staging_to_staging_takes_four_slots_per_element`、`count_update_goes_where_the_address_file_is_free`、`fifo_reads_take_three_slots_and_fifo_writes_four`、`char_rom_reads_take_two_slots_and_ignore_bit_15`、`candidate_alternates_while_both_channels_run` | 2 スロットに 1 要素（4 MB/s）、port 0 どうしは 4 スロット、FIFO から読むと 3、FIFO へ書くと 4（仕様書 §06）。port 0 は S のスロットだけ。COUNT の更新の置き場所 4 通り（fabric.md §05）。port 9 は 2 スロット。2 チャネルが交互に候補になり、交互に要素を始める（port 0 から読むチャネルは DR-048 の例外。「候補の入れ替え」の行） | 合格 |

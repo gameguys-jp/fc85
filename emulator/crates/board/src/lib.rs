@@ -20,6 +20,9 @@ pub mod doc;
 pub mod dram;
 pub mod dsp;
 pub mod fabric;
+/// PAL の式と PROM の中身から生成した関数（DR-084）。生成したまま置くので、整形しない。
+#[rustfmt::skip]
+pub mod fabric_pal;
 pub mod fifo;
 pub mod ports;
 pub mod tv;
