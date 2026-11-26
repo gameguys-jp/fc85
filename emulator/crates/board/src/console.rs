@@ -38,6 +38,11 @@ pub const MAIN_RAM_BYTES: usize = 0x2_0000;
 pub const BERR_HALF_CLOCKS: u64 = 131;
 /// BERR で終わるサイクルの長さ（S0 からのクロック数）。DR-052。
 pub const BERR_CYCLE_CLOCKS: u32 = 67;
+/// 外部クロックで動くブリッジ（DOC、ACRTC）の窓の時間切れ：同じ立下りで BERR ではなく DTACK を
+/// 認識させ、サイクルは 67 クロックで終わる。書込みは届かず、読出しは引上げの $FFFF。DR-079。
+pub const BRIDGE_TIMEOUT_WAITS: u32 = BERR_CYCLE_CLOCKS - 4;
+/// 時間切れのブリッジの読出しの値（データの線の引上げ）。DR-079。
+pub const BRIDGE_TIMEOUT_DATA: u16 = 0xFFFF;
 
 /// DTACK の認識が時間切れに間に合わない待ちの数（S4 の終わりの 2.5 クロックから 65.5 クロックまで）。DR-052。
 const BERR_WAITS: u64 = (BERR_HALF_CLOCKS - 5) / 2;
@@ -90,6 +95,11 @@ pub struct BusLog {
     pub doc_rule_warnings: u64,
     #[serde(default)]
     pub last_doc_rule: Option<u32>,
+    /// ブリッジ（DOC、ACRTC）の窓の時間切れ（DR-079）の数と、最後の番地と、書込みだったか。
+    #[serde(default)]
+    pub bridge_timeouts: u64,
+    #[serde(default)]
+    pub last_bridge_timeout: Option<(u32, bool)>,
 }
 
 /// 68000 の外側：基板とメモリと I/O。`Bus` を実装する。
@@ -469,8 +479,9 @@ impl System {
     /// 後に DTACK を出す（host-acrtc-interface.md §5.1、遅れは中央の値）。
     ///
     /// 映像のクロックを遅くすると待ちが延び、DTACK の認識が S0 から 65.5 クロックの立下りに間に合わなければ
-    /// バスの時間切れ（DR-052）。T1 が AS の戻る前（S0 から 66.5 クロック [P]）なら ACRTC はそのアクセスを
-    /// 受ける（読出しの副作用、書込み）[P][V]。クロックが止まっていれば ACRTC は CS を見ない。
+    /// バスの時間切れ（DR-052）で、この窓では DTACK で終わる（DR-079。読出しは $FFFF）。T1 が AS の戻る前
+    /// （S0 から 66.5 クロック [P]）なら ACRTC はそのアクセスを受ける（読出しの副作用、書込み）[P][V]。
+    /// クロックが止まっていれば ACRTC は CS を見ない。
     fn acrtc(&mut self, at: u64, addr: u32, size: Size, write: Option<u16>) -> Access {
         self.sync(at);
         if size == Size::Byte {
@@ -480,7 +491,7 @@ impl System {
         let s0 = at * PERIOD_8M;
         let bridge = &self.ports.acrtc;
         let (Some(edge), Some(p)) = (bridge.edge_at_or_after(s0), bridge.period_2clk()) else {
-            return None;
+            return self.bridge_timeout(addr, write.is_some());
         };
         let (t1, dtack) = acrtc_cycle(s0, edge, p);
         let berr = s0 + BERR_HALF_CLOCKS * PERIOD_8M / 2;
@@ -491,7 +502,7 @@ impl System {
             None
         };
         if waits.is_none() && t1 >= s0 + (2 * u64::from(BERR_CYCLE_CLOCKS) - 1) * PERIOD_8M / 2 {
-            return None;
+            return self.bridge_timeout(addr, write.is_some());
         }
         self.sync_time(t1);
         let a = &mut self.ports.acrtc.acrtc;
@@ -502,10 +513,20 @@ impl System {
             }
             None => a.read(rs),
         };
-        waits.map(|w| (v, w))
+        match waits {
+            Some(w) => Some((v, w)),
+            None => self.bridge_timeout(addr, write.is_some()),
+        }
     }
 
-    /// DOC のブリッジ（DR-051）。DTACK まで進め、時間切れならバスエラー。
+    /// ブリッジの窓の時間切れ（DR-079）：BERR の代わりに DTACK で終わる。
+    fn bridge_timeout(&mut self, addr: u32, write: bool) -> Access {
+        self.log.bridge_timeouts += 1;
+        self.log.last_bridge_timeout = Some((addr & 0xFF_FFFF, write));
+        Some((BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS))
+    }
+
+    /// DOC のブリッジ（DR-051）。DTACK まで進め、時間切れなら DTACK で終わる（DR-079）。
     fn doc(&mut self, at: u64, addr: u32, size: Size, write: Option<u16>) -> Access {
         self.sync(at);
         if self.doc_trace.len() < 8 {
@@ -525,13 +546,13 @@ impl System {
             self.step_slot();
             if let Some(d) = self.ports.doc_host_poll() {
                 if d.recognized >= berr {
-                    return None;
+                    return self.bridge_timeout(addr, write.is_some());
                 }
                 return ok(u16::from(d.read.unwrap_or(0)), d.waits);
             }
             if self.ports.now() > berr {
                 self.ports.doc_board.host_abort();
-                return None;
+                return self.bridge_timeout(addr, write.is_some());
             }
         }
     }
@@ -813,14 +834,14 @@ impl System {
         match (off, write) {
             (0x00..=0x1F, Some(x)) => {
                 // 写しの間の書込みは、写しが終わるまで待つ。DTACK が時間切れ（DR-052）に間に合わなければ
-                // バスエラーで、書込みは起きない [P]
+                // 時間切れの DTACK で終わり（DR-079）、書込みは起きない [P]
                 let mut waits = 0;
                 if !v.direct && self.ports.acrtc.acrtc.display_running() {
                     let t = (at + 2) * PERIOD_8M;
                     if t >= v.hsync_at && t < copy_end {
                         let w = (copy_end - t).div_ceil(PERIOD_8M);
                         if w >= BERR_WAITS {
-                            return None;
+                            return self.bridge_timeout(addr, true);
                         }
                         waits = w as u32;
                     }

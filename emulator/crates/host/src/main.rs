@@ -553,7 +553,7 @@ fn trace(c: &mut Console, n: u64) {
 }
 
 /// バスの警告が増えたら出す（ホストの表示。仮想機は変えない）。
-fn report(c: &Console, seen: &mut (u64, u64, bool)) {
+fn report(c: &Console, seen: &mut (u64, u64, bool, u64)) {
     let l = &c.sys.log;
     let halted = c.cpu.state == RunState::Halted;
     if halted && !seen.2 {
@@ -573,6 +573,16 @@ fn report(c: &Console, seen: &mut (u64, u64, bool)) {
         }
         seen.0 = l.bus_errors;
     }
+    if l.bridge_timeouts != seen.3 {
+        if let Some((addr, w)) = l.last_bridge_timeout {
+            eprintln!(
+                "ブリッジの時間切れ {} 回（最後は {addr:06X} の{}。DR-079）",
+                l.bridge_timeouts,
+                if w { "書込み" } else { "読出し" }
+            );
+        }
+        seen.3 = l.bridge_timeouts;
+    }
     // Bend モードでは規約違反を警告しない（実行はどちらのモードでも同じ。DR-065）
     if l.doc_rule_warnings != seen.1 && c.sys.bends.mode == fc85_board::bend::Mode::Normal {
         if let Some(addr) = l.last_doc_rule {
@@ -588,7 +598,7 @@ fn report(c: &Console, seen: &mut (u64, u64, bool)) {
 fn main() {
     let a = parse_args();
     let mut c = build_console(&a);
-    let mut seen = (0, 0, false);
+    let mut seen = (0, 0, false, 0);
     if a.trace > 0 {
         trace(&mut c, a.trace);
     }
@@ -628,8 +638,11 @@ fn main() {
             write_wav(p, &pcm);
         }
         println!(
-            "{} フレーム、CPU {} クロック、バスエラー {}",
-            c.sys.ports.acrtc.video.frames, c.cpu.clock, c.sys.log.bus_errors
+            "{} フレーム、CPU {} クロック、バスエラー {}、ブリッジの時間切れ {}",
+            c.sys.ports.acrtc.video.frames,
+            c.cpu.clock,
+            c.sys.log.bus_errors,
+            c.sys.log.bridge_timeouts
         );
         return;
     }

@@ -4,7 +4,7 @@
 //! （dram.rs、es5503.rs の REG_*）からの手計算で取る。
 
 use fc85_board::bend::Wire;
-use fc85_board::console::{BERR_CYCLE_CLOCKS, System};
+use fc85_board::console::{BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS, System};
 use fc85_board::doc::{DocBoard, DocLines, HostDone};
 use fc85_board::dram::DramEnv;
 use fc85_board::fabric::{Fabric, HostReply};
@@ -429,16 +429,18 @@ fn registers_of_disabled_oscillators_decay_in_normal_mode() {
 
 #[test]
 fn a_1_hz_doc_clock_times_out_on_the_bus_and_does_not_overflow() {
-    // CLK 1 Hz：E の 1 周期が 8 秒。68000 の DOC のアクセスは DR-052 の時間切れでバスエラー
-    // （S0 から 67 クロック）。Fabric の port 2 の 2 byte 目は 16 スロットで ERROR（DR-046 (9)）
+    // CLK 1 Hz：E の 1 周期が 8 秒。68000 の DOC のアクセスは DR-052 の時間切れで、DTACK で終わる
+    // （S0 から 67 クロック、読出しは $FFFF。DR-079）。Fabric の port 2 の 2 byte 目は 16 スロットで ERROR
+    // （DR-046 (9)）
     let mut c = Cpu::new();
     c.sys.bend("clock doc 1").unwrap();
     c.sys.bend("mode bend").unwrap();
     for _ in 0..4 {
         assert_eq!(
             c.rd(0x21_00E0),
-            BusReply::BusError {
-                clocks: BERR_CYCLE_CLOCKS
+            BusReply::Ok {
+                data: BRIDGE_TIMEOUT_DATA,
+                waits: BRIDGE_TIMEOUT_WAITS
             }
         );
         c.idle_s(0.001);
@@ -446,7 +448,13 @@ fn a_1_hz_doc_clock_times_out_on_the_bus_and_does_not_overflow() {
     // 極端に遅い値も切り詰めて動く（時刻があふれない）
     c.sys.bend("clock doc 1e-30").unwrap();
     c.idle_s(0.01);
-    assert!(matches!(c.rd(0x21_00E0), BusReply::BusError { .. }));
+    assert_eq!(
+        c.rd(0x21_00E0),
+        BusReply::Ok {
+            data: BRIDGE_TIMEOUT_DATA,
+            waits: BRIDGE_TIMEOUT_WAITS
+        }
+    );
     c.sys.bend("clock doc off").unwrap();
     // 基板の発振器に戻しても、次の E の立下りまでは前の周期のまま（DR-035。位相は続く）
     assert!(c.sys.ports.doc_board.cycles < 2);

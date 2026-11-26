@@ -55,9 +55,7 @@ bios_acrtc_send:
         SUBQ.W  #1,D1
         BMI.S   .done
 .next   MOVE.W  (A0)+,D0
-.wait   MOVE.W  ACRTC_SR,D7
-        BTST    #ACRTC_SR_WFR_B,D7
-        BEQ.S   .wait
+        BSR.S   acrtc_wait_wfr
         MOVE.W  D0,ACRTC_DATA
         DBRA    D1,.next
 .done   MOVEM.L (SP)+,D0-D1/D7
@@ -66,11 +64,32 @@ bios_acrtc_send:
 ; D0.W を FIFO に書く（AR は r00 のはず）。
 acrtc_put:
         MOVE.W  D7,-(SP)
-.wait   MOVE.W  ACRTC_SR,D7
-        BTST    #ACRTC_SR_WFR_B,D7
-        BEQ.S   .wait
+        BSR.S   acrtc_wait_wfr
         MOVE.W  D0,ACRTC_DATA
         MOVE.W  (SP)+,D7
+        RTS
+
+; SR の WFR を待つ。D7 を壊す。65536 回（工場出荷のクロックで約 0.4 秒）読んでも立たなければ、ACRTC が
+; 終わらないコマンドを続けているとみなし、打ち切って続ける（DR-080）。ベンドで書込みが抜けて
+; （DR-079）コマンドの列がずれると、パラメタをコマンドとして読み、巨大な図形を描き続けることがある。
+acrtc_wait_wfr:
+        MOVE.W  D6,-(SP)
+        MOVEQ   #-1,D6
+.poll   MOVE.W  ACRTC_SR,D7
+        BTST    #ACRTC_SR_WFR_B,D7
+        DBNE    D6,.poll
+        BNE.S   .ok
+        BSR.S   acrtc_abort
+.ok     MOVE.W  (SP)+,D6
+        RTS
+
+; コマンドを打ち切り（CCR の ABT。FIFO も空になる）、CCR を BIOS の既定に戻し、AR を r00 にする。
+acrtc_abort:
+        MOVE.W  #ACRTC_CCR,ACRTC_AR
+        MOVE.W  #ACRTC_CCR_ABT|ACRTC_CCR_GBM4,ACRTC_DATA
+        MOVE.W  #ACRTC_CCR,ACRTC_AR
+        MOVE.W  #ACRTC_CCR_GBM4,ACRTC_DATA
+        MOVE.W  #ACRTC_FIFO,ACRTC_AR
         RTS
 
 ; RWP を基本画面（DN＝1）の語番地 D0.L にする。

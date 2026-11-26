@@ -3,7 +3,9 @@
 //! 台帳 HD68000.md §2.5、host-acrtc-interface.md §5、HD63484.md §3.4・§4.5 からの手計算で取る。
 
 use fc85_board::analog::SigWiring;
-use fc85_board::console::{BERR_CYCLE_CLOCKS, System, acrtc_timing};
+use fc85_board::console::{
+    BERR_CYCLE_CLOCKS, BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS, System, acrtc_timing,
+};
 use fc85_board::video::{RASTER_W, VIRQ_VBL, VIRQ_VBL_EN};
 use fc85_chips::hd68000::{Bus, BusReply, IackReply, Size, fc};
 use fc85_core::time::{PERIOD_2CLK, PERIOD_8M};
@@ -510,7 +512,8 @@ fn temporal_ring_flags_hold_and_repeat() {
 
 #[test]
 fn doc_bus_timeout_counts_from_as() {
-    // DR-052：DOC の CLK を 1 MHz に下げると、ブリッジは S0 から 65.5 クロックまでに DTACK を返せない
+    // DR-052：DOC の CLK を 1 MHz に下げると、ブリッジは S0 から 65.5 クロックまでに DTACK を返せない。
+    // この窓の時間切れはバスエラーではなく DTACK で終わり、読出しは $FFFF（DR-079）
     let mut c = Cpu::new();
     c.sys.ports.doc = true;
     let now = c.sys.now();
@@ -518,14 +521,21 @@ fn doc_bus_timeout_counts_from_as() {
     assert!(matches!(c.rd(0x21_00E0, Size::Byte), BusReply::Ok { .. }));
     c.sys.ports.doc_board.set_clock_period(8 * PERIOD_8M);
     c.idle(200);
-    let mut errors = 0;
+    let bus_errors = c.sys.log.bus_errors;
+    let mut timeouts = 0;
     for _ in 0..8 {
-        if c.rd(0x21_00E0, Size::Byte) == BERR {
-            errors += 1;
+        let timeout = BusReply::Ok {
+            data: BRIDGE_TIMEOUT_DATA,
+            waits: BRIDGE_TIMEOUT_WAITS,
+        };
+        if c.rd(0x21_00E0, Size::Byte) == timeout {
+            timeouts += 1;
         }
         c.idle(150);
     }
-    assert_eq!(errors, 8);
+    assert_eq!(timeouts, 8);
+    assert_eq!(c.sys.log.bridge_timeouts, 8);
+    assert_eq!(c.sys.log.bus_errors, bus_errors);
 }
 
 #[test]

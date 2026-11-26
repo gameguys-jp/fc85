@@ -328,7 +328,7 @@
 | 子基板のバス（`DocLines`） | DOC の A0–A7（ピン 38–31）を「A のバス」、A8/D0–A15/D7（ピン 30–23）を「AD のバス」とする。E Low の DOC の読出しは、列が A のバス、行と波形 RAM のデータが AD のバス。E High の 68000 のブリッジは、レジスタの番号が A のバス（74LS244）、データが AD のバス（74LS245）。P2A の窓は、列（U48）が A のバス、データ（U50・U58）が AD のバスで、行（U49）は波形 RAM の番地のマルチプレクサに直接入り、バスを通らない。リフレッシュの行は AD のバスに出る [P] | 台帳 §2 のピン（A8–A15 と D0–D7 は同じピン）と、DR-050・DR-051 の部品からの読み方 [P] | 下の行のテストピンが、どの転送に効くかを決める |
 | バスのテストピン（ベンド点「DOC波形RAMの線」） | Bend モードのとき `Bends` の `docbus` を入れる（§03 の「ベンド点」）。線ごとに GND・+5 V への固定、同じバスのほかの線との入替え、浮かせ。受け手の側で数える（DR-063 と同じ）。浮かせた線は、通るたびに 16 bit の LFSR [P]。手を加えていなければ、DOC の読出しは前の速い道を通る | 仕様書 §11、DR-034 (1)。実機の浮いた線の値は不定 [V] | A の線を固定すると、DOC は列の半分しか読めず、ブリッジは半分のレジスタに書く。AD の線を固定すると、データのビットが固定され、行の半分しか読めない。行の線を固定すると、DOC のリフレッシュも半分の行にしか届かない |
 | 波形 RAM の保持（DR-072） | 4164×8。行は A8–A15、列は A0–A7。1 回の活性化で、行の下位 7 bit（RA0–RA6）が同じ 2 行（512 byte）がリフレッシュされる。DOC の読出し、リフレッシュのサイクル、P2A の読み書きが行を活性化する。崩れたセルは、RA0（A8）が 0 の行で 0、1 の行で 1 [P][V]。分布・個体・温度は DR-072（`dram.rs`）。追跡は Bend モードのときだけ | 4164 の 128 サイクルのリフレッシュ（RA7 は使わない）。真のセルと補のセルの並びは資料にない [V] | 8 MHz では 64 走査が 2.2 ms 以内で崩れない。CLK 50 kHz・N＝16 では 1 巡が 184 ms で、0.08% のビットが崩れる。1 巡が分布の中央の 1 秒になる CLK（N＝16 で約 9 kHz、N＝32 で約 17 kHz）では、オシレータが読まない行の約半分のビットが崩れる |
-| DOC の CLK の上限 | 外部クロックの周期を 1000 秒（0.001 Hz）で切り詰める | 時刻の桁あふれを防ぐため。回路の値ではない | 1 Hz でも動く。68000 の DOC のアクセスは DR-052 の時間切れでバスエラー |
+| DOC の CLK の上限 | 外部クロックの周期を 1000 秒（0.001 Hz）で切り詰める | 時刻の桁あふれを防ぐため。回路の値ではない | 1 Hz でも動く。68000 の DOC のアクセスは DR-052 の時間切れで、DTACK で終わる（DR-079） |
 | 68000 のブリッジ（段階 3、OI-055） | `FabricPorts::doc_host_begin` でバスサイクルを始める（S0 の時刻、番地、UDS・LDS、書込みの値）。reg n は 0x210000＋2n の UDS だけで、ほかの幅と子基板がないときは DTACK を返さない（`BusError`）。CS は S4 の立上りで登録し、P2A と同じ同期化した E の立下り（登録と同じ縁を含む）で次の窓を取る。同じ縁で P2A も待っていれば 68000 が先。窓の終わりでレジスタに書くか、読んだ値をラッチし、同期化した E の次の立下りで DTACK を出す。68000 はその後の最初の立下りで認識する。68000 の書込みは預からない | CS の作り方は DR-016 の ACRTC と同じ。取り合いと DTACK の規則は [P]（OI-055） | 待ちは 8〜16（E の位相 16 通りで、8 と 16 が 1 通り、9〜15 が 2 通りずつ）。1 アクセス 12〜20 クロック |
 | 68000 のクロックの位相 | 68000 のクロックの立上りは `PERIOD_8M` の倍数の時刻（スロットの頭と同じ）[P] | 16 MHz の 2 分周の位相は資料にない | 待ちの数は E との位相で決まる |
 | バスの時間切れ | ブリッジは時間切れを数えない。上の層（本体のバス、試験）が数え、`host_abort` を呼ぶ。窓を取る前なら取り消し、E が上がった後なら、書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V] | 時間切れは DR-052（S0 から 65.5 クロックの立下りで BERR を認識） | DOC の CLK を 2 MHz に下げると、E の位相 64 通りのうち 3 通りで時間切れになる。1 MHz ではすべてで時間切れになり、128 通りのうち 66 通りで書込みが届く |
@@ -346,9 +346,9 @@
 | バスサイクルの時刻 | CPU は S0 の時刻（CPU クロックの数）とともにバスを呼ぶ。基板は S0 を含むスロットまで進めてから答え、読み書きの効果はその時刻に起きたとする | スロット（250 ns）の模型の上に CPU を載せるため | 効果の時刻は最大 1 スロットずれる。ACRTC は T1 を含むスロット、DOC と Fabric の A ファイルは DTACK までスロットで進める |
 | 待ち（DR-024、DR-026、DR-027、DR-031） | Boot ROM・文字 ROM・カートリッジは 1。Main RAM は 0 で、HSYNC の後 12.5 クロックのリフレッシュと重なると終わるまで待つ。Staging RAM は S0 の 4 クロックの枠の位置で 0、0、2、1。パレットの書込みは HSYNC の後 24 クロックの写しの間なら終わるまで待つ。ほかのレジスタは 0 | DR の値をそのまま使った | 文字 ROM の port 9 との取り合い（3〜5 クロック）は数えない [V]。リフレッシュが CPU のサイクルの途中で始まらない規則は、S0 がリフレッシュの前ならぶつからないとして扱う |
 | ACRTC（DR-016） | `acrtc_timing`：CS を S4 の立上り＋20 ns、ACRTC のセットアップ 40 ns で T1、T1 の次の 2CLK の立上り＋35 ns で DTACK、68000 のセットアップ 20 ns の後の立下りで認識 | host-acrtc-interface.md §5.1 の中央の遅れ | 待ちは 2〜4（位相が一様なら 6%、67%、27%）。FIFO が満杯のときの DTACK の遅れは扱わない [V] |
-| ACRTC と映像のクロック（DR-035、DR-052） | `acrtc_cycle`：2CLK の周期 p をジャンパの周期の 4 倍にし、同じ式で T1 と DTACK を求める。DTACK の認識が 65.5 クロックの立下りに間に合わなければバスエラー。T1 が AS の立上り（66.5 クロック）より後なら、ACRTC は CS を見ない [P]。2CLK が止まっていれば CS を見ない。パレットの写し（DR-027）は 16×2CLK を CPU クロックに切り上げた長さで、写しを待つ間に時間切れならバスエラー | 仕様書 §11 のベンド点「映像のクロック」 | 入力が約 520 kHz 以下（p ≥ 116388）なら ACRTC のアクセスは必ず時間切れ、約 1.04 MHz 以上（p ≤ 58194）なら時間切れはない。BIOS は ACRTC に書くので、遅い映像のクロックで起動するとバスエラーになる |
+| ACRTC と映像のクロック（DR-035、DR-052） | `acrtc_cycle`：2CLK の周期 p をジャンパの周期の 4 倍にし、同じ式で T1 と DTACK を求める。DTACK の認識が 65.5 クロックの立下りに間に合わなければ時間切れで、DTACK で終わり $FFFF を読む（DR-079）。T1 が AS の立上り（66.5 クロック）より後なら、ACRTC は CS を見ない [P]。2CLK が止まっていれば CS を見ない。パレットの写し（DR-027）は 16×2CLK を CPU クロックに切り上げた長さで、写しを待つ間に時間切れなら DTACK で終わり、書込みは起きない（DR-079） | 仕様書 §11 のベンド点「映像のクロック」 | 入力が約 520 kHz 以下（p ≥ 116388）なら ACRTC のアクセスは必ず時間切れ、約 1.04 MHz 以上（p ≤ 58194）なら時間切れはない。遅い映像のクロックでは BIOS の ACRTC への書込みが抜け、描画の命令が崩れる |
 | VPA のサイクル（DR-028、台帳 HD68000.md §2.5） | E は 10 クロックの周期で回り、E↑ を 10k＋5.5 クロックの立下りに置く [P]。1 サイクル 7＋d クロック（d＝3〜12） | E の位相は資料で決まらない | ACIA と IACK は 10〜19 クロック |
-| バスの時間切れ（DR-052） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてがバスエラーになる |
+| バスの時間切れ（DR-052、DR-079） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC・ACRTC・パレットの窓は同じ時刻に DTACK で終わり、読出しは $FFFF（`BRIDGE_TIMEOUT_DATA`）。`BusLog::bridge_timeouts` で数える。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてが時間切れになる |
 | 割込み（DR-028） | 要因をレベルにまとめ、いちばん高いレベルを IPL にする。応答はすべてオートベクタ。レベル 6：映像の割込みと ACRTC の IRQ、5：ACIA、4：DOC、3：Fabric と ADPCM の半分空き、2：DSP の応答（IRQ_EN）、1：入力 | DR-028 (4) | 割込みを受けるのは CPU の命令の境目。IPL の同期化の遅れは扱わない |
 | Temporal RAM（DR-053、DR-067） | 電源投入時の中身は決まった擬似乱数の模様（16 bit の LFSR）[P]。ポインタは止めず、一致したら OVERRUN・UNDERRUN の印だけを立てる。HOLD は /WE を止めてポインタを進める。RSYNC は VBlank の始まりで RPTR だけを 0 に | DR-067 | 書いていない番地の値に頼るソフトは実機で違う [V] |
 | RESET 命令（DR-052） | `peripheral_reset`：ACRTC、DSP・ADPCM・本体 DAC の CTRL、映像と入力の割込みの許可、Temporal の CTRL、PAL_CTRL、DOC の RESET | DR-052 (3) | Fabric と ACIA は変えない [V] |
@@ -686,7 +686,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 遅い CLK と波形 RAM | `a_slow_doc_clock_lets_the_wave_ram_decay` | 8 MHz の 400 ms では崩れない。CLK 50 kHz・N＝16 の 400 ms で、放電に向けて詰めた 524,288 ビットのうち 330〜500 ビットが崩れる（DR-072 の式で 1 巡 184 ms の割合 7.95×10⁻⁴、約 417 ビット）。オシレータが読む行のまとまり 0 は崩れない | 合格 |
 | 行の線とリフレッシュ | `a_bent_row_line_leaves_rows_unrefreshed_only_in_bend_mode` | A8＝1、100 °C で 20 ms 置くと、偶数の行は 99% 以上が放電した値になり（25 °C の 3.6 秒に当たり 0.995）、奇数の行は崩れない。通常モードでは追跡せず、崩れない | 合格 |
 | DOC のレジスタ | `registers_of_disabled_oscillators_decay_in_normal_mode` | 通常モードで N＝16、25 ms 置くと、走査する 16 個の音量は 0 のまま、走査しない 16 個の 128 ビットは 0.69±0.15 が 1（式では 1/(1＋1.25^−3.6)＝0.69） | 合格 |
-| 1 Hz | `a_1_hz_doc_clock_times_out_on_the_bus_and_does_not_overflow` | CLK 1 Hz で 68000 の DOC の読出しは DR-052 の時間切れ（67 クロック）でバスエラー。`clock doc 1e-30` も切り詰めて動く | 合格 |
+| 1 Hz | `a_1_hz_doc_clock_times_out_on_the_bus_and_does_not_overflow` | CLK 1 Hz で 68000 の DOC の読出しは DR-052 の時間切れ（67 クロック）で、DTACK で終わり $FFFF（DR-079）。`clock doc 1e-30` も切り詰めて動く | 合格 |
 | 保存 | `snapshot_round_trip_with_bent_lines_and_decay` | テストピン（浮かせを含む）、CLK 200 kHz、90 °C、Bend モードで 30 ms 動かした途中で保存して戻すと、同じ子基板の状態で続く | 合格 |
 
 ### 本体のバス（段階 3）
@@ -710,12 +710,13 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | ADPCM・本体 DAC | `adpcm_and_dac_registers` | CTRL の初期値、半分空きの割込み（レベル 3）、本体 DAC の DIRECT、子基板があるときの窓 | 合格 |
 | Temporal | `temporal_pointers` | ポインタの読み書き、DIST、初期化。Capture RAM の窓はバスエラー | 合格 |
 | Temporal の細部（DR-067） | `temporal_ring_flags_hold_and_repeat` | 書いていない番地は電源投入時の中身、追越しの印（OVERRUN・UNDERRUN）と W1C、HOLD、64 KiB で回る、VBlank での読出しだけの同期と両方の同期 | 合格 |
-| 時間切れ | `doc_bus_timeout_counts_from_as` | DOC の CLK を 1 MHz にすると、DOC のアクセスはすべてバスエラー | 合格 |
+| 時間切れ | `doc_bus_timeout_counts_from_as` | DOC の CLK を 1 MHz にすると、DOC のアクセスはすべて時間切れで、DTACK と $FFFF で終わる（DR-079）。バスエラーは増えない | 合格 |
 | 保存 | `snapshot_round_trip` | 表示と割込みが動いている途中で保存して戻すと、同じ時刻に同じ状態 | 合格 |
 | CPU で起動 | `the_cpu_boots_from_rom_and_counts_vblanks` | リセットで SSP と PC を読み、ACRTC の案B を設定し、VBlank ごとにレベル 6 のオートベクタで数える（数はフレームの数 ±1、IACK と同じ） | 合格 |
 | CPU のバスエラー | `an_unassigned_address_takes_the_bus_error_vector` | 割り当てのない番地でベクタ 2 へ。7 語のフレーム | 合格 |
 | DR-030 の警告 | `doc_read_modify_write_is_warned` | CLR.B で DOC の窓を読んで書くと 1 回数え、MOVE.B の書込みは数えない | 合格 |
 | Boot ROM で起動 | `console_boot.rs` の `the_boot_rom_runs_with_the_doc_board`、`..._without_the_doc_board` | `firmware/` で組んだ Boot ROM と文字 ROM で 60 フレーム：CPU が止まらない、バスエラーはカートリッジを調べる $400000 の 1 回だけ、DR-030 の警告なし、表示が動いて 2 色以上、IACK 50 回以上、音が無音でない。ROM がなければ飛ばす | 合格（DOC あり・なし） |
+| ベンドで BIOS が止まらない | `an_unclaimed_doc_interrupt_does_not_halt_the_bios`、`stopping_the_video_clock_does_not_halt_the_bios` | 起動から `clock doc 10e3` か `docbus A0=1`：80 フレームで VBlank を数え続け、バスエラーはカートリッジを調べる 1 回だけ。`docbus A0=1` では DOC の割込みを既定の処理が受ける（DR-076）。120 フレームの後に映像のクロックを 15 フレーム止めて戻す：止めている間は VBlank が来ず、戻すと数え続け、VRAM が崩れている（DR-077、DR-079） | 合格 |
 | 実験パッチ（SAMPLE 3） | `the_patch_cartridge_runs_every_page` | `sdk/samples/patches` を DOC の子基板ありで差し、4 つのページを回る：Graphics as wave の波形 RAM が全部奇数（GUARD）で音が出る、Image as ADPCM で 30 フレームに 300 ニブル以上、Glyph as wave の波形 RAM が文字 ROM の XOR $01、Temporal feedback の WPTR が 1 フレーム 768 byte。バスエラー、DOC の規約違反、Fabric の誤りは 0 | 合格 |
 | カートリッジ | `the_sample_cartridge_starts_and_plays_adpcm` | `sdk/samples/game` を差して起動し、START と左を押して 100 フレーム：バスエラーなし（見出しを読めた）、DR-030 の警告なし、ADPCM の取込みが 2000 回より多い（Fabric から ADPCM へ送れた）。ROM がなければ飛ばす | 合格 |
 | 30 分の連続（仕様書 §12 の段階 4 の条件の一つ） | 手動：ホストの `--headless --cart sdk/samples/game/build/game.bin --frames 107856 --pad-script <台本>`。台本は乱数（種 1985）で方向とボタンを 5〜40 フレームごとに替え、600 フレームごとに START | 仮想機の 30 分（107,856 フレーム）でバスエラー・CPU の停止・DR-030 の警告がない。画面と音が最後まで出る | 合格（2026-11-26。CPU 14,399,356,728 クロック、開発機で 1,159 秒。最後の画面はゲームの途中で最高点 60。音は飽和なし、ピーク ±2,692） |
@@ -731,7 +732,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 |---|---|---|---|
 | 設定 | `bend.rs` の `commands_set_the_bends` の一部 | `clock video 10.738635e6` の周期は 1408（15.12e9÷10738635＝1408.0002）、21.4757 MHz は基板と同じ 704、1 Hz は 15.12e9、0 で止まる、`off` で工場出荷。負、1e-6、2e8 は受けない | 合格 |
 | 2CLK と HSYNC | `the_video_clock_sets_the_2clk_and_the_hsync_period` | 工場出荷で 1 ライン 963072・1 フレーム 252324864、10.738635 MHz で 2CLK 5632・1 ライン 1926144・1 フレーム 504649728。通常モードに戻すと基板の周期。止めると HSYNC が来ず、戻すと続きから動く | 合格 |
-| ACRTC の時間切れ | `acrtc_accesses_time_out_when_the_video_clock_is_slow` | 2CLK の位相を 1 単位ずつ変えて、工場出荷の待ち 2〜4。p＝116388 で必ず時間切れ、116384 で 4 通りだけ待ち 62、58192 で時間切れなし、58196 で時間切れあり、1.1 MHz（p＝54980）で待ち 30〜59。バスの上で 1.1 MHz は 30〜59 ウェイト、0.5 MHz・1 Hz・止めたは読み書きともバスエラー（67 クロック）、戻すと 2〜4 | 合格 |
+| ACRTC の時間切れ | `acrtc_accesses_time_out_when_the_video_clock_is_slow` | 2CLK の位相を 1 単位ずつ変えて、工場出荷の待ち 2〜4。p＝116388 で必ず時間切れ、116384 で 4 通りだけ待ち 62、58192 で時間切れなし、58196 で時間切れあり、1.1 MHz（p＝54980）で待ち 30〜59。バスの上で 1.1 MHz は 30〜59 ウェイト、0.5 MHz・1 Hz・止めたは読み書きとも時間切れの DTACK（67 クロック、$FFFF。DR-079）でバスエラーは増えない、戻すと 2〜4 | 合格 |
 | Main RAM の行 | `vclock.rs` の `rows_and_discharged_values_follow_the_mapping`、`hsync_refreshes_five_rows_per_line_and_wraps_at_128` | 語 $1234 の行は Main RAM で $12、VRAM で $34。HSYNC 3 本で行 15、26 本で 17（25.6 ラインで一巡）。10 秒止めた後の 1 ラインは 5 行だけを活性化して崩し、補のセルは 1、真のセルは 0 | 合格 |
 | Main RAM（崩れない） | `main_ram_keeps_its_data_in_normal_mode_and_at_the_factory_clock` | 通常モードでは、HSYNC がなく 85 °C・止めた設定でも 0.1 秒で何も変わらない。Bend モード・工場出荷・70 °C では 50 ms で何も変わらない（リフレッシュの間 1.656 ms＜2.21 ms） | 合格 |
 | Main RAM（止めた） | `main_ram_decays_when_the_video_clock_stops` | 85 °C で止めて 0.1 秒（25 °C の 6.4 秒、割合 0.999897）。0.5 ms ごとに読む行 2・3 は残る。読んだ行 4〜7 と 132〜135 は、補のセルが 4090 bit 以上 1、真のセルが 6 bit 以下。読んでいない行は変わらない。戻すと 1032192 bit のうち 1030000 bit 以上が変わる | 合格 |

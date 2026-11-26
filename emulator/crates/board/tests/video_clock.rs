@@ -2,7 +2,9 @@
 //! 時間切れ（DR-052）、Main RAM（DR-026）と VRAM の保持（DR-072）、機械の外のテレビの模型、保存と復元、
 //! ホストの 1 フレーム。期待値は時刻の単位（1/15.12 GHz）での手計算で、式は各試験の注釈に書く。
 
-use fc85_board::console::{BERR_CYCLE_CLOCKS, BERR_HALF_CLOCKS, Console, System, acrtc_cycle};
+use fc85_board::console::{
+    BERR_HALF_CLOCKS, BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS, Console, System, acrtc_cycle,
+};
 use fc85_board::doc::host_recognize;
 use fc85_board::tv::{Chroma, Hsync, Tv};
 use fc85_board::vclock::{discharged, main_row, vram_row};
@@ -95,8 +97,10 @@ const CASE_B: [(u16, u16); 10] = [
     (0x04, 0xC008),
 ];
 
-const BERR: BusReply = BusReply::BusError {
-    clocks: BERR_CYCLE_CLOCKS,
+/// ブリッジの窓の時間切れ：DTACK で 67 クロック、読出しは $FFFF（DR-079）。
+const TIMEOUT: BusReply = BusReply::Ok {
+    data: BRIDGE_TIMEOUT_DATA,
+    waits: BRIDGE_TIMEOUT_WAITS,
 };
 
 /// 2CLK の周期 `p` で、1 フレーム（262 ライン×342 ドット）の CPU クロック数（切上げ）。
@@ -162,7 +166,8 @@ fn acrtc_waits(p: u64) -> (u32, u32, u64) {
 
 #[test]
 fn acrtc_accesses_time_out_when_the_video_clock_is_slow() {
-    // DR-052：S0 から 65.5 クロック（S0＋123795）より前の立下りで DTACK を取り込めなければバスエラー。
+    // DR-052：S0 から 65.5 クロック（S0＋123795）より前の立下りで DTACK を取り込めなければ時間切れ。
+    // この窓ではバスエラーではなく DTACK で 67 クロックで終わる（DR-079）。
     // T1 は S0＋4687（2 クロック＋FF の 302＋CS のセットアップ 605）以後の最初の 2CLK の立上りで、DTACK を
     // 取り込めるのは T1＋p＋830（p は 2CLK の周期）から。取り込むのはその後の最初の立下り（S0＋945＋1890n）。
     // 最後に間に合う立下りは 64.5 クロック（S0＋121905）で、待ちは (121905−4725)÷1890＝62。
@@ -193,15 +198,18 @@ fn acrtc_accesses_time_out_when_the_video_clock_is_slow() {
         }
         c.clock += 1;
     }
-    // 0.5 MHz（p＝120960 ≥ 116388）、1 Hz、止めた：どのアクセスもバスエラー（67 クロック）
+    // 0.5 MHz（p＝120960 ≥ 116388）、1 Hz、止めた：どのアクセスも時間切れ（67 クロック、$FFFF）
+    let bus_errors = c.sys.log.bus_errors;
     for hz in ["0.5e6", "1", "0"] {
         c.bend(&format!("clock video {hz}"));
         for _ in 0..8 {
-            assert_eq!(c.rd(0x20_0000), BERR, "{hz}");
-            assert_eq!(c.wr(0x20_0002, 0), BERR, "{hz}");
+            assert_eq!(c.rd(0x20_0000), TIMEOUT, "{hz}");
+            assert_eq!(c.wr(0x20_0002, 0), TIMEOUT, "{hz}");
             c.clock += 3;
         }
     }
+    assert_eq!(c.sys.log.bridge_timeouts, 48);
+    assert_eq!(c.sys.log.bus_errors, bus_errors);
     // 戻すと 2〜4 ウェイト
     c.bend("clock video off");
     c.idle(10);

@@ -133,42 +133,86 @@ fn the_sample_cartridge_starts_and_plays_adpcm() {
     assert!(a.captures > 2000, "ADPCM の取込み {}", a.captures);
 }
 
+/// `bios_frame`（$100600）。
+fn bios_frame(c: &Console) -> u32 {
+    let i = 0x600;
+    u32::from_be_bytes(c.sys.main_ram[i..i + 4].try_into().unwrap())
+}
+
 #[test]
 fn an_unclaimed_doc_interrupt_does_not_halt_the_bios() {
     // DR-076：DOC の割込みには基板の許可がない。ベンドで崩れたレジスタ（DR-074）や線（DR-073）が IE を
-    // 立てても、BIOS の既定の処理が要求を取り（DOC が遅すぎればマスクを上げ）、VBlank を数え続ける
-    let frame_at = |c: &Console| {
-        let i = 0x600; // bios_frame（$100600）
-        u32::from_be_bytes(c.sys.main_ram[i..i + 4].try_into().unwrap())
-    };
+    // 立てても、BIOS の既定の処理が要求を取り（読めなければマスクを上げ）、VBlank を数え続ける。
+    // 起動から入れる。DOC の CLK が約 1.1 MHz より遅いと 68000 の DOC へのアクセスは時間切れになるが、
+    // DTACK で終わる（DR-079）ので、BIOS は起動の音を鳴らしながら進む
     let spurious = |c: &Console| u16::from_be_bytes([c.sys.main_ram[0x658], c.sys.main_ram[0x659]]);
-    // docbus A0=1 は起動から：BIOS のレジスタの書込みが奇数のオシレータに入り、IE が立つ
-    for (bend, warm) in [("clock doc 10e3", 120), ("docbus A0=1", 0)] {
+    // docbus A0=1：BIOS のレジスタの書込みが奇数のオシレータに入り、IE が立つ
+    for bend in ["clock doc 10e3", "docbus A0=1"] {
         let Some(mut c) = boot(true) else {
             eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
             return;
         };
-        // 起動の音を鳴らし終えてから入れる。DOC の CLK が約 1.1 MHz より遅いと、68000 の DOC への
-        // アクセスはバスの時間切れ（DR-052）になるので、BIOS が音を鳴らす間は止まる（OI-076）
-        for _ in 0..warm {
-            c.run_frame();
-        }
         c.sys.bend(bend).unwrap();
         c.sys.bend("mode bend").unwrap();
         for _ in 0..60 {
             c.run_frame();
         }
-        let f = frame_at(&c);
+        let f = bios_frame(&c);
         for _ in 0..20 {
             c.run_frame();
         }
         assert!(
-            frame_at(&c) >= f + 19,
+            bios_frame(&c) >= f + 19,
             "{bend}：BIOS が止まった（PC {:06X}）",
             c.cpu.pc
         );
-        assert!(spurious(&c) > 0, "{bend}：DOC の割込みが来ていない");
+        if bend.starts_with("docbus") {
+            assert!(spurious(&c) > 0, "{bend}：DOC の割込みが来ていない");
+        }
+        assert_eq!(
+            c.sys.log.bus_errors, 1,
+            "{bend}：{:?}",
+            c.sys.log.last_bus_error
+        );
     }
+}
+
+#[test]
+fn stopping_the_video_clock_does_not_halt_the_bios() {
+    // DR-079：映像のクロックを止めると、描画中の 68000 の ACRTC へのアクセスは時間切れになり、DTACK で
+    // 終わる（書込みは届かない）。VBlank が来ないので BIOS は待ち、戻すと数え続ける。止めた 0.25 秒の
+    // 間に VRAM は崩れる（DR-077）
+    let Some(mut c) = boot(true) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    for _ in 0..120 {
+        c.run_frame();
+    }
+    let vram = c.sys.ports.acrtc.vram.0.clone();
+    c.sys.bend("mode bend").unwrap();
+    c.sys.bend("clock video 0").unwrap();
+    let f = bios_frame(&c);
+    for _ in 0..15 {
+        c.run_frame();
+    }
+    assert!(bios_frame(&c) <= f + 1, "止めている間は VBlank が来ない");
+    c.sys.bend("clock video off").unwrap();
+    for _ in 0..30 {
+        c.run_frame();
+    }
+    assert!(
+        bios_frame(&c) >= f + 28,
+        "BIOS が止まった（PC {:06X}）",
+        c.cpu.pc
+    );
+    assert_eq!(c.sys.log.bus_errors, 1, "{:?}", c.sys.log.last_bus_error);
+    let changed = vram
+        .iter()
+        .zip(&c.sys.ports.acrtc.vram.0)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(changed > 100, "VRAM が崩れていない（{changed} 語）");
 }
 
 #[test]
