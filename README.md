@@ -56,6 +56,7 @@ py sdk/samples/dsp/build.py
 py sdk/samples/patches/build.py
 py sdk/samples/video/build.py
 py sdk/samples/bend/build.py
+py sdk/samples/showcase/build.py
 cd emulator
 cargo run --release -p fc85-host                                              # Boot ROM の内蔵のデモ
 cargo run --release -p fc85-host -- --cart ../sdk/samples/game/build/game.bin  # サンプルのカートリッジ
@@ -63,6 +64,7 @@ cargo run --release -p fc85-host -- --cart ../sdk/samples/dsp/build/dsp.bin    #
 cargo run --release -p fc85-host -- --cart ../sdk/samples/patches/build/patches.bin  # 実験パッチ（左右でページ）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/video/build/video.bin      # ACRTC の表示（分割画面・ウィンドウ・ズーム）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/bend/build/bend.bin        # ベンド点を試す試験信号（F2・F3 で Bend）
+cargo run --release -p fc85-host -- --cart ../sdk/samples/showcase/build/showcase.bin  # 映像と描画の予算（ラスタのパレット・DSP の立体・玉）
 ```
 
 | キー | 働き |

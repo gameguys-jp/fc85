@@ -433,3 +433,62 @@ fn the_bend_cartridge_plays_and_draws() {
     );
     assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
 }
+
+#[test]
+fn the_showcase_cartridge_draws_beyond_sixteen_colours() {
+    // sdk/samples/showcase の SAMPLE 6：通常モードの映像と描画の予算（sdk/samples/showcase/README.md）。
+    // DOC の子基板なしで、毎ライン HBlank の割込みでパレット 1・2 を書き換え、1 フレームに 16 色を大きく
+    // 超える色を出す。DSP（Data Fabric の port 3・4）で回した立方体と、玉のスプライトが毎フレーム動く。
+    // Fabric・DSP・ACRTC の誤りと VBlank の待ちの時間切れは、カートリッジが数える（README.md §05 の表）
+    let Some(cart) = rom("sdk/samples/showcase/build/showcase.bin") else {
+        eprintln!("sdk/samples/showcase/build/showcase.bin がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(false) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    let app = 0x10_0800;
+    let word = |c: &Console, a: usize| {
+        let i = a - 0x10_0000;
+        u16::from_be_bytes([c.sys.main_ram[i], c.sys.main_ram[i + 1]])
+    };
+    let mut frames = Vec::new();
+    let mut counted = Vec::new();
+    for i in 0..150 {
+        c.sys.set_ports(0, 0);
+        c.run_frame();
+        if i == 120 || i == 121 {
+            frames.push(c.sys.ports.acrtc.video.frame.clone());
+        }
+        if i == 100 || i == 149 {
+            counted.push(bios_frame(&c));
+        }
+    }
+    assert_ne!(c.cpu.state, RunState::Halted, "PC {:06X}", c.cpu.pc);
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(c.sys.log.doc_rule_warnings, 0);
+    let names = [
+        "Fabric の時間切れか ERROR",
+        "DSP の誤り",
+        "尾の語の食い違い",
+        "DSP と 68000 の突合せ",
+        "ACRTC の打切り",
+        "VBlank の待ちの時間切れ",
+    ];
+    for (k, name) in names.iter().enumerate() {
+        assert_eq!(word(&c, app + 2 + 2 * k), 0, "{name}");
+    }
+    assert_eq!(word(&c, app + 14), 1, "DSP を読み込めていない");
+    assert_eq!(word(&c, app + 38), 1, "DSP で計算していない");
+    assert!(word(&c, app) >= 50, "主ループ {}", word(&c, app));
+    // VBlank の割込み（BIOS の処理につなぐ）は数え続ける
+    assert!(counted[1] >= counted[0] + 45, "bios_frame {counted:?}");
+    // 1 フレームの色の数
+    let colours: std::collections::HashSet<u16> = frames[0].iter().copied().collect();
+    eprintln!("1 フレームの色 {}", colours.len());
+    assert!(colours.len() > 48, "色が {} しかない", colours.len());
+    assert_ne!(frames[0], frames[1], "画面が止まっている");
+}
