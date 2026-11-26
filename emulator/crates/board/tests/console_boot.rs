@@ -323,3 +323,113 @@ fn the_patch_cartridge_runs_every_page() {
     assert_eq!(c.sys.log.doc_rule_warnings, 0);
     assert_eq!(word(&c, errors), 0, "Fabric の誤り");
 }
+
+/// 0.5 秒ほどの音（48 kHz）の、30〜300 Hz で一番強い周波数。12 標本の平均で 4 kHz に間引き、
+/// 0.25 Hz ごとに Goertzel で強さを比べる。
+fn strongest_hz(x: &[f64]) -> f64 {
+    let y: Vec<f64> = x
+        .chunks_exact(12)
+        .map(|c| c.iter().sum::<f64>() / 12.0)
+        .collect();
+    let mean = y.iter().sum::<f64>() / y.len() as f64;
+    let rate = 48_000.0 / 12.0;
+    let mut best = (0.0, 0.0);
+    for k in 0..=1080 {
+        let f = 30.0 + f64::from(k) * 0.25;
+        let coeff = 2.0 * (2.0 * std::f64::consts::PI * f / rate).cos();
+        let (mut s1, mut s2) = (0.0, 0.0);
+        for &v in &y {
+            let s = v - mean + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s;
+        }
+        let p = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        if p > best.1 {
+            best = (f, p);
+        }
+    }
+    best.0
+}
+
+#[test]
+fn the_bend_cartridge_plays_and_draws() {
+    // sdk/samples/bend の SAMPLE 5：仕様書 §11 のベンド点を試す試験信号（sdk/samples/bend/README.md）。
+    // DOC の持続音・低音・分散和音と ADPCM の太鼓が 10 秒途切れず、画面は毎フレーム変わる。B で持続音
+    // だけにし、DOC の CLK を 8 MHz から 4 MHz に下げると、持続音（A2、110 Hz）の高さが半分になる
+    let Some(cart) = rom("sdk/samples/bend/build/bend.bin") else {
+        eprintln!("sdk/samples/bend/build/bend.bin がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(true) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    let word = |c: &Console, a: usize| {
+        let i = a - 0x10_0000;
+        u16::from_be_bytes([c.sys.main_ram[i], c.sys.main_ram[i + 1]])
+    };
+    let v_vbl_miss = 0x10_0806; // main.s の RSSET APP_RAM の 4 番目
+    let v_errors = 0x10_0808; // 5 番目
+    let mut audio = Vec::new();
+    let mut frames = Vec::new();
+    for i in 0..600 {
+        c.sys.set_ports(0, 0);
+        c.run_frame();
+        audio.append(&mut c.sys.audio_out);
+        if i == 299 || i == 300 {
+            frames.push(c.sys.ports.acrtc.video.frame.clone());
+        }
+    }
+    assert_ne!(c.cpu.state, RunState::Halted, "PC {:06X}", c.cpu.pc);
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(
+        c.sys.log.doc_rule_warnings, 0,
+        "{:?}",
+        c.sys.log.last_doc_rule
+    );
+    assert_eq!(word(&c, v_errors), 0, "Fabric の誤り");
+    assert_eq!(word(&c, v_vbl_miss), 0, "VBlank を待って時間切れ");
+    // 1 秒ごとに、L と R のどちらも鳴っている
+    assert!(audio.len() >= 9 * 48_000, "{}", audio.len());
+    for (s, w) in audio.chunks_exact(48_000).enumerate() {
+        let rms = |f: fn(&(i16, i16)) -> i16| {
+            (w.iter().map(|p| f64::from(f(p)).powi(2)).sum::<f64>() / w.len() as f64).sqrt()
+        };
+        let (l, r) = (rms(|p| p.0), rms(|p| p.1));
+        assert!(
+            l > 300.0 && r > 300.0,
+            "{s} 秒目が静か（RMS L {l:.0}、R {r:.0}）"
+        );
+    }
+    // 箱と状態の行が動く
+    let first = frames[0][0];
+    assert!(frames[0].iter().any(|&p| p != first), "画面が一色");
+    assert_ne!(frames[0], frames[1], "画面が止まっている");
+    // B で持続音だけにして、L（偶数のオシレータ）の一番強い周波数を測る
+    let measure = |c: &mut Console, press_b: bool| {
+        let mut x = Vec::new();
+        for i in 0..60 {
+            let pad = if press_b && i == 0 { 0x0020 } else { 0 };
+            c.sys.set_ports(pad, 0);
+            c.run_frame();
+            if i >= 30 {
+                x.extend(c.sys.audio_out.iter().map(|p| f64::from(p.0)));
+            }
+            c.sys.audio_out.clear();
+        }
+        strongest_hz(&x)
+    };
+    let before = measure(&mut c, true);
+    c.sys.bend("mode bend").unwrap();
+    c.sys.bend("clock doc 4e6").unwrap();
+    let after = measure(&mut c, false);
+    eprintln!("持続音 {before:.2} Hz → DOC 4 MHz で {after:.2} Hz");
+    assert!((before - 110.2).abs() < 2.0, "持続音が {before:.2} Hz");
+    assert!(
+        (after / before - 0.5).abs() < 0.03,
+        "{before:.2} Hz → {after:.2} Hz"
+    );
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+}
