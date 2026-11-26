@@ -1,11 +1,209 @@
-//! ROM のソケットの線のベンディング（仕様書 §11 のベンド点「文字ROMの線」、DR-063）。
+//! 通常モードと Bend モード、ベンド点の設定（仕様書 §11、DR-034、DR-035、DR-063、DR-065）。
+//!
+//! ベンド点の設定は `Bends` にまとめて持ち、Bend モードのときだけ回路に入れる
+//! （`System::apply_bends`）。通常モードは工場出荷の機械で、設定は残したまま回路から外す。
 //!
 //! 文字 ROM（32 KiB）のソケットとテストピンで、番地のピン A0〜A14 とデータのピン D0〜D7 を、
 //! GND・+5 V への固定、ほかの線との入替え、浮かせにできる。68000 から読んでも Data Fabric の
 //! port 9 から読んでも、同じソケットの線を通る。番号は ROM のピンの番号で、68000 の番地では
 //! ROM の A0 が 68000 の A1 に当たる（仕様書 §08）。
 
+use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_384K, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
+
+/// 通常モードと Bend モード（仕様書 §11）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mode {
+    /// 工場出荷の機械。ベンド点は何もつながず、ソフトの規約違反は警告する。
+    #[default]
+    Normal,
+    /// ベンド点の設定を回路に入れる。規約違反は警告しない（実行は両方のモードで同じ）。
+    Bend,
+}
+
+/// テストピンにつなぐもの。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pin {
+    /// 何もつながない。
+    #[default]
+    Open,
+    /// GND に固定（1 kΩ 程度を挟む）。
+    Low,
+    /// +5 V に固定（1 kΩ 程度を挟む）。
+    High,
+}
+
+/// FIFO（67401）の EMPTY・FULL のテストピン（DR-034）。EMPTY は OR の反転、FULL は IR の反転で、
+/// FIFO の外の回路（Data Fabric、アダプタ、DSP の BIO、状態のレジスタ）はみなこの線を見る。
+/// FIFO の中は線によらず、満杯なら Shift In を捨て、空なら前の値を出し続ける。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FifoPins {
+    pub empty: Pin,
+    pub full: Pin,
+}
+
+/// テストピンのある FIFO の名前（`FabricPorts` の dac・dsp_in・dsp_out・adpcm の順）。
+pub const FIFO_NAMES: [&str; 4] = ["dac", "dsp_in", "dsp_out", "adpcm"];
+
+/// クロックのジャンパ（DR-035）。`None` は基板の発振器。値は周期。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clocks {
+    /// DOC の CLK（基板では 8 MHz）。
+    pub doc: Option<Time>,
+    /// TMS32010 の CLKIN（基板では 20 MHz）。
+    pub dsp: Option<Time>,
+    /// MSM5205 の XT（基板では 384 kHz）。
+    pub adpcm: Option<Time>,
+    /// 音声クロックの分周器の入力（基板では 8 MHz）。
+    pub audio: Option<Time>,
+}
+
+impl Clocks {
+    /// ジャンパの先の周期（ジャンパがなければ基板の発振器）。順は DOC、DSP の CLKIN、XT、音声。
+    pub fn periods(&self) -> [Time; 4] {
+        [
+            self.doc.unwrap_or(PERIOD_8M),
+            self.dsp.unwrap_or(PERIOD_20M),
+            self.adpcm.unwrap_or(PERIOD_384K),
+            self.audio.unwrap_or(PERIOD_8M),
+        ]
+    }
+}
+
+/// ベンド点の設定とモード（DR-065）。保存と復元に入る。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bends {
+    pub mode: Mode,
+    /// 文字 ROM のソケットの線（DR-063）。
+    pub char_lines: RomLines,
+    pub clocks: Clocks,
+    /// FIFO のテストピン（`FIFO_NAMES` の順）。
+    pub fifos: [FifoPins; 4],
+}
+
+impl Bends {
+    /// 設定がどれも工場出荷のままか（モードは見ない）。
+    pub fn is_factory(&self) -> bool {
+        self.char_lines.is_normal()
+            && self.clocks == Clocks::default()
+            && self.fifos == [FifoPins::default(); 4]
+    }
+
+    /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
+    ///
+    /// - `mode normal`・`mode bend`・`mode toggle`
+    /// - `char A1=A2,A2=A1,D6=0,D2=Z`（`char normal` で戻す。`RomLines::parse`）
+    /// - `clock doc|dsp|adpcm|audio <Hz>`（`off` で基板の発振器に戻す。`6e6` の形も読む）
+    /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
+    /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
+    pub fn command(&mut self, line: &str) -> Result<(), String> {
+        let line = line.trim();
+        let (head, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        let rest = rest.trim();
+        match head.to_ascii_lowercase().as_str() {
+            "mode" => {
+                self.mode = match rest.to_ascii_lowercase().as_str() {
+                    "normal" => Mode::Normal,
+                    "bend" => Mode::Bend,
+                    "toggle" => match self.mode {
+                        Mode::Normal => Mode::Bend,
+                        Mode::Bend => Mode::Normal,
+                    },
+                    _ => return Err(format!("mode は normal・bend・toggle: {line}")),
+                }
+            }
+            "char" => self.char_lines.parse(rest)?,
+            "clock" => {
+                let mut f = rest.split_whitespace();
+                let (Some(which), Some(hz)) = (f.next(), f.next()) else {
+                    return Err(format!("clock <doc|dsp|adpcm|audio> <Hz|off>: {line}"));
+                };
+                let period = if hz.eq_ignore_ascii_case("off") {
+                    None
+                } else {
+                    let hz: f64 = hz
+                        .parse()
+                        .ok()
+                        .filter(|h: &f64| *h > 0.0)
+                        .ok_or_else(|| format!("周波数でない: {hz}"))?;
+                    Some((UNITS_PER_SECOND as f64 / hz).round().max(1.0) as Time)
+                };
+                let slot = match which.to_ascii_lowercase().as_str() {
+                    "doc" => &mut self.clocks.doc,
+                    "dsp" => &mut self.clocks.dsp,
+                    "adpcm" => &mut self.clocks.adpcm,
+                    "audio" => &mut self.clocks.audio,
+                    _ => return Err(format!("クロックの名前でない: {which}")),
+                };
+                *slot = period;
+            }
+            "fifo" => {
+                let mut f = rest.split_whitespace();
+                let name = f.next().unwrap_or("").to_ascii_lowercase();
+                let k = FIFO_NAMES.iter().position(|n| *n == name).ok_or_else(|| {
+                    format!("FIFO の名前でない（{}）: {name}", FIFO_NAMES.join("・"))
+                })?;
+                for item in f {
+                    let item = item.to_ascii_lowercase();
+                    if item == "open" {
+                        self.fifos[k] = FifoPins::default();
+                        continue;
+                    }
+                    let (pin, v) = item
+                        .split_once('=')
+                        .ok_or_else(|| format!("empty=… か full=…: {item}"))?;
+                    let v = match v {
+                        "0" => Pin::Low,
+                        "1" => Pin::High,
+                        "open" => Pin::Open,
+                        _ => return Err(format!("0・1・open: {item}")),
+                    };
+                    match pin {
+                        "empty" => self.fifos[k].empty = v,
+                        "full" => self.fifos[k].full = v,
+                        _ => return Err(format!("empty か full: {item}")),
+                    }
+                }
+            }
+            "factory" => {
+                *self = Self {
+                    mode: self.mode,
+                    ..Self::default()
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "知らない命令（mode・char・clock・fifo・factory）: {line}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 今の設定を 1 行で表す（ホストの表示用）。
+    pub fn summary(&self) -> String {
+        let mut v = vec![match self.mode {
+            Mode::Normal => "通常モード".to_string(),
+            Mode::Bend => "Bend モード".to_string(),
+        }];
+        if !self.char_lines.is_normal() {
+            v.push("文字 ROM の線".into());
+        }
+        let names = ["DOC", "DSP", "ADPCM", "音声"];
+        let c = self.clocks;
+        for (n, p) in names.iter().zip([c.doc, c.dsp, c.adpcm, c.audio]) {
+            if let Some(p) = p {
+                v.push(format!("{n} {:.0} Hz", UNITS_PER_SECOND as f64 / p as f64));
+            }
+        }
+        for (n, p) in FIFO_NAMES.iter().zip(self.fifos) {
+            if p != FifoPins::default() {
+                v.push(format!("FIFO {n}"));
+            }
+        }
+        v.join("、")
+    }
+}
 
 /// 1 本のピンに何をつなぐか。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +391,50 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.contains(&0) && a.contains(&1));
         assert!(a.iter().all(|v| *v <= 1));
+    }
+
+    #[test]
+    fn commands_set_the_bends() {
+        let mut b = Bends::default();
+        assert_eq!(b.mode, Mode::Normal);
+        assert!(b.is_factory());
+        b.command("clock doc 4e6").unwrap();
+        b.command("CLOCK dsp 25000000").unwrap();
+        b.command("fifo adpcm empty=0 full=1").unwrap();
+        b.command("mode toggle").unwrap();
+        assert_eq!(b.mode, Mode::Bend);
+        assert_eq!(b.clocks.doc, Some(2 * PERIOD_8M));
+        // 25 MHz は時刻の単位で 604.8。四捨五入する
+        assert_eq!(b.clocks.dsp, Some(605));
+        assert_eq!(
+            b.fifos[3],
+            FifoPins {
+                empty: Pin::Low,
+                full: Pin::High
+            }
+        );
+        assert!(!b.is_factory());
+        b.command("clock doc off").unwrap();
+        b.command("fifo adpcm open").unwrap();
+        b.command("clock dsp off").unwrap();
+        assert!(b.is_factory());
+        assert_eq!(b.mode, Mode::Bend);
+        // 基板の発振器の周期（DR-003）
+        assert_eq!(
+            Clocks::default().periods(),
+            [PERIOD_8M, PERIOD_20M, PERIOD_384K, PERIOD_8M]
+        );
+        for bad in [
+            "mode on",
+            "clock doc",
+            "clock vdp 1e6",
+            "clock doc -5",
+            "fifo port9 open",
+            "fifo dac empty=2",
+            "wobble",
+        ] {
+            assert!(b.command(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -513,3 +513,55 @@ fn bent_char_rom_lines_are_seen_from_the_cpu_and_port_9_alike() {
         }
     );
 }
+
+#[test]
+fn bend_points_are_wired_in_only_in_bend_mode() {
+    // DR-065：設定は通常モードでも残すが、回路に入れるのは Bend モードのときだけ
+    let mut c = Cpu::new();
+    c.sys.ports.char_rom[0] = 0x81;
+    c.sys.ports.char_rom[1] = 0x42;
+    c.sys.ports.dsp_in.shift_in(0x1234);
+    c.sys.bend("char A0=0").unwrap();
+    c.sys.bend("fifo dsp_in empty=1").unwrap();
+    // 通常モード：工場出荷のまま
+    assert!(!c.sys.ports.dsp_in.is_empty());
+    assert_eq!(
+        c.rd(0x01_0002, Size::Byte),
+        BusReply::Ok {
+            data: 0x42,
+            waits: 1
+        }
+    );
+    // Bend モード：A0 を GND に固定して 0 番地を読み、EMPTY を +5 V にして空に見せる
+    c.sys.bend("mode bend").unwrap();
+    assert!(c.sys.ports.dsp_in.is_empty());
+    assert_eq!(c.sys.ports.dsp_in.len(), 1);
+    assert_eq!(
+        c.rd(0x01_0002, Size::Byte),
+        BusReply::Ok {
+            data: 0x81,
+            waits: 1
+        }
+    );
+    // 通常モードに戻すと外れ、設定は残る
+    c.sys.bend("mode toggle").unwrap();
+    assert!(!c.sys.ports.dsp_in.is_empty());
+    assert!(!c.sys.bends.is_factory());
+    c.sys.bend("factory").unwrap();
+    assert!(c.sys.bends.is_factory());
+}
+
+#[test]
+fn fifo_test_pins_change_only_the_lines_seen_outside() {
+    // FULL を +5 V に固定すると IR が 0 に見え、Fabric は port 3 に書けずに待つ。中は空のまま
+    let mut c = Cpu::new();
+    c.sys.bend("fifo dsp_in full=1").unwrap();
+    c.sys.bend("mode bend").unwrap();
+    assert!(!c.sys.ports.dsp_in.ir());
+    assert_eq!(c.sys.ports.dsp_in.len(), 0);
+    // EMPTY を GND に固定すると、空でも OR が 1 に見え、読むと前の値が出る（67401、付録 A.1）
+    c.sys.bend("fifo dsp_out empty=0").unwrap();
+    assert!(c.sys.ports.dsp_out.or());
+    assert_eq!(c.sys.ports.dsp_out.shift_out(), 0);
+    assert_eq!(c.sys.ports.dsp_out.empty_reads, 1);
+}

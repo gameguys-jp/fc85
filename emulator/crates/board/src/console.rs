@@ -22,6 +22,7 @@ use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::adpcm::AdpcmCtrl;
+use crate::bend::{Bends, FifoPins, Mode, RomLines};
 use crate::doc;
 use crate::dsp::{BioSel, DspCtrl};
 use crate::fabric::{Fabric, HostReply};
@@ -102,6 +103,9 @@ pub struct System {
     pub temporal_sync: bool,
     vblank_prev: bool,
     pub log: BusLog,
+    /// ベンド点の設定とモード（DR-065）。変えたら `apply_bends` で回路に入れる。
+    #[serde(default)]
+    pub bends: Bends,
     /// 今の命令の中の DOC の窓へのアクセス（番地、書込みか）。命令ごとに `Console` が見て消す。
     #[serde(skip)]
     doc_trace: Vec<(u32, bool)>,
@@ -194,6 +198,7 @@ impl System {
             temporal_sync: false,
             vblank_prev: false,
             log: BusLog::default(),
+            bends: Bends::default(),
             doc_trace: Vec::new(),
             audio_out: Vec::new(),
             next_sample: 0,
@@ -775,6 +780,46 @@ impl System {
     }
 
     // ------------------------------------------------------------------ ホストから
+
+    /// ベンド点の設定を回路に入れる（Bend モード）か、工場出荷に戻す（通常モード）。DR-065。
+    /// 時刻と IC の状態はそのまま続く（クロックは次の周期から変わる）。
+    pub fn apply_bends(&mut self) {
+        let on = self.bends.mode == Mode::Bend;
+        let p = &mut self.ports;
+        p.char_lines = if on {
+            self.bends.char_lines.clone()
+        } else {
+            RomLines::default()
+        };
+        let [doc, dsp, adpcm, audio] = if on {
+            self.bends.clocks
+        } else {
+            Default::default()
+        }
+        .periods();
+        p.doc_board.set_clock_period(doc);
+        p.dsp.set_input_period(4 * dsp);
+        p.adpcm_port.set_input_period(adpcm);
+        p.audio.set_input_period(audio);
+        let pins = if on {
+            self.bends.fifos
+        } else {
+            [FifoPins::default(); 4]
+        };
+        for (f, pin) in [&mut p.dac, &mut p.dsp_in, &mut p.dsp_out, &mut p.adpcm]
+            .into_iter()
+            .zip(pins)
+        {
+            f.pins = pin;
+        }
+    }
+
+    /// ベンド点の命令（`Bends::command`）を 1 行実行し、回路に入れる。
+    pub fn bend(&mut self, line: &str) -> Result<(), String> {
+        self.bends.command(line)?;
+        self.apply_bends();
+        Ok(())
+    }
 
     /// ホストの入力：PORT_A・PORT_B が変わったら INPUT_IRQ_STATUS の bit を立てる。
     pub fn set_ports(&mut self, a: u16, b: u16) {

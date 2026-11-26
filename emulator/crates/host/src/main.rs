@@ -1,17 +1,21 @@
 //! fc85 のホスト（仕様書 §12 の host 層。DR-055）。
 //!
 //! 仮想機（board 層の `Console`）を 1 フレームずつ進め、画面を窓に、音声をオーディオ装置に出し、
-//! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
+//! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。F2 で通常モードと Bend モードを
+//! 切り替える（DR-065）。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
-//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]`
+//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD]
+//! [--bend-script FILE]`
 //!
-//! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
-//! （既定 20 MHz）、MSM5205 の発振（既定 384 kHz）、音声クロックの分周器の入力（既定 8 MHz）。
-//! `--char-bend` は文字 ROM のソケットの線（DR-063）：`A3=0`（GND）、`A3=1`（+5 V）、`A3=Z`（浮かせ）、
-//! `A1=A2,A2=A1`（入替え）。データの線は `D0`〜`D7`。
+//! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
+//! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
+//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`factory`。ベンド点を 1 つでも
+//! 設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
+//! `--bend-script` は「フレーム 命令」の行の台本で、そのフレームの頭で実行する。
+//! `--*-clock HZ` は `--bend "clock … HZ"`、`--char-bend SPEC` は `--bend "char SPEC"` の短い形。
 
 mod midi;
 
@@ -21,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
 use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
 use fc85_chips::hd68000::RunState;
-use fc85_core::time::{Time, UNITS_PER_SECOND};
 
 /// 窓に出す範囲（ドット、ライン）。案B の表示（64〜319 ドット、43〜234 ライン）を真ん中に置く。
 const VIEW_X: usize = 22;
@@ -55,13 +58,13 @@ struct Args {
     headless: bool,
     dump: Option<String>,
     wav: Option<String>,
-    /// 外部クロック（Hz）：DOC、DSP、ADPCM、音声クロック。
-    clocks: [Option<f64>; 4],
+    /// ベンド点の命令（`Bends::command`）。起動のときに順に実行する。
+    bends: Vec<String>,
+    /// ベンド点の台本：(フレーム, 命令)。
+    bend_script: Vec<(u64, String)>,
     /// MIDI の装置の番号（`--midi-list`）。
     midi_in: Option<usize>,
     midi_out: Option<usize>,
-    /// 文字 ROM のソケットの線（`A3=0,D0=D1,D7=Z` の形。DR-063）。
-    char_bend: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -78,17 +81,21 @@ fn parse_args() -> Args {
         headless: false,
         dump: None,
         wav: None,
-        clocks: [None; 4],
+        bends: Vec::new(),
+        bend_script: Vec::new(),
         midi_in: None,
         midi_out: None,
-        char_bend: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
         match s.as_str() {
             "--boot" => a.boot = it.next(),
             "--char" => a.chars = it.next(),
-            "--char-bend" => a.char_bend = it.next(),
+            "--char-bend" => a.bends.extend(it.next().map(|v| format!("char {v}"))),
+            "--bend" => a.bends.extend(it.next()),
+            "--bend-script" => {
+                a.bend_script = it.next().map(|p| read_bend_script(&p)).unwrap_or_default()
+            }
             "--cart" => a.cart = it.next(),
             "--no-doc" => a.doc = false,
             "--scale" => a.scale = it.next().and_then(|v| v.parse().ok()).unwrap_or(3),
@@ -112,16 +119,17 @@ fn parse_args() -> Args {
                     .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                     .unwrap_or_default()
             }
-            "--doc-clock" => a.clocks[0] = it.next().and_then(|v| v.parse().ok()),
-            "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
-            "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
-            "--audio-clock" => a.clocks[3] = it.next().and_then(|v| v.parse().ok()),
+            "--doc-clock" | "--dsp-clock" | "--adpcm-clock" | "--audio-clock" => {
+                let which = &s[2..s.len() - 6];
+                a.bends
+                    .extend(it.next().map(|v| format!("clock {which} {v}")));
+            }
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE]"
                 );
                 std::process::exit(0);
             }
@@ -132,6 +140,40 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+/// ベンド点の台本を読む。1 行に「フレーム 命令」。`#` から後は注釈。
+fn read_bend_script(path: &str) -> Vec<(u64, String)> {
+    let text = String::from_utf8_lossy(&load(path)).into_owned();
+    let mut v = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (frame, cmd) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        match frame.parse::<u64>() {
+            Ok(f) if !cmd.trim().is_empty() => v.push((f, cmd.trim().to_string())),
+            _ => eprintln!("{path}:{}: 「フレーム 命令」ではない", i + 1),
+        }
+    }
+    v.sort_by_key(|e| e.0);
+    v
+}
+
+/// ベンド点の命令を実行して、回路に入れる。
+fn bend(c: &mut Console, cmd: &str) {
+    match c.sys.bend(cmd) {
+        Ok(()) => eprintln!("ベンド点：{cmd}（{}）", c.sys.bends.summary()),
+        Err(e) => eprintln!("ベンド点：{e}"),
+    }
+}
+
+/// 台本のうち、フレーム `frame` の頭で実行する命令。
+fn run_bend_script(c: &mut Console, a: &Args, frame: u64) {
+    for (_, cmd) in a.bend_script.iter().filter(|e| e.0 == frame) {
+        bend(c, cmd);
+    }
 }
 
 /// 入力の台本を読む。1 行に「フレーム 値」（値は 16 進。`$`・`0x` を付けてもよい）。`#` から後は注釈。
@@ -209,28 +251,22 @@ fn build_console(a: &Args) -> Console {
         let n = rom.len().min(c.sys.ports.char_rom.len());
         c.sys.ports.char_rom[..n].copy_from_slice(&rom[..n]);
     }
-    if let Some(spec) = &a.char_bend
-        && let Err(e) = c.sys.ports.char_lines.parse(spec)
-    {
-        eprintln!("--char-bend: {e}");
-        std::process::exit(2);
+    for cmd in &a.bends {
+        if let Err(e) = c.sys.bends.command(cmd) {
+            eprintln!("--bend: {e}");
+            std::process::exit(2);
+        }
+    }
+    let explicit_mode = a.bends.iter().any(|b| b.trim_start().starts_with("mode"));
+    if !c.sys.bends.is_factory() && !explicit_mode {
+        c.sys.bends.mode = fc85_board::bend::Mode::Bend;
+    }
+    c.sys.apply_bends();
+    if !a.bends.is_empty() {
+        eprintln!("ベンド点：{}", c.sys.bends.summary());
     }
     if let Some(p) = &a.cart {
         c.sys.cart = Some(load(p));
-    }
-    let period = |hz: f64| (UNITS_PER_SECOND as f64 / hz).round().max(1.0) as Time;
-    let p = &mut c.sys.ports;
-    if let Some(hz) = a.clocks[0] {
-        p.doc_board.set_clock_period(period(hz));
-    }
-    if let Some(hz) = a.clocks[1] {
-        p.dsp.set_input_period(4 * period(hz));
-    }
-    if let Some(hz) = a.clocks[2] {
-        p.adpcm_port.set_input_period(period(hz));
-    }
-    if let Some(hz) = a.clocks[3] {
-        p.audio.set_input_period(period(hz));
     }
     c.power_on();
     c
@@ -483,7 +519,8 @@ fn report(c: &Console, seen: &mut (u64, u64, bool)) {
         }
         seen.0 = l.bus_errors;
     }
-    if l.doc_rule_warnings != seen.1 {
+    // Bend モードでは規約違反を警告しない（実行はどちらのモードでも同じ。DR-065）
+    if l.doc_rule_warnings != seen.1 && c.sys.bends.mode == fc85_board::bend::Mode::Normal {
         if let Some(addr) = l.last_doc_rule {
             eprintln!(
                 "DOC の窓の規約（DR-030）に反した命令 {} 回（最後は {addr:06X}）",
@@ -507,6 +544,7 @@ fn main() {
         let n = a.frames.unwrap_or(60);
         let mut pcm = Vec::new();
         for i in 0..n {
+            run_bend_script(&mut c, &a, i);
             if let Some(&(_, v)) = a.pad_script.iter().rev().find(|e| e.0 <= i) {
                 c.sys.set_ports(v, 0);
             }
@@ -572,6 +610,10 @@ fn main() {
         if w.is_key_pressed(minifb::Key::F9, minifb::KeyRepeat::No) {
             load_state(&mut c);
         }
+        if w.is_key_pressed(minifb::Key::F2, minifb::KeyRepeat::No) {
+            bend(&mut c, "mode toggle");
+        }
+        run_bend_script(&mut c, &a, frames);
         c.sys.set_ports(pad(&w), 0);
         for b in midi.take_received() {
             c.sys.acia.receive(b);

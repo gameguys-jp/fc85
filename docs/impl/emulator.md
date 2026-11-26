@@ -24,7 +24,7 @@
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
 | board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3） |
-| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
+| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。ベンド点（DR-065）は `--bend 命令`（`mode`、`char`、`clock`、`fifo`、`factory`。形は `bend::Bends::command`。例：`mode toggle`、`clock doc 6e6`、`fifo dac full=0`）と、フレームごとの台本 `--bend-script FILE`（1 行に「フレーム 命令」）。F2 で通常モードと Bend モードを切り替える。外部クロックのジャンパ（DR-035）の `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）は `--bend "clock …"` の短い形。Bend モードでは DR-030 の警告を出さない。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（`--bend "char …"` の短い形。DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
 
 ### 約束
 
@@ -63,8 +63,8 @@
 |---|---|---|
 | Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件） |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ（port 3・4、プログラム RAM、メールボックス、BIO の選択）も実装した（試験 9 件）。ブリッジと Temporal RAM の CPU 側のレジスタの番地はまだ |
-| DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。68000 のコアとバスはまだなく、試験がバスサイクルを直接始める（試験 7 件。規則は OI-055） |
-| 本体のバス（段階 3） | アドレスマップ（仕様書 §05）、待ち、バスの時間切れ、割込み、I/O レジスタ | 解読、メモリ（Boot ROM、文字 ROM、Main RAM、Staging RAM、カートリッジ）、各窓の待ち、バスの時間切れ、割込みのレベル（74LS148）、オートベクタ、ACIA、入力、DSP・ADPCM・本体 DAC・Temporal のレジスタ、RESET 命令、音声の出力（48 kHz）を実装した。68000 のコアはまだなく、試験がバスサイクルを直接出す（試験 16 件。DR-052〜DR-054） |
+| DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。試験 7 件はバスサイクルを直接始め、68000 から通す試験は「本体のバス」（規則は OI-055） |
+| 本体のバス（段階 3） | アドレスマップ（仕様書 §05）、待ち、バスの時間切れ、割込み、I/O レジスタ | 解読、メモリ（Boot ROM、文字 ROM、Main RAM、Staging RAM、カートリッジ）、各窓の待ち、バスの時間切れ、割込みのレベル（74LS148）、オートベクタ、ACIA、入力、DSP・ADPCM・本体 DAC・Temporal のレジスタ、RESET 命令、音声の出力（48 kHz）を実装した。68000 のコアとつないだ `Console` で Boot ROM とカートリッジが動く（§04 の「本体のバス」。DR-052〜DR-054） |
 | 映像の出力段（段階 3） | ACRTC の表示、パレット、映像の割込み | ACRTC の表示のタイミング（chips）と、画素、パレットの 2 面と写し、DIRECT、VBlank・HBlank の割込みと Fabric のトリガ 1・2 を実装した（DR-027、DR-053） |
 
 ## 03　仕様との差
@@ -366,6 +366,18 @@
 | 送受信 | byte の単位で、1 文字のビット数×16（÷64 では ×64）クロックかけて受け取り・送り終える。÷1 は ÷16 と同じに扱う [V] | MIDI の入出力に要るのは byte の時刻 | ビットの標本化、偽スタートの除去、FE・PE は作っていない |
 | オーバーラン | RDRF のまま次の byte を受けると、その byte を捨てて OVRN。RDR を読むと RDRF と OVRN が消える | 台帳 §4.3 | 「状態→データの順に読む」手順は RDR の読出しで代えた [V] |
 | CTS̅・DCD̅ | Low につないだとする | 本機の接続（台帳 §2） | 状態の bit 2・3 は 0 |
+
+### ベンド点と Bend モード
+
+コードは `emulator/crates/board/src/bend.rs`（設定 `Bends`、文字 ROM の線 `RomLines`）、`fifo.rs`（テストピン）、`console.rs`（`System::apply_bends`・`bend`）。仕様書 §11 のベンド点の表と、DR-034、DR-035、DR-063、DR-065。
+
+| ベンド点 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| モード | 通常モードは工場出荷。Bend モードのときだけ設定を回路に入れる。切り替えても時刻と IC の状態は続く | DR-065 | 同じ状態から通常の機械と比べられる |
+| 文字 ROM の線 | 番地 15 本・データ 8 本ごとに、そのまま、固定、入替え、浮かせ。浮かせは読むたびに 16 bit の LFSR [P] | 実機の値は不定 [V] | 68000 と port 9 が同じ線を通る |
+| クロックのジャンパ | DOC の CLK、DSP の CLKIN、MSM5205 の XT、音声クロックの入力の周期を替える。次の周期から変わる（位相は続く） | DR-035 | 資料の範囲外の周波数での崩れ（DOC のレジスタの消失、DSP の暴走）は作っていない [V] |
+| FIFO のテストピン | EMPTY・FULL を GND か +5 V に固定すると、外が見る OR・IR だけが変わる。中は線によらない | 67401 の動作（review-digital 付録 A.1） | FULL を GND にすると、あふれても書き続けて語を捨てる。EMPTY を GND にすると、空でも読んで前の値を受け取る |
+| 規約違反（DR-016、DR-030） | 両方のモードで実行する。警告はホストが通常モードのときだけ出す | DR-065 | — |
 
 ## 04　テストと判定基準
 

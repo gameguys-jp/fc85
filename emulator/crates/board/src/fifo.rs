@@ -10,7 +10,11 @@
 //!   （付録 A.1）。どちらも回数を数える。
 //! - 通り抜けの時間（書いた語が出力に出るまで）は扱わない。書いた次のスロットから読める [V]。
 //! - MR（マスタリセット）の後の出力の値は資料にない。0 にする [V]。
+//! - EMPTY・FULL のテストピン（DR-034、DR-065）を GND か +5 V に固定すると、外の回路が見る
+//!   OR・IR の線だけが変わる。FIFO の中は線によらない（満杯の Shift In は捨て、空の Shift Out は
+//!   前の値）。
 
+use crate::bend::{FifoPins, Pin};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -26,6 +30,9 @@ pub struct Fifo {
     pub rejected: u32,
     /// 空のときに読んだ（前の値を返した）回数。
     pub empty_reads: u32,
+    /// EMPTY・FULL のテストピン（Bend モードで `System::apply_bends` が入れる）。
+    #[serde(default)]
+    pub pins: FifoPins,
 }
 
 impl Fifo {
@@ -41,30 +48,40 @@ impl Fifo {
             out: 0,
             rejected: 0,
             empty_reads: 0,
+            pins: FifoPins::default(),
         }
     }
 
-    /// IR：書き込める。
+    /// IR の線：書き込める。FULL のテストピン（IR の反転）を固定していればその値。
     pub fn ir(&self) -> bool {
-        self.data.len() < DEPTH
+        match self.pins.full {
+            Pin::Open => self.data.len() < DEPTH,
+            Pin::Low => true,
+            Pin::High => false,
+        }
     }
 
-    /// OR：読み出せる。
+    /// OR の線：読み出せる。EMPTY のテストピン（OR の反転）を固定していればその値。
     pub fn or(&self) -> bool {
-        !self.data.is_empty()
+        match self.pins.empty {
+            Pin::Open => !self.data.is_empty(),
+            Pin::Low => true,
+            Pin::High => false,
+        }
     }
 
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
+    /// 外の回路から見て空か（OR の線の反転）。
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        !self.or()
     }
 
     /// Shift In。満杯なら捨てて `false`。
     pub fn shift_in(&mut self, v: u16) -> bool {
-        if self.ir() {
+        if self.data.len() < DEPTH {
             self.data.push_back(v & self.mask);
             true
         } else {
