@@ -9,6 +9,7 @@
 //! ROM の A0 が 68000 の A1 に当たる（仕様書 §08）。
 
 use crate::analog::SigWiring;
+use crate::dram::DramEnv;
 use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_384K, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +84,9 @@ pub struct Bends {
     /// DOC の SIG± の配線のジャンパ（DR-011。仕様書 §11 のベンド点「DOC 出力の片側」）。
     #[serde(default)]
     pub sig: SigWiring,
+    /// DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。`dram`、DR-072）。
+    #[serde(default)]
+    pub dram: DramEnv,
 }
 
 impl Bends {
@@ -92,6 +96,7 @@ impl Bends {
             && self.clocks == Clocks::default()
             && self.fifos == [FifoPins::default(); 4]
             && self.sig == SigWiring::Both
+            && self.dram == DramEnv::default()
     }
 
     /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
@@ -101,6 +106,7 @@ impl Bends {
     /// - `clock doc|dsp|adpcm|audio <Hz>`（`off` で基板の発振器に戻す。`6e6` の形も読む）
     /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
     /// - `sig both|one`：DOC の SIG± の配線（`one` は SIG+ だけの初期の片側の配線。DR-011）
+    /// - `dram unit <N>`・`dram temp <°C>`：DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。DR-072）
     /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
     pub fn command(&mut self, line: &str) -> Result<(), String> {
         let line = line.trim();
@@ -178,6 +184,25 @@ impl Bends {
                     _ => return Err(format!("sig は both・one: {line}")),
                 }
             }
+            "dram" => {
+                let mut f = rest.split_whitespace();
+                let what = f.next().unwrap_or("").to_ascii_lowercase();
+                let v = f.next().unwrap_or("");
+                match what.as_str() {
+                    "unit" => {
+                        self.dram.unit =
+                            v.parse().map_err(|_| format!("個体の番号でない: {line}"))?;
+                    }
+                    "temp" => {
+                        let t: i32 = v.parse().map_err(|_| format!("温度でない: {line}"))?;
+                        if !(-20..=100).contains(&t) {
+                            return Err(format!("温度は -20〜100 °C: {line}"));
+                        }
+                        self.dram.temp_c = t;
+                    }
+                    _ => return Err(format!("dram unit <N> か dram temp <°C>: {line}")),
+                }
+            }
             "factory" => {
                 *self = Self {
                     mode: self.mode,
@@ -186,7 +211,7 @@ impl Bends {
             }
             _ => {
                 return Err(format!(
-                    "知らない命令（mode・char・clock・fifo・sig・factory）: {line}"
+                    "知らない命令（mode・char・clock・fifo・sig・dram・factory）: {line}"
                 ));
             }
         }
@@ -216,6 +241,12 @@ impl Bends {
         }
         if self.sig == SigWiring::One {
             v.push("DOC の SIG＋だけ".into());
+        }
+        if self.dram != DramEnv::default() {
+            v.push(format!(
+                "DRAM 個体 {} {} °C",
+                self.dram.unit, self.dram.temp_c
+            ));
         }
         v.join("、")
     }
@@ -440,6 +471,19 @@ mod tests {
         assert!(b.summary().contains("SIG"));
         b.command("sig both").unwrap();
         assert!(b.is_factory());
+        b.command("dram temp 70").unwrap();
+        b.command("DRAM unit 3").unwrap();
+        assert_eq!(
+            b.dram,
+            DramEnv {
+                unit: 3,
+                temp_c: 70
+            }
+        );
+        assert!(!b.is_factory());
+        assert!(b.summary().contains("70 °C"));
+        b.command("factory").unwrap();
+        assert!(b.is_factory());
         assert_eq!(b.mode, Mode::Bend);
         // 基板の発振器の周期（DR-003）
         assert_eq!(
@@ -454,6 +498,9 @@ mod tests {
             "fifo port9 open",
             "fifo dac empty=2",
             "sig half",
+            "dram temp 200",
+            "dram unit x",
+            "dram hot 1",
             "wobble",
         ] {
             assert!(b.command(bad).is_err(), "{bad}");
