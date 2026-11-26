@@ -352,13 +352,13 @@ pub struct ElgOut {
 /// ELG（PAL20L8A）。このスロットの頭の判断：A ファイルの操作の種類（AC2–AC0）、新しい要素（GR）、書込み（GW）、要素が残るか（KEEP）、STALL の評価（STV、STL）。出力は負の論理
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn elg(infn: bool, q1n: bool, epcn: bool, crunn: bool, cran: bool, crldn: bool, carmn: bool, ready: bool, sok: bool, addr: bool, fb: bool, cd: bool, hreq: bool) -> ElgOut {
-    let grn = !(infn & cd & !cran & !carmn & ready & sok & !fb & !hreq);
-    let ac2n = !((infn & cd & !cran & !carmn & ready & sok & !fb & !hreq & !addr) | (!infn & !crunn & q1n & cd & sok & !addr & !epcn & !hreq) | (!infn & !crunn & !q1n & !hreq) | (!crldn & cd & !hreq));
-    let ac1n = !((infn & cd & !cran & !carmn & ready & sok & !fb & !hreq & addr) | (!infn & !crunn & q1n & cd & sok & addr & !hreq));
-    let ac0n = !((hreq) | (!infn & !crunn & q1n & cd & sok & addr) | (cd & !crldn));
-    let gwn = !((!infn & !crunn & q1n & cd & sok & !addr & epcn) | (!infn & !crunn & q1n & cd & sok & !hreq));
-    let keepn = !((infn & cd & !cran & !carmn & ready & sok & !fb & !hreq) | (!infn & !crunn & !q1n & hreq) | (!infn & !crunn & q1n & !cd) | (!infn & !crunn & q1n & !sok) | (!infn & !crunn & q1n & addr & hreq) | (!infn & !crunn & q1n & !epcn & hreq) | (!infn & !crunn & q1n & !epcn & addr & !hreq));
+pub fn elg(infn: bool, q1n: bool, epcn: bool, crunn: bool, cran: bool, crldn: bool, carmn: bool, ready: bool, goks: bool, addrs: bool, sokd: bool, cd: bool, hreq: bool, addrd: bool) -> ElgOut {
+    let grn = !(infn & cd & !cran & !carmn & ready & goks & !hreq);
+    let ac2n = !((infn & cd & !cran & !carmn & ready & goks & !hreq & !addrs) | (!infn & !crunn & q1n & cd & sokd & !addrd & !epcn & !hreq) | (!infn & !crunn & !q1n & !hreq) | (!crldn & cd & !hreq));
+    let ac1n = !((infn & cd & !cran & !carmn & ready & goks & !hreq & addrs) | (!infn & !crunn & q1n & cd & sokd & addrd & !hreq));
+    let ac0n = !((hreq) | (!infn & !crunn & q1n & cd & sokd & addrd) | (cd & !crldn));
+    let gwn = !((!infn & !crunn & q1n & cd & sokd & !addrd & epcn) | (!infn & !crunn & q1n & cd & sokd & !hreq));
+    let keepn = !((infn & cd & !cran & !carmn & ready & goks & !hreq) | (!infn & !crunn & !q1n & hreq) | (!infn & !crunn & q1n & !cd) | (!infn & !crunn & q1n & !sokd) | (!infn & !crunn & q1n & addrd & hreq) | (!infn & !crunn & q1n & !epcn & hreq) | (!infn & !crunn & q1n & !epcn & addrd & !hreq));
     let stvn = !(infn & cd & !cran);
     let stln = !(!carmn & !ready);
     ElgOut {
@@ -491,11 +491,11 @@ pub struct EvtOut {
 /// EVT（PAL20L8A）。このスロットのチャネルの出来事：止める（KIL）、ERROR で止める（ER）、ブロックの終わり（BLK）、要素と書込みの残りのチャネルが止まる（KE、KT）。出力は負の論理
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn evt(stpq: u32, errk: bool, opch: bool, tln: bool, tchn: bool, tlastn: bool, dnw: bool, infn: bool, q1n: bool, q0n: bool, aop2n: bool, cy: bool, achn: bool) -> EvtOut {
-    let ern_0 = !(errk & !opch);
-    let kiln_0 = !(((stpq & 0x1) == 0x1) | (errk & !opch));
-    let kiln_1 = !(((stpq & 0x2) == 0x2) | (errk & opch));
-    let ern_1 = !(errk & opch);
+pub fn evt(stpq: u32, errkn: bool, opch: bool, tln: bool, tchn: bool, tlastn: bool, dnw: bool, infn: bool, q1n: bool, q0n: bool, aop2n: bool, cy: bool, achn: bool) -> EvtOut {
+    let ern_0 = !(!errkn & !opch);
+    let kiln_0 = !(((stpq & 0x1) == 0x1) | (!errkn & !opch));
+    let kiln_1 = !(((stpq & 0x2) == 0x2) | (!errkn & opch));
+    let ern_1 = !(!errkn & opch);
     let ken = !((achn & !kiln_0) | (!achn & !kiln_1));
     let ktn = !((tchn & !kiln_0) | (!tchn & !kiln_1));
     let blkn_0 = !((!tln & dnw & !tlastn & tchn & kiln_0) | (!infn & !q1n & !aop2n & !cy & !q0n & achn & kiln_0) | (!infn & !q1n & !aop2n & !cy & dnw & achn & kiln_0));
@@ -646,6 +646,505 @@ pub fn sts(s1q: bool, nbsyn: bool, nrunn: bool, strq: bool, sten: bool, wmq: boo
         missn: missn_d,
         staln: staln_d,
         waitn,
+    }
+}
+
+/// TIM の SX の真理値表（番地の bit は RESN、PH1、PH0、SX の順）。
+const TIM_SX_T: u64 = 0x0000000000002a80;
+
+/// TIM（PAL16R8A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimOut {
+    /// 登録出力：PH1、PH0
+    pub ph: u32,
+    /// 登録出力：SX
+    pub sx: bool,
+    /// 登録出力：SCLK
+    pub sclk: bool,
+    /// 登録出力：MCLK
+    pub mclk: bool,
+    /// 登録出力：LCLK
+    pub lclk: bool,
+}
+
+/// TIM（PAL16R8A）。16 MHz の位相（PH1・PH0：q0〜q3 が 0〜3）、S・X（SX＝1 で今のスロットが S）、SCLK・MCLK・LCLK（q0・q2・q3 の縁で立つ。次の 16 MHz の縁がその位相の次の縁かを示す）。RESN で q3・X に戻す
+/// クロックは C16。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn tim(resn: bool, ph: u32, sx: bool) -> TimOut {
+    let ph_1_d = !((resn & ((ph & 0x3) == 0x0)) | (resn & ((ph & 0x3) == 0x3)));
+    let ph_0_d = !(resn & ((ph & 0x1) == 0x1));
+    let sx_d = { let i = (resn as u32) << 0 | (ph >> 1 & 0x1) << 1 | (ph >> 0 & 0x1) << 2 | (sx as u32) << 3; TIM_SX_T >> i & 1 != 0 };
+    let sclk_d = !((!resn) | ((ph & 0x2) == 0x0) | ((ph & 0x1) == 0x0));
+    let mclk_d = !((!resn) | ((ph & 0x2) == 0x2) | ((ph & 0x1) == 0x0));
+    let lclk_d = !((resn & ((ph & 0x2) == 0x0)) | (resn & ((ph & 0x1) == 0x1)));
+    TimOut {
+        ph: (ph_1_d as u32) << 1 | (ph_0_d as u32) << 0,
+        sx: sx_d,
+        sclk: sclk_d,
+        mclk: mclk_d,
+        lclk: lclk_d,
+    }
+}
+
+/// DPA（PAL16L8A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DpaOut {
+    /// 組合せの出力：GOKS
+    pub goks: bool,
+    /// 組合せの出力：ADDRS
+    pub addrs: bool,
+    /// 組合せの出力：SOKD
+    pub sokd: bool,
+    /// 組合せの出力：ADDRD
+    pub addrd: bool,
+}
+
+/// DPA（PAL16L8A）。判断バスの読出し元（S3–S0）と書込み先（D3–D0）の属性：新しい要素を始めてよい（GOKS：S のスロットの規則と FLAG の待ち）、番地を持つ（ADDRS、ADDRD）、書込み先の S の規則（SOKD）。X は今が X のスロット
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn dpa(s: u32, d: u32, x: bool, opv: bool, opfl: bool, opvd: bool, nxfl: bool) -> DpaOut {
+    let goks = !((!x & ((s & 0xf) == 0x0)) | (opv & opfl) | (opvd & nxfl));
+    let addrs = !(((s & 0x4) == 0x4) | ((s & 0x9) == 0x1) | ((s & 0xa) == 0xa));
+    let sokd = !(!x & ((d & 0xf) == 0x0));
+    let addrd = !(((d & 0x4) == 0x4) | ((d & 0x9) == 0x1) | ((d & 0xa) == 0xa));
+    DpaOut {
+        goks,
+        addrs,
+        sokd,
+        addrd,
+    }
+}
+
+/// OPA の CD の真理値表（番地の bit は NXV、NXCH、NXTW、NXLG、OPV、OPCH、OPTW、ODN、STPQ0、STPQ1 の順）。
+const OPA_CD_T: [u64; 16] = [0x0000555f0000555f, 0x555f555f555f555f, 0x555f555f555f555f, 0x555f555f555f555f, 0x0000777f777f777f, 0x777f777f777f777f, 0x777f777f777f777f, 0x777f777f777f777f, 0xdddfdddf0000dddf, 0xdddfdddfdddfdddf, 0xdddfdddfdddfdddf, 0xdddfdddfdddfdddf, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff];
+
+/// OPA の SDN の真理値表（番地の bit は NXV、NXCH、NXTW、NXLG、OPV、OPCH、OPTW、ODN、STPQ0、STPQ1 の順）。
+const OPA_SDN_T: [u64; 16] = [0xfff5fff5fff5fff5, 0x0000fff50000fff5, 0xfff5fff5fff5fff5, 0xfff5fff5fff5fff5, 0xfff7fff7fff7fff7, 0x0000fff7fff7fff7, 0xfff7fff7fff7fff7, 0xfff7fff7fff7fff7, 0xfffdfffdfffdfffd, 0xfffdfffd0000fffd, 0xfffdfffdfffdfffd, 0xfffdfffdfffdfffd, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff];
+
+/// OPA の LAN の真理値表（番地の bit は NXV、NXCH、NXLG、OPV、OPCH、OPLG、ODN、STPQ0、STPQ1 の順）。
+const OPA_LAN_T: [u64; 8] = [0x005f005f5f5f5f5f, 0x5f5f5f5f5f5f5f5f, 0x007f7f7f7f7f7f7f, 0x7f7f7f7f7f7f7f7f, 0xdfdf00dfdfdfdfdf, 0xdfdfdfdfdfdfdfdf, 0xffffffffffffffff, 0xffffffffffffffff];
+
+/// OPA（PAL20R4A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpaOut {
+    /// 組合せの出力：OPLDN
+    pub opldn: bool,
+    /// 組合せの出力：OPVD
+    pub opvd: bool,
+    /// 登録出力：SDN
+    pub sdn: bool,
+    /// 登録出力：LAN
+    pub lan: bool,
+    /// 組合せの出力：CD
+    pub cd: bool,
+    /// 組合せの出力：ABTN
+    pub abtn: bool,
+}
+
+/// OPA（PAL20R4A）。SCLK の前に OP が空くか（OPLD：OP の 74LS377 の許可）、NX のアクセスが STOP で消えないか（OPVD：OP の有効の入力）、判断してよいか（CD）、延びたアクセスの打切り（ABT）。SCLK で、このスロットで終わる 1 スロットのアクセス（SD）と延びたアクセス（LA）を登録する
+/// クロックは SCLK。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn opa(nxv: bool, nxch: bool, nxtw: bool, nxlg: bool, opv: bool, opch: bool, optw: bool, oplg: bool, odn: bool, stpq: u32, tor: bool) -> OpaOut {
+    let opldn = !((odn) | (!opv) | (!opch & ((stpq & 0x1) == 0x1)) | (opch & ((stpq & 0x2) == 0x2)));
+    let opvd = !((!nxv) | (nxch & ((stpq & 0x2) == 0x2)) | (!nxch & ((stpq & 0x1) == 0x1)));
+    let cd = { let i = (nxv as u32) << 0 | (nxch as u32) << 1 | (nxtw as u32) << 2 | (nxlg as u32) << 3 | (opv as u32) << 4 | (opch as u32) << 5 | (optw as u32) << 6 | (odn as u32) << 7 | (stpq >> 0 & 0x3) << 8; OPA_CD_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let abtn = !((tor) | (opv & opch & oplg & !odn & ((stpq & 0x2) == 0x2)) | (opv & !opch & oplg & !odn & ((stpq & 0x1) == 0x1)));
+    let sdn_d = { let i = (nxv as u32) << 0 | (nxch as u32) << 1 | (nxtw as u32) << 2 | (nxlg as u32) << 3 | (opv as u32) << 4 | (opch as u32) << 5 | (optw as u32) << 6 | (odn as u32) << 7 | (stpq >> 0 & 0x3) << 8; OPA_SDN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let lan_d = { let i = (nxv as u32) << 0 | (nxch as u32) << 1 | (nxlg as u32) << 2 | (opv as u32) << 3 | (opch as u32) << 4 | (oplg as u32) << 5 | (odn as u32) << 6 | (stpq >> 0 & 0x3) << 7; OPA_LAN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    OpaOut {
+        opldn,
+        opvd,
+        sdn: sdn_d,
+        lan: lan_d,
+        cd,
+        abtn,
+    }
+}
+
+/// OPB の DNW の真理値表（番地の bit は SDN、OPW、P1RN、P2RN、P1MN、INFN、Q1N、TLN、TLASTN の順）。
+const OPB_DNW_T: [u64; 8] = [0x40c04ccc4ccc4ccc, 0x40c04ccc40c04ccc, 0x4ccc4ccc4ccc4ccc, 0x4ccc4ccc4ccc4ccc, 0x4ccc00004ccc4ccc, 0x4ccc00004ccc0000, 0x4ccc4ccc4ccc4ccc, 0x4ccc4ccc4ccc4ccc];
+
+/// OPB（PAL20R4A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpbOut {
+    /// 組合せの出力：DNR
+    pub dnr: bool,
+    /// 登録出力：ODN
+    pub odn: bool,
+    /// 登録出力：TOR
+    pub tor: bool,
+    /// 組合せの出力：DNW
+    pub dnw: bool,
+    /// 組合せの出力：ERRKN
+    pub errkn: bool,
+}
+
+/// OPB（PAL20R4A）。LCLK の前の、このスロットのアクセスの結果：読出し・書込みの完了（DNR、DNW）、ERROR（ERRK：port 1 の DONE の食い違いか時間切れ）。LCLK で、OP のアクセスが終わった（ODN）と時間切れ（TOR）を登録する。P1R・P2R・P1M は P1A・P2A の答えと DONE の印、TOUT は U38
+/// クロックは LCLK。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn opb(sdn: bool, lan: bool, opw: bool, p1rn: bool, p2rn: bool, p1mn: bool, tout: bool, infn: bool, q1n: bool, epcn: bool, elastn: bool, tln: bool, tlastn: bool) -> OpbOut {
+    let dnr = !((opw) | (sdn & p1rn & p2rn) | (!p1mn & !infn & q1n & epcn & elastn) | (!p1rn & p1mn & !infn & q1n & epcn & !elastn));
+    let dnw = { let i = (sdn as u32) << 0 | (opw as u32) << 1 | (p1rn as u32) << 2 | (p2rn as u32) << 3 | (p1mn as u32) << 4 | (infn as u32) << 5 | (q1n as u32) << 6 | (tln as u32) << 7 | (tlastn as u32) << 8; OPB_DNW_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let errkn = !((!lan & p1rn & p2rn & tout) | (opw & !p1mn & infn & !tln & tlastn) | (opw & !p1rn & p1mn & infn & !tln & !tlastn) | (opw & !p1mn & q1n & !tln & tlastn) | (opw & !p1rn & p1mn & q1n & !tln & !tlastn) | (!opw & !p1mn & !infn & q1n & epcn & elastn) | (!opw & !p1rn & p1mn & !infn & q1n & epcn & !elastn));
+    let odn_d = !((sdn & p1rn & p2rn & lan) | (sdn & p1rn & p2rn & !tout));
+    let tor_d = !((lan) | (!p1rn) | (!p2rn) | (!tout));
+    OpbOut {
+        dnr,
+        odn: odn_d,
+        tor: tor_d,
+        dnw,
+        errkn,
+    }
+}
+
+/// STB0 の XSN の真理値表（番地の bit は OPV、OPP0、OPP1、OPP2、OPP3 の順）。
+const STB0_XSN_T: u64 = 0x00000000555dffff;
+
+/// STB0（PAL16L8A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stb0Out {
+    /// 組合せの出力：RQ0N
+    pub rq0n: bool,
+    /// 組合せの出力：RQ9N
+    pub rq9n: bool,
+    /// 組合せの出力：ABHN
+    pub abhn: bool,
+    /// 組合せの出力：ABLN
+    pub abln: bool,
+    /// 組合せの出力：ABSN
+    pub absn: bool,
+    /// 組合せの出力：T67N
+    pub t67n: bool,
+    /// 組合せの出力：XSN
+    pub xsn: bool,
+    /// 組合せの出力：WEN
+    pub wen: bool,
+}
+
+/// STB0（PAL16L8A-2）。A 基板のポート（0、1、9）の要求と緩衝器（U45 上位、U46 下位、U47 下位と上位の入替え）、Temporal RAM の緩衝器（U56）、拡張（U57、port 8・10〜15）、ANX の出力の許可（WEN）。OP から（OPWORD は OP の W16）
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn stb0(opv: bool, opw: bool, opp: u32, opword: bool, pa: u32) -> Stb0Out {
+    let rq0n = !(opv & ((opp & 0xf) == 0x0));
+    let rq9n = !(opv & ((opp & 0xf) == 0x9));
+    let abhn = !(opv & opword & ((opp & 0xe) == 0x0));
+    let abln = !((opv & opword & ((opp & 0xe) == 0x0)) | (opv & !opword & ((opp & 0xf) == 0x0) & ((pa & 0x1) == 0x1)));
+    let absn = !((opv & !opword & ((opp & 0xf) == 0x0) & ((pa & 0x1) == 0x0)) | (opv & !opword & ((opp & 0xf) == 0x9)));
+    let t67n = !(opv & ((opp & 0xe) == 0x6));
+    let xsn = { let i = (opv as u32) << 0 | (opp >> 0 & 0xf) << 1; STB0_XSN_T >> i & 1 != 0 };
+    let wen = !((!opv) | (!opw));
+    Stb0Out {
+        rq0n,
+        rq9n,
+        abhn,
+        abln,
+        absn,
+        t67n,
+        xsn,
+        wen,
+    }
+}
+
+/// STB1（PAL16L8A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stb1Out {
+    /// 組合せの出力：SIDN
+    pub sidn: bool,
+    /// 組合せの出力：SI3N
+    pub si3n: bool,
+    /// 組合せの出力：SI5N
+    pub si5n: bool,
+    /// 組合せの出力：SO4N
+    pub so4n: bool,
+    /// 組合せの出力：OE4N
+    pub oe4n: bool,
+    /// 組合せの出力：T6WN
+    pub t6wn: bool,
+    /// 組合せの出力：T7RN
+    pub t7rn: bool,
+}
+
+/// STB1（PAL16L8A-2）。B 基板の FIFO と Temporal RAM のアクセスの信号：本体 DAC の FIFO（port 2、DOC 子基板がないとき）・port 3・5 の SI（q2〜q3）、port 4 の SO（q3）と出力の緩衝器（U51–U52）、Temporal RAM の書込み（port 6、q2〜q3）と読出し（port 7）
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn stb1(opv: bool, opp: u32, doc: bool, ph: u32, lclk: bool) -> Stb1Out {
+    let sidn = !(opv & !doc & ((opp & 0xf) == 0x2) & ((ph & 0x2) == 0x2));
+    let si3n = !(opv & ((opp & 0xf) == 0x3) & ((ph & 0x2) == 0x2));
+    let si5n = !(opv & ((opp & 0xf) == 0x5) & ((ph & 0x2) == 0x2));
+    let so4n = !(opv & lclk & ((opp & 0xf) == 0x4));
+    let oe4n = !(opv & ((opp & 0xf) == 0x4));
+    let t6wn = !(opv & ((opp & 0xf) == 0x6) & ((ph & 0x2) == 0x2));
+    let t7rn = !(opv & ((opp & 0xf) == 0x7));
+    Stb1Out {
+        sidn,
+        si3n,
+        si5n,
+        so4n,
+        oe4n,
+        t6wn,
+        t7rn,
+    }
+}
+
+/// P1A の DNMN の真理値表（番地の bit は DTS、DNF、ABTN、DACKN、DNMN の順）。
+const P1A_DNMN_T: u64 = 0x00000000ff7f0020;
+
+/// P1A（PAL16R4A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct P1aOut {
+    /// 登録出力：DACKN
+    pub dackn: bool,
+    /// 登録出力：RPLDN
+    pub rpldn: bool,
+    /// 登録出力：DNMN
+    pub dnmn: bool,
+    /// 組合せの出力：P1RN
+    pub p1rn: bool,
+    /// 組合せの出力：P1MN
+    pub p1mn: bool,
+}
+
+/// P1A（PAL16R4A-2）。port 1（ACRTC）。16 MHz の縁ごと。NX の port 1 のアクセスが OP に入る SCLK の縁で DACK を出し（DACKN）、同期化した DTACK（DTS）で答え（RPLD）、そのときの DONE（DNF）を印にする（DNM）。打切り（ABT）で DACK を戻す。P1R・P1M は LCLK の前の、このスロットの答えと印
+/// クロックは C16。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn p1a(lclk: bool, opldn: bool, opvd: bool, nxlg: bool, nxp: u32, dts: bool, dnf: bool, abtn: bool, dackn: bool, rpldn: bool, dnmn: bool) -> P1aOut {
+    let p1rn = !((!rpldn) | (!dackn & dts & abtn));
+    let p1mn = !((!rpldn & !dnmn) | (!dackn & dts & abtn & dnf));
+    let dackn_d = !((lclk & !opldn & opvd & nxlg & ((nxp & 0x1) == 0x1)) | (!dackn & !dts & abtn));
+    let rpldn_d = !((!dackn & dts & abtn) | (!rpldn & !lclk));
+    let dnmn_d = { let i = (dts as u32) << 0 | (dnf as u32) << 1 | (abtn as u32) << 2 | (dackn as u32) << 3 | (dnmn as u32) << 4; P1A_DNMN_T >> i & 1 != 0 };
+    P1aOut {
+        dackn: dackn_d,
+        rpldn: rpldn_d,
+        dnmn: dnmn_d,
+        p1rn,
+        p1mn,
+    }
+}
+
+/// P2A の LATN の真理値表（番地の bit は SYN1、LAN、OPP0、ABTN、SYN2N、S1N、S0N、RDHN、RPLN の順）。
+const P2A_LATN_T: [u64; 8] = [0xffffffffffffffff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xffffffffffffffff, 0xfcfffcfffffffeff, 0xfffffffffffffeff, 0xfcfffcfffffffeff];
+
+/// P2A の S1N の真理値表（番地の bit は SYN1、ABTN、BWN、LATN、SYN2N、S1N、S0N、RDHN の順）。
+const P2A_S1N_T: [u64; 4] = [0xffffbfaf00005505, 0xffffffaf00005505, 0xffffafaf00005505, 0xffffffaf00005505];
+
+/// P2A の S0N の真理値表（番地の bit は SYN1、ABTN、LATN、SYN2N、S1N、S0N、RDHN の順）。
+const P2A_S0N_T: [u64; 2] = [0xf0f0f0f030303070, 0xf0f0f0f000000050];
+
+/// P2A（PAL16R6A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct P2aOut {
+    /// 組合せの出力：LATN
+    pub latn: bool,
+    /// 登録出力：SYN2N
+    pub syn2n: bool,
+    /// 登録出力：S1N
+    pub s1n: bool,
+    /// 登録出力：S0N
+    pub s0n: bool,
+    /// 登録出力：RDHN
+    pub rdhn: bool,
+    /// 登録出力：RPLN
+    pub rpln: bool,
+    /// 組合せの出力：P2RN
+    pub p2rn: bool,
+}
+
+/// P2A（PAL16R6A-2）。port 2（DOC 子基板）。16 MHz の縁ごと。DOC の E の同期化の 2 段目（SYN2。1 段目 SYN1 は外の 74ALS74。DR-088）、預かりの段（S1・S0：空き 00、窓を待つ 01、窓を取った 11、取った読出しを捨てる 10）、預かったものが読出し（RDH）、このスロットの答え（RPL）。LAT はラッチの条件（U48–U49 の許可）。BWN は 68000 のブリッジが窓を待っていない（HACK）
+/// クロックは C16。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn p2a(syn: u32, lan: bool, opp: u32, opw: bool, abtn: bool, lclk: bool, mclk: bool, bwn: bool, syn2n: bool, s1n: bool, s0n: bool, rdhn: bool, rpln: bool) -> P2aOut {
+    let latn = { let i = (syn >> 1 & 0x1) << 0 | (lan as u32) << 1 | (opp >> 0 & 0x1) << 2 | (abtn as u32) << 3 | (syn2n as u32) << 4 | (s1n as u32) << 5 | (s0n as u32) << 6 | (rdhn as u32) << 7 | (rpln as u32) << 8; P2A_LATN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let p2rn = !((!rpln) | (mclk & !syn2n & !s1n & !s0n & !rdhn & abtn & ((syn & 0x2) == 0x0)) | (mclk & opw & !latn));
+    let syn2n_d = !((syn & 0x2) == 0x2);
+    let s1n_d = { let i = (syn >> 1 & 0x1) << 0 | (abtn as u32) << 1 | (bwn as u32) << 2 | (latn as u32) << 3 | (syn2n as u32) << 4 | (s1n as u32) << 5 | (s0n as u32) << 6 | (rdhn as u32) << 7; P2A_S1N_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let s0n_d = { let i = (syn >> 1 & 0x1) << 0 | (abtn as u32) << 1 | (latn as u32) << 2 | (syn2n as u32) << 3 | (s1n as u32) << 4 | (s0n as u32) << 5 | (rdhn as u32) << 6; P2A_S0N_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let rdhn_d = !((!opw & !latn) | (!rdhn & latn));
+    let rpln_d = !((!syn2n & !s1n & !s0n & !rdhn & abtn & ((syn & 0x2) == 0x0)) | (opw & !latn) | (!rpln & !lclk));
+    P2aOut {
+        latn,
+        syn2n: syn2n_d,
+        s1n: s1n_d,
+        s0n: s0n_d,
+        rdhn: rdhn_d,
+        rpln: rpln_d,
+        p2rn,
+    }
+}
+
+/// HDEC0（PAL20L8A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hdec0Out {
+    /// 組合せの出力：VLDN
+    pub vldn: bool,
+    /// 組合せの出力：AREQN
+    pub areqn: bool,
+    /// 組合せの出力：CHN
+    pub chn: bool,
+    /// 組合せの出力：GLN
+    pub gln: bool,
+    /// 組合せの出力：RAFN
+    pub rafn: bool,
+    /// 組合せの出力：RMODN
+    pub rmodn: bool,
+    /// 組合せの出力：RDENN
+    pub rdenn: bool,
+}
+
+/// HDEC0（PAL20L8A）。CPU の窓（/FCS、16-bit のアクセス、A11–A1）の解読：DTACK をすぐ返すアクセス（VLD）、A ファイルのアクセス（AREQ：0x06・0x0A・0x0C）、チャネルのレジスタの範囲（CH）、全体のレジスタの範囲（GL：0x100〜0x104）、A ファイルの読出しの許可（RAF：U7–U8）、MODULES（RMOD：U11）、読出しの緩衝器（RDEN：U3–U4）
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn hdec0(fcsn: bool, udsn: bool, ldsn: bool, rw: bool, a: u32) -> Hdec0Out {
+    let vldn = !((!fcsn & !udsn & !ldsn & ((a & 0xfb0) == 0x10)) | (!fcsn & !udsn & !ldsn & ((a & 0xfbc) == 0x0)) | (!fcsn & !udsn & !ldsn & ((a & 0xfba) == 0x0)) | (!fcsn & !udsn & !ldsn & ((a & 0xfb6) == 0x0)) | (!fcsn & !udsn & !ldsn & ((a & 0xfbe) == 0xe)) | (!fcsn & !udsn & !ldsn & ((a & 0xffc) == 0x100)) | (!fcsn & !udsn & !ldsn & ((a & 0xffa) == 0x100)));
+    let areqn = !((!fcsn & !udsn & !ldsn & ((a & 0xfbe) == 0x6)) | (!fcsn & !udsn & !ldsn & ((a & 0xfbe) == 0xa)) | (!fcsn & !udsn & !ldsn & ((a & 0xfbe) == 0xc)));
+    let chn = !(!fcsn & !udsn & !ldsn & ((a & 0xfa0) == 0x0));
+    let gln = !(!fcsn & !udsn & !ldsn & ((a & 0xff8) == 0x100));
+    let rdenn = !(!fcsn & rw);
+    let rafn = !(rw & !areqn);
+    let rmodn = !(rw & ((a & 0x6) == 0x4) & !gln);
+    Hdec0Out {
+        vldn,
+        areqn,
+        chn,
+        gln,
+        rafn,
+        rmodn,
+        rdenn,
+    }
+}
+
+/// HDEC1（PAL16L8A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hdec1Out {
+    /// 組合せの出力：W1XN
+    pub w1xn: bool,
+    /// 組合せの出力：WSRCN
+    pub wsrcn: bool,
+    /// 組合せの出力：WDSTN
+    pub wdstn: bool,
+    /// 組合せの出力：WBFN
+    pub wbfn: bool,
+    /// 組合せの出力：WPRSTN
+    pub wprstn: bool,
+    /// 組合せの出力：WAUDN
+    pub waudn: bool,
+    /// 組合せの出力：RST0N
+    pub rst0n: bool,
+    /// 組合せの出力：RST1N
+    pub rst1n: bool,
+}
+
+/// HDEC1（PAL16L8A-2）。チャネル・全体のレジスタの範囲から、書込みの信号と STATUS の読出しの許可：オフセット 0x10〜0x1E の書込み（W1X：U5–U6 の 74LS138 の許可。チャネルは A6）、SRC・DST（WSRC、WDST）、B ファイル（WBF：0x0E・0x10）、PORT_RESET（WPRST）、AUDIO_N（WAUD）、STATUS（RST0・RST1：U9–U10）
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn hdec1(chn: bool, gln: bool, rw: bool, a: u32) -> Hdec1Out {
+    let w1xn = !(!chn & !rw & ((a & 0x10) == 0x10));
+    let wsrcn = !(!chn & !rw & ((a & 0x1e) == 0x0));
+    let wdstn = !(!chn & !rw & ((a & 0x1e) == 0x2));
+    let wbfn = !((!chn & !rw & ((a & 0x1e) == 0xe)) | (!chn & !rw & ((a & 0x1e) == 0x10)));
+    let wprstn = !(!gln & !rw & ((a & 0x6) == 0x0));
+    let waudn = !(!gln & !rw & ((a & 0x6) == 0x2));
+    let rst0n = !(!chn & rw & ((a & 0x5e) == 0x1e));
+    let rst1n = !(!chn & rw & ((a & 0x5e) == 0x5e));
+    Hdec1Out {
+        w1xn,
+        wsrcn,
+        wdstn,
+        wbfn,
+        wprstn,
+        waudn,
+        rst0n,
+        rst1n,
+    }
+}
+
+/// HACK の BWN の真理値表（番地の bit は SYN1、SYN2N、DCSN、BWN、BCN、BDTN の順）。
+const HACK_BWN_T: u64 = 0xf1f1fff1fff1fff1;
+
+/// HACK の BCN の真理値表（番地の bit は SYN1、SYN2N、DCSN、BWN、BCN、BDTN の順）。
+const HACK_BCN_T: u64 = 0xfefe1110fffe1110;
+
+/// HACK（PAL16R4A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HackOut {
+    /// 登録出力：AKN
+    pub akn: bool,
+    /// 登録出力：BWN
+    pub bwn: bool,
+    /// 登録出力：BCN
+    pub bcn: bool,
+    /// 登録出力：BDTN
+    pub bdtn: bool,
+    /// 組合せの出力：HREQ
+    pub hreq: bool,
+    /// 組合せの出力：DTKN
+    pub dtkn: bool,
+}
+
+/// HACK（PAL16R4A-2）。68000 の DTACK（16 MHz の縁ごと）。Fabric の窓：A ファイルを使わないアクセスはすぐ（VLD）、A ファイルのアクセスは SEQ の許可（AOP＝001）のスロットの LCLK の縁で返す（AK）。HREQ は ELG への要求。DOC の窓のブリッジ（DR-035、DR-050）：/DCS を取り込んで窓を待ち（BW）、同期化した E の立下りで次の窓を取り（BC。P2A より先）、その窓の終わりの立下りで DTACK を出す（BDT）
+/// クロックは C16。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn hack(areqn: bool, vldn: bool, aop2n: bool, aop1n: bool, aop0n: bool, mclk: bool, syn: u32, syn2n: bool, dcsn: bool, akn: bool, bwn: bool, bcn: bool, bdtn: bool) -> HackOut {
+    let hreq = !((areqn) | (!akn));
+    let dtkn = !((!vldn) | (!akn & !areqn) | (!bdtn));
+    let akn_d = !((!areqn & aop2n & aop1n & !aop0n & mclk) | (!areqn & !akn));
+    let bwn_d = { let i = (syn >> 1 & 0x1) << 0 | (syn2n as u32) << 1 | (dcsn as u32) << 2 | (bwn as u32) << 3 | (bcn as u32) << 4 | (bdtn as u32) << 5; HACK_BWN_T >> i & 1 != 0 };
+    let bcn_d = { let i = (syn >> 1 & 0x1) << 0 | (syn2n as u32) << 1 | (dcsn as u32) << 2 | (bwn as u32) << 3 | (bcn as u32) << 4 | (bdtn as u32) << 5; HACK_BCN_T >> i & 1 != 0 };
+    let bdtn_d = !((!bcn & !syn2n & !dcsn & ((syn & 0x2) == 0x0)) | (!bdtn & !dcsn));
+    HackOut {
+        akn: akn_d,
+        bwn: bwn_d,
+        bcn: bcn_d,
+        bdtn: bdtn_d,
+        hreq,
+        dtkn,
+    }
+}
+
+/// PRST（PAL16L8A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrstOut {
+    /// 組合せの出力：RST2N
+    pub rst2n: bool,
+    /// 組合せの出力：RST3N
+    pub rst3n: bool,
+    /// 組合せの出力：RST4N
+    pub rst4n: bool,
+    /// 組合せの出力：RST5N
+    pub rst5n: bool,
+    /// 組合せの出力：RST6N
+    pub rst6n: bool,
+    /// 組合せの出力：RST7N
+    pub rst7n: bool,
+    /// 組合せの出力：RST10N
+    pub rst10n: bool,
+}
+
+/// PRST（PAL16L8A-2）。PORT_RESET の書込み（WPRST）と ID のビットから、ポートごとの初期化の信号（2：本体 DAC の FIFO、3・4：DSP の FIFO、5：ADPCM の FIFO とアダプタ、6・7：Temporal RAM のポインタ、10：音声入力の FIFO）。電源投入の RESN でも出す
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn prst(wprstn: bool, d: u32, resn: bool) -> PrstOut {
+    let rst2n = !((!wprstn & ((d & 0x4) == 0x4)) | (!resn));
+    let rst3n = !((!wprstn & ((d & 0x8) == 0x8)) | (!resn));
+    let rst4n = !((!wprstn & ((d & 0x10) == 0x10)) | (!resn));
+    let rst5n = !((!wprstn & ((d & 0x20) == 0x20)) | (!resn));
+    let rst6n = !((!wprstn & ((d & 0x40) == 0x40)) | (!resn));
+    let rst7n = !((!wprstn & ((d & 0x80) == 0x80)) | (!resn));
+    let rst10n = !((!wprstn & ((d & 0x400) == 0x400)) | (!resn));
+    PrstOut {
+        rst2n,
+        rst3n,
+        rst4n,
+        rst5n,
+        rst6n,
+        rst7n,
+        rst10n,
     }
 }
 

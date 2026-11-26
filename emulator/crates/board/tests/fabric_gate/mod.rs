@@ -1,4 +1,4 @@
-//! Data Fabric の門の模型（DR-085）。fabric.md §06 の順序と状態の PAL の式から生成した関数
+//! Data Fabric の門の模型（DR-085、DR-089）。fabric.md §06・§07 の PAL の式から生成した関数
 //! （`fabric_pal`）を、PAL のピンの値のレジスタでつなぎ、1 スロットずつ進める。
 //!
 //! 外側は動作の模型 `fabric::Fabric` と同じ（`Ports`、CPU の窓、`SlotRecord`）。2 つを並べて動かし、
@@ -6,30 +6,36 @@
 //! この模型は試験の側にだけ置き、`fc85-board` の lib には入れない。lib に入れるだけで、コードの
 //! 配置が変わって本番が遅くなったため（DR-085）。
 //!
-//! 門の模型にした部分：CST、ELG、SEQ、ELS、EVT、ADC、CHS×2、STS×2、AFC0–1、RDY、変換部（DR-084）、
-//! A ファイル（74S189）と加算器（74LS283）、PS・PD、IL。
-//! 動作のまま書いた部分（PAL の式はまだない。OI-050 (1) の残り）：アクセスの制御（NX・OP の
-//! レジスタ、2 スロットと延びたアクセス、時間切れのカウンタ、port 1 の DONE の比較）、CPU の窓の
-//! 番地の解読と要求の FF、トリガの発生源の選択（74LS151）、MODULES。
+//! 門の模型にした部分：TIM、CST、ELG、SEQ、ELS、EVT、ADC、CHS×2、STS×2、AFC0–1、RDY、DPA、
+//! アクセスの制御（OPA、OPB、NX・OP のレジスタ、U38 の 74LS163）、CPU の窓（HDEC0–1、HACK、U5–U6 の
+//! 74LS138、PRST）、変換部（DR-084）、A ファイル（74S189）と加算器（74LS283）、PS・PD、IL、トリガの
+//! 発生源の選択（74LS151）と同期化の 1 段目（U36）。
+//! ポートの向こう（P1A、P2A、STB、FIFO、ACRTC と DOC）は `Ports` の模型が受け持つ。P1A・P2A・STB の式は
+//! fabric_logic.py が、ポートの模型（acrtc.rs、doc.rs）の 16 MHz の縁と突き合わせる。
+//! 時間切れの打切りは、OPB の TOR が次の頭で P1A・P2A に届く。動作の模型と同じく、時間切れのスロットで
+//! `abort_access` を呼ぶ（ポートの模型は、次のスロットの頭で効かせる）。
 //!
-//! クロック（fabric.md §03）：SCLK（スロットの頭）で SEQ と NX・OP、MCLK（中ほど）で RDY、LCLK
-//! （4 分の 3）で CHS・STS・ELS・U36 と A ファイルの書込み。CPU の書込みのうち START・STOP と
-//! STATUS の W1C は要求の FF（74LS74）に入り、次の LCLK で効いて消える。CPU の 2 回のアクセスの間には
-//! 1 スロット以上ある（68000 のバスサイクルは 4 クロック＝2 スロット）とする。同じスロットの間の
-//! 書込みと読出しでは、動作の模型（書込みがすぐ効く）と STATUS の値が違う。
+//! クロック（fabric.md §03）：TIM が 16 MHz の縁を数え、SCLK（スロットの頭）で SEQ・OPA と NX・OP、MCLK
+//! （中ほど）で RDY、LCLK（4 分の 3）で OPB・CHS・STS・ELS・U36・U38 と A ファイルの書込み。CPU の書込みの
+//! うち START・STOP と STATUS の W1C は要求の FF（74LS74）に入り、次の LCLK で効いて消える。CPU の 2 回の
+//! アクセスの間には 1 スロット以上ある（68000 のバスサイクルは 4 クロック＝2 スロット）とする。同じ
+//! スロットの間の書込みと読出しでは、動作の模型（書込みがすぐ効く）と STATUS の値が違う。CPU のアクセスは
+//! スロットの境目に来る（エミュレータの約束）。実機で、スロットの途中に来た要求がいつ効くかは OI-088。
 //!
-//! PAL のレジスタは、電源投入時に出力のピンが 1 になる（負の論理の信号はすべて 0）とする [V]。
+//! PAL のレジスタは、電源投入時に出力のピンが 1 になる（負の論理の信号はすべて 0）とする [V]。TIM は
+//! 電源投入の RESN で q3・X に戻ったところから始める。
 
 // 試験ごとに使う入口が違うので、使わない入口を咎めない。
 #![allow(dead_code)]
 
 use fc85_board::fabric::{
     Access, Aop, CHANNELS, ChannelRegs, Decision, Dir, HostReply, Phase, PortReply, Ports,
-    SlotRecord, TIMEOUT_SLOTS, atr, fd_value, input_is_word, is_long, output_is_word,
+    SlotRecord, atr, fd_value,
 };
 use fc85_board::fabric_pal::{
-    ATR_ADDR, ATR_FLAG, ATR_OKD, ATR_OKN, ATR_SONLY, ATR_TWO, ChsOut, CstOut, StsOut, adc, afc0,
-    afc1, chs, cst, elg, els, evt, rdy, seq, sts,
+    ATR_FLAG, ATR_OKD, ATR_OKN, ATR_TWO, ATR_W16, ChsOut, CstOut, HackOut, Hdec0Out, Hdec1Out,
+    StsOut, adc, afc0, afc1, chs, cst, dpa, elg, els, evt, hack, hdec0, hdec1, opa, opb, prst, rdy,
+    seq, sts, tim,
 };
 
 /// CHS（PAL20R6A）のレジスタ。ピンの値（負の論理）。
@@ -54,30 +60,19 @@ struct StsRegs {
     staln: bool,
 }
 
-/// NX のレジスタ：次のスロットのアクセス（チャネル、ポート、向き）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Next {
-    ch: u8,
+/// NX（74LS374×2）と OP（74LS377×2）の中身：有効、チャネル、ポート、向き（1 で書込み）、FORMAT、ATR の
+/// W16・FLAG・TWO、延びたアクセス（LG）。NX は STALL の評価（STV、STL）も持つ（別に置く）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AccReg {
+    v: bool,
+    ch: bool,
     port: u8,
-    dir: Dir,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    Single,
-    Two,
-    Long,
-}
-
-/// OP のレジスタ：このスロットのアクセス。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Op {
-    acc: Access,
-    kind: Kind,
-    elapsed: u32,
+    w: bool,
+    format: u8,
+    w16: bool,
+    lg: bool,
     flag: bool,
-    result: Option<u16>,
-    end_mark: bool,
+    two: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,10 +83,21 @@ struct HostReq {
     result: Option<HostReply>,
 }
 
+/// TIM（PAL16R8A）のレジスタ。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TimRegs {
+    ph: u32,
+    sx: bool,
+    sclk: bool,
+    mclk: bool,
+    lclk: bool,
+}
+
 /// Data Fabric の門の模型。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GateFabric {
     slot: u64,
+    tim: TimRegs,
     regs: [ChannelRegs; CHANNELS],
     /// A ファイル（74S189×4、16 語）。語は ch×8＋（0 SRC の設定値、1 作業値、2 DST の設定値、3 作業値、
     /// 4 COUNT の設定値、5 作業値）。
@@ -113,6 +119,20 @@ pub struct GateFabric {
     // NX の STV・STL（SCLK）
     stvn: bool,
     stln: bool,
+    nx: AccReg,
+    op: AccReg,
+    // OPA（SCLK）
+    sdn: bool,
+    lan: bool,
+    // OPB（LCLK）
+    odn: bool,
+    tor: bool,
+    /// U38（74LS163）：延びたアクセス（LA）の間、LCLK を数える。15 で TOUT（RCO）。
+    tcnt: u8,
+    /// OP のアクセスの番地とデータ（PA、FD）。OP に入れたスロットの頭の PS・PD と IL の変換。
+    acc: Access,
+    /// port 9 の 1 スロット目に A 基板が出した値（2 スロット目の終わりに IL が取り込む）。
+    two_data: u16,
     // ELS（LCLK）
     infn: bool,
     q1n: bool,
@@ -132,12 +152,24 @@ pub struct GateFabric {
     wdq: [bool; CHANNELS],
     weq: [bool; CHANNELS],
     wmq: [bool; CHANNELS],
+    /// CPU の A ファイルのアクセス（HDEC の AREQ の間）。
     hreq: Option<HostReq>,
-    nx: Option<Next>,
-    op: Option<Op>,
-    /// 1 つ前のスロットのアクセスが、満杯・空の信号を持つポートだった（OP の FLAG）。
-    prev_flag: bool,
+    /// HACK の AK（負の論理）：許可のスロットの LCLK で立ち、CPU のサイクルが終わると消える。
+    akn: bool,
     trig_in: u8,
+    /// このスロットで起きたこと（試験の網羅の目安）。
+    ev: SlotEvents,
+}
+
+/// 1 スロットの間に起きたこと。突き合わせには使わない。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SlotEvents {
+    /// STOP で延びたアクセスを打ち切った（OPA の ABT の STOP の項）。
+    pub stop_abort: bool,
+    /// 時間切れ（OPB の TOR）のポート。
+    pub timeout: Option<u8>,
+    /// port 1 の DONE の印が、要素が最後かと食い違った（OPB の ERRK の印の項）。
+    pub mark_mismatch: bool,
 }
 
 impl Default for GateFabric {
@@ -159,6 +191,18 @@ fn word(aa3n: bool, aa2n: bool, aa1n: bool, aa0n: bool) -> usize {
     (!aa3n as usize) << 3 | (!aa2n as usize) << 2 | (!aa1n as usize) << 1 | !aa0n as usize
 }
 
+/// LG のつなぎ（74LS 系）：/P3∧/P2∧(/P1∧P0 ∨ P1∧/P0∧DOC)。延びたアクセスのポート（port 1、DOC 子基板の
+/// port 2）。NX が判断バスのポートと一緒に取り込む。
+fn lg_glue(p: u8, doc: bool) -> bool {
+    let b = |k: u8| p >> k & 1 != 0;
+    !b(3) && !b(2) && (!b(1) && b(0) || b(1) && !b(0) && doc)
+}
+
+/// 74LS151：選んだ入力。トリガの発生源の 0（即時）、6、7 の入力は Low に固定する。
+fn ls151(sel: u8, d: u8) -> bool {
+    d >> (sel & 7) & 1 != 0
+}
+
 impl GateFabric {
     /// 電源投入時。A ファイルの中身は 0 にする（動作の模型と同じ）[V]。
     pub fn new() -> Self {
@@ -178,8 +222,17 @@ impl GateFabric {
             missn: true,
             staln: true,
         };
+        // TIM：RESN の縁の後（q3、X）。
+        let r = tim(false, 0, false);
         Self {
             slot: 0,
+            tim: TimRegs {
+                ph: r.ph,
+                sx: r.sx,
+                sclk: r.sclk,
+                mclk: r.mclk,
+                lclk: r.lclk,
+            },
             regs: Default::default(),
             afile: [0; 16],
             ps: 0,
@@ -196,6 +249,22 @@ impl GateFabric {
             accwn: true,
             stvn: true,
             stln: true,
+            nx: AccReg::default(),
+            op: AccReg::default(),
+            sdn: true,
+            lan: true,
+            odn: false,
+            tor: false,
+            tcnt: 0,
+            acc: Access {
+                ch: 0,
+                port: 0,
+                dir: Dir::Read,
+                addr: 0,
+                word: false,
+                data: 0,
+            },
+            two_data: 0,
             infn: true,
             q1n: true,
             q0n: true,
@@ -213,15 +282,18 @@ impl GateFabric {
             weq: [false; CHANNELS],
             wmq: [false; CHANNELS],
             hreq: None,
-            nx: None,
-            op: None,
-            prev_flag: false,
+            akn: true,
             trig_in: 0,
+            ev: SlotEvents::default(),
         }
     }
 
     pub fn slot(&self) -> u64 {
         self.slot
+    }
+
+    pub fn events(&self) -> SlotEvents {
+        self.ev
     }
 
     fn imm(&self, c: usize) -> bool {
@@ -293,31 +365,58 @@ impl GateFabric {
 
     // ------------------------------------------------------------------ CPU の側
 
+    /// HDEC0–1：窓の番地の解読（16-bit のアクセス。窓の外は /FCS が来ない）。
+    fn decode(offset: u16, rw: bool) -> (Hdec0Out, Hdec1Out) {
+        let a = offset as u32 & 0x0FFE;
+        let h0 = hdec0(offset > 0x0FFF, false, false, rw, a);
+        let h1 = hdec1(h0.chn, h0.gln, rw, a);
+        (h0, h1)
+    }
+
+    /// HACK の今の値（Fabric の窓の側。DOC のブリッジの側は使わない）。`mclk` は次の縁が LCLK か。
+    fn hack_now(&self, mclk: bool) -> HackOut {
+        hack(
+            self.hreq.is_none(),
+            true,
+            self.aop2n,
+            self.aop1n,
+            self.aop0n,
+            mclk,
+            0,
+            true,
+            true,
+            self.akn,
+            true,
+            true,
+            true,
+        )
+    }
+
     pub fn host_read<P: Ports + ?Sized>(&mut self, offset: u16, ports: &P) -> HostReply {
         if offset & 1 != 0 {
             return HostReply::BusError;
         }
-        match offset {
-            0x000..=0x07F => {
-                let c = (offset >> 6) as usize;
-                let r = (offset & 0x3F) as u8;
-                match r {
-                    0x06 | 0x0A | 0x0C => self.request(c, r, None),
-                    0x1E => HostReply::Data(self.status(c)),
-                    0x00..=0x1C => HostReply::Data(0),
-                    _ => HostReply::BusError,
-                }
-            }
-            0x100 | 0x102 => HostReply::Data(0),
-            0x104 => {
-                let mut m = (ports.doc_present() as u16) << 2;
-                for p in [8u8, 10, 11, 12, 13, 14, 15] {
-                    m |= (ports.module_present(p) as u16) << p;
-                }
-                HostReply::Data(m)
-            }
-            _ => HostReply::BusError,
+        let (h0, h1) = Self::decode(offset, true);
+        if !h0.areqn {
+            return self.request((offset >> 6 & 1) as usize, (offset & 0x3F) as u8, None);
         }
+        if h0.vldn {
+            return HostReply::BusError;
+        }
+        // RD は引上げ（何も出さなければ 0）。STATUS は U9–U10、MODULES は U11。
+        HostReply::Data(if !h1.rst0n {
+            self.status(0)
+        } else if !h1.rst1n {
+            self.status(1)
+        } else if !h0.rmodn {
+            let mut m = (ports.doc_present() as u16) << 2;
+            for p in [8u8, 10, 11, 12, 13, 14, 15] {
+                m |= (ports.module_present(p) as u16) << p;
+            }
+            m
+        } else {
+            0
+        })
     }
 
     pub fn host_write<P: Ports + ?Sized>(
@@ -329,56 +428,80 @@ impl GateFabric {
         if offset & 1 != 0 {
             return HostReply::BusError;
         }
-        match offset {
-            0x000..=0x07F => {
-                let c = (offset >> 6) as usize;
-                let r = (offset & 0x3F) as u8;
-                let regs = &mut self.regs[c];
-                match r {
-                    0x00 => regs.src = value as u8 & 15,
-                    0x02 => regs.dst = value as u8 & 15,
-                    0x04 | 0x08 => {}
-                    0x06 | 0x0A | 0x0C => return self.request(c, r, Some(value)),
-                    0x0E => regs.src_step = value,
-                    0x10 => regs.dst_step = value,
-                    0x12 => regs.format = value as u8 & 7,
-                    0x14 => regs.mask = value,
-                    0x16 => regs.xor = value,
-                    0x18 => regs.shift = value as u8 & 31,
-                    0x1A => regs.trigger = value as u8 & 0x3F,
-                    // CTRL：STOP が先。START は段階が 000 のときだけ要求の FF に入る。
-                    0x1C => {
-                        if value & 2 != 0 {
-                            self.stpq[c] = true;
-                        } else if value & 1 != 0 && self.chs[c].p2n && self.chs[c].p1n {
-                            self.strq[c] = true;
-                        }
-                    }
-                    0x1E => {
-                        self.wdq[c] |= value & 0x02 != 0;
-                        self.weq[c] |= value & 0x08 != 0;
-                        self.wmq[c] |= value & 0x10 != 0;
-                    }
-                    _ => return HostReply::BusError,
-                }
-                HostReply::Ack
-            }
-            0x100 => {
-                ports.port_reset(value);
-                HostReply::Ack
-            }
-            0x102 => {
-                ports.write_audio_n(value & 0x0FFF);
-                HostReply::Ack
-            }
-            0x104 => HostReply::Ack,
-            _ => HostReply::BusError,
+        let (h0, h1) = Self::decode(offset, false);
+        let c = (offset >> 6 & 1) as usize;
+        if !h0.areqn {
+            return self.request(c, (offset & 0x3F) as u8, Some(value));
         }
+        if h0.vldn {
+            return HostReply::BusError;
+        }
+        let regs = &mut self.regs[c];
+        if !h1.wsrcn {
+            regs.src = value as u8 & 15;
+        }
+        if !h1.wdstn {
+            regs.dst = value as u8 & 15;
+        }
+        // B ファイルの書込みのポート：語は A6（チャネル）と A4（0 で SRC、1 で DST の STEP）。
+        if !h1.wbfn {
+            if offset & 0x10 != 0 {
+                regs.dst_step = value;
+            } else {
+                regs.src_step = value;
+            }
+        }
+        // U5–U6（74LS138。A6 でチャネル）：オフセット 0x10〜0x1E を A3–A1 で選ぶ。
+        if !h1.w1xn {
+            match offset >> 1 & 7 {
+                1 => regs.format = value as u8 & 7,
+                2 => regs.mask = value,
+                3 => regs.xor = value,
+                4 => regs.shift = value as u8 & 31,
+                5 => regs.trigger = value as u8 & 0x3F,
+                // CTRL：STOP が先。START は段階が 000 のときだけ要求の FF に入る。
+                6 => {
+                    if value & 2 != 0 {
+                        self.stpq[c] = true;
+                    } else if value & 1 != 0 && self.chs[c].p2n && self.chs[c].p1n {
+                        self.strq[c] = true;
+                    }
+                }
+                7 => {
+                    self.wdq[c] |= value & 0x02 != 0;
+                    self.weq[c] |= value & 0x08 != 0;
+                    self.wmq[c] |= value & 0x10 != 0;
+                }
+                _ => {}
+            }
+        }
+        if !h1.wprstn {
+            let p = prst(false, value as u32, true);
+            let mut mask = 0;
+            for (q, n) in [
+                (2, p.rst2n),
+                (3, p.rst3n),
+                (4, p.rst4n),
+                (5, p.rst5n),
+                (6, p.rst6n),
+                (7, p.rst7n),
+                (10, p.rst10n),
+            ] {
+                mask |= (!n as u16) << q;
+            }
+            ports.port_reset(mask);
+        }
+        if !h1.waudn {
+            ports.write_audio_n(value & 0x0FFF);
+        }
+        HostReply::Ack
     }
 
     pub fn host_poll(&mut self) -> Option<HostReply> {
         let r = self.hreq?.result?;
+        // CPU のサイクルが終わる：AREQ が落ち、次の 16 MHz の縁で AK も消える。
         self.hreq = None;
+        self.akn = true;
         Some(r)
     }
 
@@ -393,10 +516,23 @@ impl GateFabric {
             write,
             result: None,
         });
+        self.akn = true;
         HostReply::Wait
     }
 
     // ------------------------------------------------------------------ スロット
+
+    /// TIM の 1 回の 16 MHz の縁。
+    fn tim_edge(&mut self) {
+        let t = tim(true, self.tim.ph, self.tim.sx);
+        self.tim = TimRegs {
+            ph: t.ph,
+            sx: t.sx,
+            sclk: t.sclk,
+            mclk: t.mclk,
+            lclk: t.lclk,
+        };
+    }
 
     /// CST の今の出力。
     fn cst(&self) -> CstOut {
@@ -425,82 +561,96 @@ impl GateFabric {
         }
     }
 
+    /// OPA の今の出力（SCLK の前の NX・OP・ODN・STOP の要求から）。
+    fn opa_now(&self, tor: bool) -> fc85_board::fabric_pal::OpaOut {
+        let (n, o) = (&self.nx, &self.op);
+        opa(
+            n.v,
+            n.ch,
+            n.two,
+            n.lg,
+            o.v,
+            o.ch,
+            o.two,
+            o.lg,
+            self.odn,
+            bus(self.stpq),
+            tor,
+        )
+    }
+
     pub fn step_slot<P: Ports + ?Sized>(&mut self, ports: &mut P) -> SlotRecord {
         let doc = ports.doc_present();
-        let s = self.slot.is_multiple_of(2);
+        // TIM：q0 の縁の前は LCLK（次の縁がスロットの頭）。
+        debug_assert!(self.tim.lclk);
 
-        // STOP の要求のあるチャネルのアクセスを、OP・NX から捨てる。延びたアクセスは打ち切る。
-        if let Some(a) = self.op
-            && self.stpq[a.acc.ch as usize]
-        {
-            if a.kind == Kind::Long && a.result.is_none() {
-                ports.abort_access(a.acc.port);
-            }
-            self.op = None;
-        }
-        if self.nx.is_some_and(|n| self.stpq[n.ch as usize]) {
-            self.nx = None;
+        // STOP の要求のあるチャネルの延びたアクセスの打切り（OPA の ABT の STOP の項）。P1A・P2A は
+        // この頭の縁で効かせる。時間切れの打切り（TOR）は、前のスロットで済んでいる。
+        self.ev = SlotEvents::default();
+        if !self.opa_now(false).abtn {
+            ports.abort_access(self.op.port);
+            self.ev.stop_abort = true;
         }
 
-        // 1. SCLK。NX は空いた OP へ移る。判断の入力の CD・FB は、SCLK の前の OP・NX から作る
-        //    （ここでは移した後の OP から求める。同じ値になる）。
-        if self.op.is_none()
-            && let Some(n) = self.nx.take()
-        {
-            self.op = Some(self.begin(n, doc));
-        }
-        let cd = match &self.op {
-            None => true,
-            Some(a) => match a.kind {
-                Kind::Single => true,
-                Kind::Two => a.elapsed == 1,
-                Kind::Long => false,
-            },
-        };
-        let fb = self.op.is_some_and(|a| a.flag) || self.prev_flag;
+        // 1. SCLK の前の値で判断する。OPA：OP が空くか（FREE）、NX が STOP で消えないか（OPVD）、判断して
+        //    よいか（CD）。DPA：判断バスのポートの属性と FB（OP と、入る NX の FLAG）。
+        let o = self.opa_now(self.tor);
+        let free = !o.opldn;
+        debug_assert!(!self.nx.v || free, "NX が有効なら、OP はこの頭で空く");
+        // DPA の X は TIM の SX のピン：縁の前は前のスロットが S、つまり縁の後のスロットが X。
+        let x = self.tim.sx;
         let k = self.cst();
         let (c, port, dir) = self.bus_port(&k);
         let r = self.regs[c];
-        let attr = atr(port, dir, r.format);
-        let sok = attr & ATR_SONLY == 0 || !s;
-        let ready = rdy(0, 0, 0, 0, 0, false, self.srdy, self.drdy).ready;
-        let hreq = self.hreq.is_some_and(|h| h.result.is_none());
-        let g = elg(
-            self.infn,
-            self.q1n,
-            self.epcn,
-            k.crunn,
-            k.cran,
-            k.crldn,
-            k.carmn,
-            ready,
-            sok,
-            attr & ATR_ADDR != 0,
-            fb,
-            cd,
-            hreq,
+        let dp = dpa(
+            r.src as u32,
+            r.dst as u32,
+            x,
+            self.op.v,
+            self.op.flag,
+            o.opvd,
+            self.nx.flag,
         );
+        let ready = rdy(0, 0, 0, 0, 0, false, self.srdy, self.drdy).ready;
+        let hreq = self.hack_now(false).hreq;
+        let g = elg(
+            self.infn, self.q1n, self.epcn, k.crunn, k.cran, k.crldn, k.carmn, ready, dp.goks,
+            dp.addrs, dp.sokd, o.cd, hreq, dp.addrd,
+        );
+
+        // SCLK の縁：TIM、SEQ、OPA の登録、OP ← NX（空いていれば。有効は OPVD）、NX ← 判断バス。
+        self.tim_edge();
+        debug_assert!(self.tim.sclk && self.tim.ph == 0);
+        let s = self.tim.sx;
+        debug_assert_eq!(s, !x);
         let hold = s && !k.crunn && r.src == 0;
         let q = seq(
             g.ac2n, g.ac1n, g.ac0n, g.grn, g.gwn, g.keepn, k.ck1n, k.ck0n, k.crldn, k.orldn,
             k.orunn, hold, self.dbchn,
         );
-        if !g.grn || !g.gwn {
-            debug_assert!(self.nx.is_none());
-            self.nx = Some(if !g.grn {
-                Next {
-                    ch: c as u8,
-                    port: r.src,
-                    dir: Dir::Read,
-                }
-            } else {
-                Next {
-                    ch: c as u8,
-                    port: r.dst,
-                    dir: Dir::Write,
-                }
-            });
+        let new_op = free && o.opvd;
+        if free {
+            self.op = AccReg {
+                v: o.opvd,
+                ..self.nx
+            };
         }
+        let decided = !g.grn || !g.gwn;
+        debug_assert!(!decided || dir == if !g.grn { Dir::Read } else { Dir::Write });
+        let attr = atr(port, dir, r.format);
+        self.nx = AccReg {
+            v: decided,
+            ch: c == 1,
+            port,
+            w: dir == Dir::Write,
+            format: r.format,
+            w16: attr & ATR_W16 != 0,
+            lg: lg_glue(port, doc),
+            flag: attr & ATR_FLAG != 0,
+            two: attr & ATR_TWO != 0,
+        };
+        self.sdn = o.sdn;
+        self.lan = o.lan;
         self.stvn = g.stvn;
         self.stln = g.stln;
         self.dbchn = q.dbchn;
@@ -510,13 +660,21 @@ impl GateFabric {
         self.aop0n = q.aop0n;
         self.accrn = q.accrn;
         self.accwn = q.accwn;
-        let starting = self.op.filter(|a| a.elapsed == 0).map(|a| a.acc);
+        let starting = if new_op {
+            self.acc = self.begin();
+            Some(self.acc)
+        } else {
+            None
+        };
         ports.run_slot(starting.as_ref());
 
-        // 2. MCLK：判断バスの新しいチャネルの準備を RDY が取り込む。
+        // 2. q1、MCLK：判断バスの新しいチャネルの準備を RDY が取り込む。
+        self.tim_edge();
+        self.tim_edge();
+        debug_assert!(self.tim.mclk);
         let nr = &self.regs[!self.dbchn as usize];
         let lines = ports.ready_lines();
-        let o = rdy(
+        let o2 = rdy(
             nr.src as u32,
             nr.dst as u32,
             lines,
@@ -526,65 +684,76 @@ impl GateFabric {
             self.srdy,
             self.drdy,
         );
-        self.srdy = o.srdy;
-        self.drdy = o.drdy;
+        self.srdy = o2.srdy;
+        self.drdy = o2.drdy;
 
-        // 3. アクセス（動作のまま）。終わった読出しは IL へ。ERROR で止める出来事は ERRK・OPCH。
+        // 3. アクセス。ポートの答え（P1A・P2A の P1R・P2R、port 1 の DONE の印 P1M）と U38 の TOUT から、OPB が
+        //    完了・ERROR・時間切れを出す。終わった読出しは IL へ。
+        let la = !self.lan;
         let mut record_access = None;
         let mut access_done = false;
-        let mut slot_flag = false;
-        let (mut dnr, mut dnw, mut errk, mut opch) = (false, false, false, false);
-        if let Some(mut a) = self.op.take() {
-            slot_flag = a.flag;
-            let reply = if a.elapsed == 0 {
-                Some(ports.access(&a.acc))
-            } else if a.kind == Kind::Long && a.result.is_none() {
-                Some(ports.continue_access(a.acc.port))
+        let (mut p1r, mut p2r, mut p1m) = (false, false, false);
+        let mut v = 0;
+        if self.op.v {
+            let reply = if new_op {
+                Some(ports.access(&self.acc))
+            } else if la {
+                Some(ports.continue_access(self.op.port))
             } else {
                 None
             };
-            match reply {
-                Some(PortReply::Done(v)) => a.result = Some(v),
-                Some(PortReply::Last(v)) => {
-                    a.result = Some(v);
-                    a.end_mark = true;
-                }
-                _ => {}
-            }
-            a.elapsed += 1;
-            let finished = match a.kind {
-                Kind::Single => true,
-                Kind::Two => a.elapsed >= 2,
-                Kind::Long => a.result.is_some(),
+            let (got, val, last) = match reply {
+                Some(PortReply::Done(x)) => (true, x, false),
+                Some(PortReply::Last(x)) => (true, x, true),
+                _ => (false, 0, false),
             };
-            if finished {
-                let v = a.result.unwrap_or(0);
-                if a.acc.dir == Dir::Read {
-                    a.acc.data = v;
+            if self.op.two {
+                if new_op {
+                    self.two_data = if got { val } else { 0 };
                 }
-                if a.acc.port == 1 && self.done_mismatch(&a) {
-                    errk = true;
-                } else if a.acc.dir == Dir::Read {
-                    self.il = v;
-                    dnr = true;
-                } else {
-                    dnw = true;
-                }
-                access_done = true;
-            } else if a.kind == Kind::Long && a.elapsed >= TIMEOUT_SLOTS {
-                ports.abort_access(a.acc.port);
-                errk = true;
-            } else {
-                self.op = Some(a);
+                v = self.two_data;
+            } else if got {
+                v = val;
             }
-            opch = a.acc.ch == 1;
-            record_access = Some(a.acc);
+            p1r = la && got && self.op.port == 1;
+            p2r = la && got && self.op.port != 1;
+            p1m = p1r && last;
+            access_done = !self.sdn || p1r || p2r;
+            if access_done && !self.op.w {
+                self.acc.data = v;
+            }
+            record_access = Some(self.acc);
         }
-        if errk {
-            self.nx = self.nx.filter(|n| (n.ch == 1) != opch);
+        let b = opb(
+            self.sdn,
+            self.lan,
+            self.op.w,
+            !p1r,
+            !p2r,
+            !p1m,
+            self.tcnt == 15,
+            self.infn,
+            self.q1n,
+            self.epcn,
+            self.elastn,
+            self.tln,
+            self.tlastn,
+        );
+        if b.dnr {
+            self.il = v;
         }
+        if b.tor {
+            ports.abort_access(self.op.port);
+            self.ev.timeout = Some(self.op.port);
+        }
+        let errk = !b.errkn;
+        self.ev.mark_mismatch = errk && !b.tor;
+        let opch = self.op.ch;
+        debug_assert!(!errk || !self.nx.v, "延びたアクセスの間は、NX に判断がない");
 
         // 4. LCLK
+        self.tim_edge();
+        debug_assert!(self.tim.lclk);
         let aop = self.aop();
         let decision = if !self.accrn {
             Decision::Start(!self.achn as u8)
@@ -595,9 +764,12 @@ impl GateFabric {
         } else {
             Decision::None
         };
-        self.lclk(ports, doc, dnr, dnw, errk, opch);
+        self.lclk(ports, doc, b.dnr, b.dnw, errk, opch);
+        // U38（74LS163、/CLR ＝ LA）
+        self.tcnt = if la { (self.tcnt + 1) & 15 } else { 0 };
+        self.odn = b.odn;
+        self.tor = b.tor;
 
-        self.prev_flag = slot_flag;
         let rec = SlotRecord {
             slot: self.slot,
             s,
@@ -625,56 +797,31 @@ impl GateFabric {
         }
     }
 
-    /// NX を OP に移す（番地は PS・PD、書込みのデータは IL の変換、種類と FLAG は ATR）。
-    fn begin(&self, n: Next, doc: bool) -> Op {
+    /// OP に入れたアクセスの番地（PS・PD）とデータ（IL の変換。FORMAT は OP、SHIFT・MASK・XOR は
+    /// チャネルのレジスタ）。
+    fn begin(&self) -> Access {
+        let n = self.op;
         let regs = &self.regs[n.ch as usize];
-        let (addr, word, data) = match n.dir {
-            Dir::Read => (self.ps, input_is_word(regs.format), 0),
-            Dir::Write => (
+        let (dir, addr, data) = if n.w {
+            (
+                Dir::Write,
                 self.pd,
-                output_is_word(regs.format),
-                fd_value(self.il, regs.format, regs.shift, regs.mask, regs.xor),
-            ),
-        };
-        let attr = atr(n.port, n.dir, regs.format);
-        let kind = if is_long(n.port, doc) {
-            Kind::Long
-        } else if attr & ATR_TWO != 0 {
-            Kind::Two
+                fd_value(self.il, n.format, regs.shift, regs.mask, regs.xor),
+            )
         } else {
-            Kind::Single
+            (Dir::Read, self.ps, 0)
         };
-        Op {
-            acc: Access {
-                ch: n.ch,
-                port: n.port,
-                dir: n.dir,
-                addr,
-                word,
-                data,
-            },
-            kind,
-            elapsed: 0,
-            flag: attr & ATR_FLAG != 0,
-            result: None,
-            end_mark: false,
+        Access {
+            ch: n.ch as u8,
+            port: n.port,
+            dir,
+            addr,
+            word: n.w16,
+            data,
         }
     }
 
-    /// port 1 の DONE の印が、要素が最後か（COUNT の桁上げ）と食い違う。読出しは要素（COUNT を
-    /// 更新してあれば ELAST）、書込みは書込みの残り（TLAST）と比べる。W の後の COUNT の更新を
-    /// 待つ要素は、まだ最後か分からないので比べない。
-    fn done_mismatch(&self, a: &Op) -> bool {
-        // ELAST・TLAST（ピンは負の論理）が印と違う ⇔ ピンの値が印と同じ。
-        let inf = !self.infn;
-        let count_waits = inf && !self.q1n;
-        match a.acc.dir {
-            Dir::Read => inf && self.q1n && self.epcn && self.elastn == a.end_mark,
-            Dir::Write => !count_waits && !self.tln && self.tlastn == a.end_mark,
-        }
-    }
-
-    /// LCLK：A ファイルの操作と、CHS・STS・ELS・U36 の登録。要求の FF を消す。
+    /// LCLK：A ファイルの操作と、CHS・STS・ELS・U36・HACK の登録。要求の FF を消す。
     fn lclk<P: Ports + ?Sized>(
         &mut self,
         ports: &P,
@@ -687,7 +834,7 @@ impl GateFabric {
         let (a2, a1, a0, ach) = (self.aop2n, self.aop1n, self.aop0n, self.achn);
         // A ファイル：読みの相で AFC0 の番地を読み、B（74S189 の B ファイルか、全部 1）と Cin を足す。
         // PS・PD・U7–U8 は読んだ値を取り込む。書きの相で、和か CPU のデータを書く。
-        let host = self.hreq.filter(|h| h.result.is_none());
+        let host = self.hreq.filter(|_| self.akn);
         let (hch, ha, hrw, hdata) = match host {
             // 窓の番地の bit 6 がチャネル、bit 3・2 が語（HA3・HA2）。
             Some(h) => (h.ch == 1, h.reg as u32 & 0x0C, h.write.is_none(), h.write),
@@ -725,11 +872,11 @@ impl GateFabric {
             };
             self.afile[word(wr0.aa3n, wr0.aa2n, wr0.aa1n, wr0.aa0n)] = v;
         }
-        if let Some(h) = &mut self.hreq
-            && h.result.is_none()
-            && a2
-            && a1
-            && !a0
+        // HACK：許可（AOP＝001）のスロットの LCLK の縁で AK が立ち、DTACK を返す。
+        let hk = self.hack_now(true);
+        if self.akn
+            && !hk.akn
+            && let Some(h) = &mut self.hreq
         {
             h.result = Some(match h.write {
                 Some(_) => HostReply::Ack,
@@ -739,6 +886,7 @@ impl GateFabric {
                 }
             });
         }
+        self.akn = hk.akn;
 
         // 組合せ：EVT、ADC、START の検査（判断バスのポートの ATR と /PRES）。
         let k = self.cst();
@@ -748,7 +896,7 @@ impl GateFabric {
         let oks = atr(port, dir, fmt) & if doc { ATR_OKD } else { ATR_OKN } != 0 && pres;
         let e = evt(
             bus(self.stpq),
-            errk,
+            !errk,
             opch,
             self.tln,
             self.tchn,
@@ -772,7 +920,8 @@ impl GateFabric {
             bus(each),
             bus([self.imm(0), self.imm(1)]),
         );
-        let trig = self.trig_in | ports.trigger_levels();
+        // トリガの発生源の選択（U34–U35、74LS151）。入力 0（即時）、6、7 は Low に固定。
+        let trig = (self.trig_in | ports.trigger_levels()) & 0x3E;
         let mut nk = [ChsOut {
             nbsyn: true,
             p2n: true,
@@ -825,9 +974,7 @@ impl GateFabric {
                 t.missn,
                 t.staln,
             );
-            // トリガの発生源の選択（74LS151）。0（即時）、6・7 はレベルを出さない。
-            let src = r.trigger & 7;
-            level[c] = (1..=5).contains(&src) && trig & (1 << src) != 0;
+            level[c] = ls151(r.trigger & 7, trig);
         }
         let l = els(
             self.accrn,

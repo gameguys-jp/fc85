@@ -449,6 +449,9 @@ struct Scheduled {
     ch: u8,
     port: u8,
     dir: Dir,
+    /// 判断のときの FORMAT（NX が判断バスから取り込む。DR-089）。
+    #[serde(default)]
+    format: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -840,22 +843,24 @@ impl Fabric {
         rec
     }
 
-    /// 決めたアクセスを、このスロットで始める形にする（番地は PS・PD、データは IL の変換）。
+    /// 決めたアクセスを、このスロットで始める形にする（番地は PS・PD、データは IL の変換）。FORMAT は
+    /// 判断のときの値（NX）、SHIFT・MASK・XOR はチャネルのレジスタの今の値。
     fn begin(&self, sc: Scheduled, doc: bool) -> Active {
         let regs = &self.ch[sc.ch as usize].regs;
+        let format = sc.format;
         let (addr, word, data) = match sc.dir {
-            Dir::Read => (self.ps, input_is_word(regs.format), 0),
+            Dir::Read => (self.ps, input_is_word(format), 0),
             Dir::Write => {
                 let il = [self.tail, self.elem]
                     .into_iter()
                     .flatten()
                     .find(|e| e.ch == sc.ch && e.w_decided && !e.w_done)
                     .map_or(0, |e| e.data);
-                let fd = fd_value(il, regs.format, regs.shift, regs.mask, regs.xor);
-                (self.pd, output_is_word(regs.format), fd)
+                let fd = fd_value(il, format, regs.shift, regs.mask, regs.xor);
+                (self.pd, output_is_word(format), fd)
             }
         };
-        let attr = atr(sc.port, sc.dir, regs.format);
+        let attr = atr(sc.port, sc.dir, format);
         let kind = if is_long(sc.port, doc) {
             Kind::Long
         } else if attr & ATR_TWO != 0 {
@@ -945,6 +950,7 @@ impl Fabric {
                             ch: e.ch,
                             port: regs.dst,
                             dir: Dir::Write,
+                            format: regs.format,
                         });
                         e.w_decided = true;
                         e.count_after_w = sa && da;
@@ -984,6 +990,7 @@ impl Fabric {
                             ch: c,
                             port: src,
                             dir: Dir::Read,
+                            format: ch.regs.format,
                         });
                         self.elem = Some(Element::new(c));
                         if ch.each() && ch.source() != 0 {

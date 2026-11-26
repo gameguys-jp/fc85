@@ -881,3 +881,23 @@
 | 理由 | ユーザーの方針（回路への忠実さ）。前の模型は、FF が 10 ns 前の値を決まって取り、メタステーブルがなかった。調べると、P2A の中の 2 段は、取る側が 1 段目（SYN1）の出力を組合せで読むので、実際は 1 段だった。PAL16R4A-2 の最大のセットアップ（35 ns [V]）では、DOC の CLK を外部に替えたとき、平均故障間隔が約 9 ms になる（台帳 host-acrtc-interface.md の追補 F）。1 段目を外の FF にすれば、時間を変えずに直せる。74ALS74 は国産（HD74ALS。日立の 1984 年の早見表、review-digital §4.2）で、TI も非同期の入力の同期化に使う（台帳 TMS32010.md の BIO）。最大のセットアップでも約 1.7 時間、典型で約 8,000 年になる。ACRTC のブリッジの 74LS175 の 2 段は、DMA が続いても最悪で約 60 日、典型で約 1 億年で、変えない。本体のクロックでは DOC の E が 16 MHz の縁にそろい、通常の動作は前と同じ |
 | 却下した案 | 74F74：速さは最も有利だが、1985 年の日本での入手が未確認で、review-digital §4.2 で不採用。74AS74：最も安全だが、日立の早見表になく輸入品。74S74（host-acrtc-interface §7.6 の案）：T が LS の半分で、メタステーブルでは不利。3 段にする：見る縁が 16 MHz の 1 クロック遅れ、port 2 の速さと 68000 の待ち（DR-050、DR-051）が変わる。確率だけを作る（時刻を細かくしない）：判定点の個体差と、取る側の食い違いが出ない。速さ：判定点に近い縁だけで計算し、SAMPLE 6 の 1800 フレームは 24.8 秒から 24.9 秒 |
 | 影響 | emulator/crates/board/src/sync.rs（新）、doc.rs、acrtc.rs、bend.rs、console.rs、試験（board の sync.rs（新）、acrtc_port.rs）、spec/hardware.md §07・§11、parts/host-acrtc-interface.md 追補 2026-11-26、impl/emulator.md §03・§04、spec/fabric.md の P2A（Fabric の残りの式の作業で直す）、OI-086 |
+
+## DR-089　Data Fabric のアクセスの制御と CPU の窓の PAL の式を書き、門の模型をすべて式にする
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-26 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。(1) アクセスの制御を PAL にする：TIM（PAL16R8A）、DPA（PAL16L8A、新）、OPA（PAL20R4A、新、SCLK）、OPB（PAL20R4A、新、LCLK）、STB0–1、P1A（PAL16R4A-2）、P2A（PAL16R6A-2）。CPU の窓は HDEC0（PAL20L8A）、HDEC1、HACK、PRST（PAL16L8A-2・16R4A-2）。式は tools/fabric/pal/access.pal・host.pal と spec/fabric.md §06・§07 [P]。(2) DPA が判断バスの SRC・DST から、S の規則・番地の有無・FB を直接作り、ELG の入力を読出し元の側（GOKS、ADDRS）と書込み先の側（SOKD、ADDRD）に分ける。前のスロットの FLAG の FF と SOK のゲートはなくす。(3) NX は F4 の代わりに LG（延びたアクセス）を持ち、F4 は OP の FORMAT から作る。OP の取込みは OPA の OPLD、有効の bit は OPVD。U38 は 74LS163 にし、延びたアクセスの間の LCLK を数えて 16 スロット目に時間切れにする。IL、U48–U50 は 74LS377 にする。(4) 68000 の DOC のブリッジの 3 つのレジスタは、P2A のピンが足りないので HACK に置く。(5) RDY2 ＝ DOC ∨ 本体 DAC の FIFO の IR をつなぎのゲートで作る。(6) 門の模型（board の試験の fabric_gate）を、これらの式から生成した関数でつなぎ直し、試験 fabric_lockstep に延びたアクセスの時間切れ、DONE の印の食い違い、途中の STOP、port 9、転送中の PORT_RESET を足す。(7) fabric.rs は、アクセスの幅・変換の FORMAT・ATR に判断のときの FORMAT を使うように直す（OI-084 (1)）。本番の経路は fabric.rs のまま |
+| 理由 | 回路への忠実さ（ユーザーの方針）。式ができると、PAL の入力・出力・項が足りるかと部品の数が決まる。DPA で S の規則と FB を判断バスから直接作ると、U32 → ATR を通らず、LCLK の後の USEL → U32 → ATR → ELG → SEQ の経路（約 160 ns）がなくなる。NX の F4 は OP の FORMAT から作れ、LG を持てば OPA が延びたアクセスをすぐ見分けられる。門の模型は、判断とアクセスの間に FORMAT を書き換えたとき、fabric.rs と違うことを見つけた（NX は判断のときの FORMAT を持つ）。fabric.rs の直しは小さく、明らかに実機の側が正しい。門の模型は 1 スロットに約 265 ns（fabric.rs は約 122 ns、ポートの模型を含む）で、本番に使うと 3% を大きく超えて遅くなる |
+| 却下した案 | DPA を作らず、ATR の SONLY・ADDR・FLAG をそのまま使う：U32 → ATR の経路が頭の判断に入り、時間がさらに足りない。P2A を PAL20R6A にしてブリッジも持たせる：24 ピンの標準品で電流が増え、DR-088 の 2 段目の置き場所はどちらでも同じ。U38 を 74LS393 のまま 8 MHz で数える：延びたアクセスの始まりで 0 に戻す信号が要り、時間切れのスロットが E の位相でずれる。fabric.rs を門の模型に合わせず、差を OI に残す：差は回路で必ず起き、直しは 10 行ほど |
+| 影響 | tools/fabric/pal/access.pal・host.pal（新）、seq.pal（ELG の入力、EVT の ERRKN）、tools/fabric/fabric_logic.py（突合せ）、emulator/crates/board/src/fabric_pal.rs（生成）、fabric.rs（FORMAT）、試験（board の fabric_gate/mod.rs、fabric_lockstep.rs）、spec/fabric.md §01・§03・§06〜§11、spec/board.md §02・§06・§09、OI-050、OI-082、OI-084、OI-088、OI-089 |
+
+## DR-090　Data Fabric の時間の予算をデータブックの値で書き、PAL の品の台帳を作る
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-26 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。(1) Data Fabric のレジスタからレジスタまでのすべての経路の遅れを、1985 年以前のデータブックの最大値で足し、spec/fabric.md §03 に表で書く。非同期の入力の、メタステーブルが収まるのに使える時間も同じ節に書く [P]。(2) PAL の速度の品と年代を台帳 parts/PAL.md にまとめる。(3) 経路が閉じない分の直し方は、スロットの記録（SlotRecord）を変えるので、ここでは決めず、OI-087 に案と費用を書く。fabric.rs の外から見える時刻は変えない |
+| 理由 | OI-083 の答え。24 ピンの A 品では LCLK から SCLK までの 62.5 ns に PAL 1 段（65 ns）も入らず、1985 年には 24 ピンの速い品がない（TI の 1985 年の本の 20 ピンの B 品 TIBPAL16xx-15C だけがある）。直し方はどれも、延びたアクセスの終わりか判断の列を変える。作業の指示が、スロットの記録が変わるなら止めて報告するとしている |
+| 却下した案 | 型番を 20 ピンの B 品に替えて閉じる：24 ピンの働きを分けると PAL が 4〜6 個増え、余裕が 5 ns ほどで、STS の経路は入らない。典型値で予算を組む：最大値で閉じないものは実機の個体で動かないことがある |
+| 影響 | spec/fabric.md §03、parts/PAL.md（新）、OI-050、OI-083、OI-087 |

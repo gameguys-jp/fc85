@@ -1,8 +1,9 @@
-//! Data Fabric の門の模型（`fabric_gate`。fabric.md §06 の PAL の式から生成した関数をつないだもの）と
-//! 動作の模型（`fabric`）を並べて動かし、スロットごとに突き合わせる（DR-085）。
+//! Data Fabric の門の模型（`fabric_gate`。fabric.md §06・§07 の PAL の式から生成した関数をつないだもの）と
+//! 動作の模型（`fabric`）を並べて動かし、スロットごとに突き合わせる（DR-085、DR-089）。
 //!
 //! 比べるもの：スロットの記録（`SlotRecord`）、STATUS、段階、割込み、CPU への応答、ポートへの働きかけ
-//! （模型のポートは呼ばれた順の記録、`FabricPorts` は中身の全部）。
+//! （模型のポートは呼ばれた順の記録、`FabricPorts` は中身の全部）。判断・状態・アクセスの制御・CPU の窓は
+//! 門の模型（DR-089）。
 //! CPU の 2 回のアクセスの間には 1 スロット以上おく（門の模型の前提。fabric_gate/mod.rs の冒頭）。
 
 mod fabric_gate;
@@ -72,7 +73,7 @@ impl Compare for FabricPorts {
 }
 
 /// 網羅の目安：突き合わせたスロットのうち、それぞれのことが起きた数。
-const COVER: [&str; 20] = [
+const COVER: [&str; 27] = [
     "スロット",
     "アクセス",
     "Start",
@@ -85,12 +86,19 @@ const COVER: [&str; 20] = [
     "Reload",
     "2 スロットのアクセス",
     "延びたアクセス",
+    "port 1 の延びたアクセスが終わる",
+    "port 2 の延びたアクセスが終わる",
+    "時間切れ（port 1）",
+    "時間切れ（port 2）",
+    "DONE の印の食い違い",
+    "延びたアクセスの STOP",
     "DONE が立つ",
     "STALL が立つ",
     "ERROR が立つ",
     "MISS が立つ",
     "WAIT",
     "動作中の STOP",
+    "転送中の PORT_RESET",
     "2 チャネルが動作",
     "割込み",
 ];
@@ -190,6 +198,16 @@ impl<P: Compare> Lock<P> {
                 .is_some_and(|x| x.port == 1 || (x.port == 2 && self.pf.doc_present()))
                 && !a.access_done,
         );
+        let doc = self.pf.doc_present();
+        let long_done =
+            |p: u8| a.access.is_some_and(|x| x.port == p) && a.access_done && (p == 1 || doc);
+        self.count("port 1 の延びたアクセスが終わる", long_done(1));
+        self.count("port 2 の延びたアクセスが終わる", long_done(2));
+        let ev = self.g.events();
+        self.count("時間切れ（port 1）", ev.timeout == Some(1));
+        self.count("時間切れ（port 2）", ev.timeout == Some(2));
+        self.count("DONE の印の食い違い", ev.mark_mismatch);
+        self.count("延びたアクセスの STOP", ev.stop_abort);
         for (bit, name) in [
             (2, "DONE が立つ"),
             (4, "STALL が立つ"),
@@ -279,7 +297,7 @@ impl<P: Compare> Lock<P> {
         self.write(ch * 0x40 + CTRL, 2);
     }
 
-    /// CPU のアクセス（`write` か `read`）。動作中のチャネルへの STOP を数える。
+    /// CPU のアクセス（`write` か `read`）。動作中のチャネルへの STOP と、転送中の PORT_RESET を数える。
     fn host(&mut self, off: u16, w: Option<u16>) -> HostReply {
         if let Some(v) = w
             && off < 0x80
@@ -288,6 +306,10 @@ impl<P: Compare> Lock<P> {
         {
             let busy = self.f.status((off >> 6) as usize) & 1 != 0;
             self.count("動作中の STOP", busy);
+        }
+        if w.is_some() && off == 0x100 {
+            let busy = (self.f.status(0) | self.f.status(1)) & 1 != 0;
+            self.count("転送中の PORT_RESET", busy);
         }
         match w {
             Some(v) => self.write(off, v),
@@ -664,6 +686,8 @@ impl Ports for MockPorts {
         self.modules & 1 << port != 0
     }
     fn port_reset(&mut self, mask: u16) {
+        // 効くのは bit 2–7、10 だけ。門の模型は PRST の出力のビットだけを渡す。
+        let mask = mask & 0x04FC;
         self.log.push(Call::Reset(mask));
         for p in 0..16 {
             if mask & 1 << p != 0 {
@@ -673,6 +697,68 @@ impl Ports for MockPorts {
     }
     fn write_audio_n(&mut self, n: u16) {
         self.log.push(Call::AudioN(n));
+    }
+}
+
+#[test]
+fn long_accesses_timeouts_and_resets_match() {
+    // port 1 と DOC 子基板の port 2 の延びたアクセス：答えの遅れが時間切れ（16 スロット）を超えるもの、
+    // DONE の印、途中の STOP。port 9 の 2 スロットのアクセス。転送中の PORT_RESET。
+    let mut total = Cover::default();
+    for seed in 0..8 {
+        let mut p = MockPorts::new(seed);
+        p.doc = true;
+        p.max_wait = 24;
+        p.mark_one_in = 3;
+        let mut r = Lock::new(p);
+        // FORMAT は両側の幅に合わせる（port 1 は 16 bit、port 2・6・9 は 8 bit）。
+        for (src, dst, f) in [
+            (1, 6, 3),
+            (6, 1, 2),
+            (2, 6, 0),
+            (6, 2, 0),
+            (9, 6, 0),
+            (9, 1, 2),
+        ] {
+            r.setup(0, cfg(src, dst, 0x40, 0x80, 12, f));
+            r.start(0);
+            r.run_until_idle(0, 2000);
+            r.host(STATUS, Some(0x1A));
+        }
+        // 延びたアクセスの途中の STOP。
+        for (src, f) in [(1, 3), (2, 0)] {
+            r.setup(0, cfg(src, 6, 0, 0, 100, f));
+            r.start(0);
+            r.run(7);
+            r.host(CTRL, Some(2));
+            r.run(4);
+        }
+        // 転送中の PORT_RESET（DSP の FIFO の port 3・4）。
+        r.setup(0, cfg(0, 3, 0, 0, 40, 1));
+        r.setup(1, cfg(4, 6, 0, 0, 40, 3));
+        r.start(0);
+        r.start(1);
+        r.run(10);
+        r.host(0x100, Some(0x0018));
+        r.run(10);
+        r.host(0x40 + CTRL, Some(2));
+        r.run_until_idle(0, 400);
+        total.add(&r.finish());
+    }
+    println!("{total}");
+    for name in [
+        "2 スロットのアクセス",
+        "port 1 の延びたアクセスが終わる",
+        "port 2 の延びたアクセスが終わる",
+        "時間切れ（port 1）",
+        "時間切れ（port 2）",
+        "DONE の印の食い違い",
+        "延びたアクセスの STOP",
+        "転送中の PORT_RESET",
+        "DONE が立つ",
+        "ERROR が立つ",
+    ] {
+        assert!(total.get(name) > 0, "{name} が起きない：{total}");
     }
 }
 
