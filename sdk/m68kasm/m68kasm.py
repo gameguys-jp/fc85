@@ -455,6 +455,9 @@ def parse_operand(text):
     size = None
     m = re.match(r"^(.*)\.([WLwl])$", s)
     if m and not _is_areg(m.group(1)):
+        if not m.group(1).strip():
+            # .w・.l だけ：局所ラベルとしては定義できない名前（Assembler._define）
+            raise AsmError(f"局所ラベルに大きさの指定と同じ名前は使えない: {s}")
         size = m.group(2).upper()
         s = m.group(1).strip()
     if s.endswith(")"):

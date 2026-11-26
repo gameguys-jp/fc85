@@ -239,6 +239,9 @@ class Expressions(unittest.TestCase):
                 asm(f"f:\n\tBRA.S\tf{name}\n\tNOP\n{name}\tRTS\n")
         for ref in ("f.b", ".b"):
             self.assertEqual(asm(f"f:\n\tBRA.S\t{ref}\n\tNOP\n.b\tRTS\n"), bytes.fromhex("60024E714E75"))
+        # 参照だけでも、理由の分かる誤りにする（「式がない」にしない）
+        with self.assertRaisesRegex(AsmError, "大きさの指定と同じ名前"):
+            asm("f:\n\tBEQ.S\t.w\n\tRTS\n")
 
 
 class Directives(unittest.TestCase):
