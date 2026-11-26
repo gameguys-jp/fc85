@@ -338,15 +338,21 @@ fn load(path: &str) -> Vec<u8> {
     })
 }
 
-/// 既定の置き場所（リポジトリの firmware のビルド結果）から探す。
+/// 既定の置き場所（リポジトリの firmware のビルド結果）から探す。今のフォルダとその上 2 段、
+/// 実行ファイルのフォルダとその上 4 段（`emulator/target/release/` から根まで）の順。
 fn default_path(rel: &str) -> Option<String> {
-    for base in ["", "../", "../../"] {
-        let p = format!("{base}{rel}");
-        if std::path::Path::new(&p).exists() {
-            return Some(p);
-        }
+    let mut bases: Vec<std::path::PathBuf> = ["", "..", "../.."]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    if let Ok(exe) = std::env::current_exe() {
+        bases.extend(exe.ancestors().skip(1).take(5).map(|p| p.to_path_buf()));
     }
-    None
+    bases
+        .iter()
+        .map(|b| b.join(rel))
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 fn build_console(a: &Args) -> Console {
@@ -362,7 +368,10 @@ fn build_console(a: &Args) -> Console {
             let n = rom.len().min(BOOT_ROM_BYTES);
             c.sys.boot_rom[..n].copy_from_slice(&rom[..n]);
         }
-        None => eprintln!("Boot ROM がない（--boot）。0xFF のまま始める"),
+        None => eprintln!(
+            "Boot ROM が見つからない。リポジトリの根で `py firmware/boot/build.py` を実行するか、\
+             --boot で指定する。0xFF のまま始めるので、68000 はすぐ二重バスフォルトで止まる"
+        ),
     }
     if let Some(p) = a
         .chars
