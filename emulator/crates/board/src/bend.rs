@@ -10,7 +10,7 @@
 
 use crate::analog::SigWiring;
 use crate::dram::DramEnv;
-use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_384K, Time, UNITS_PER_SECOND};
+use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_21M, PERIOD_384K, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 /// 通常モードと Bend モード（仕様書 §11）。
@@ -58,9 +58,34 @@ pub struct Clocks {
     pub adpcm: Option<Time>,
     /// 音声クロックの分周器の入力（基板では 8 MHz）。
     pub audio: Option<Time>,
+    /// 映像系の 21.47727 MHz（ゲンロック基板と共通の口）。ほかと違い、値は周波数（mHz）。`Some(0)` は
+    /// 外部入力に何もつながず、止まっている。範囲は `VIDEO_CLOCK_HZ`。
+    #[serde(default)]
+    pub video: Option<u64>,
+}
+
+/// `clock video` で受ける周波数の範囲（0 は止める）。下は 1 周期が 1000 秒、上は 2CLK が 25 MHz [P]。
+pub const VIDEO_CLOCK_HZ: (f64, f64) = (0.001, 100e6);
+
+/// 映像系の外部入力の周波数（mHz。`None` は基板の発振器、0 は止まっている）の周期。時刻の単位（約 66 ps）に
+/// 丸める（21.47727 MHz の近くで 1 単位は約 30 kHz）。テレビの模型は丸める前の周波数で見る [P]。
+pub fn video_period_of(mhz: Option<u64>) -> Time {
+    match mhz {
+        None => PERIOD_21M,
+        Some(0) => 0,
+        Some(m) => {
+            let n = u128::from(UNITS_PER_SECOND) * 1000;
+            ((n + u128::from(m) / 2) / u128::from(m)) as Time
+        }
+    }
 }
 
 impl Clocks {
+    /// 映像系の 21.47727 MHz の周期（ジャンパがなければ基板の発振器）。0 は止まっている。
+    pub fn video_period(&self) -> Time {
+        video_period_of(self.video)
+    }
+
     /// ジャンパの先の周期（ジャンパがなければ基板の発振器）。順は DOC、DSP の CLKIN、XT、音声。
     pub fn periods(&self) -> [Time; 4] {
         [
@@ -104,6 +129,7 @@ impl Bends {
     /// - `mode normal`・`mode bend`・`mode toggle`
     /// - `char A1=A2,A2=A1,D6=0,D2=Z`（`char normal` で戻す。`RomLines::parse`）
     /// - `clock doc|dsp|adpcm|audio <Hz>`（`off` で基板の発振器に戻す。`6e6` の形も読む）
+    /// - `clock video <Hz>`：映像系の 21.47727 MHz の外部入力（`off` で基板の発振器、`0` で止める）
     /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
     /// - `sig both|one`：DOC の SIG± の配線（`one` は SIG+ だけの初期の片側の配線。DR-011）
     /// - `dram unit <N>`・`dram temp <°C>`：DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。DR-072）
@@ -128,8 +154,14 @@ impl Bends {
             "clock" => {
                 let mut f = rest.split_whitespace();
                 let (Some(which), Some(hz)) = (f.next(), f.next()) else {
-                    return Err(format!("clock <doc|dsp|adpcm|audio> <Hz|off>: {line}"));
+                    return Err(format!(
+                        "clock <doc|dsp|adpcm|audio|video> <Hz|off>: {line}"
+                    ));
                 };
+                if which.eq_ignore_ascii_case("video") {
+                    self.clocks.video = video_clock(hz)?;
+                    return Ok(());
+                }
                 let period = if hz.eq_ignore_ascii_case("off") {
                     None
                 } else {
@@ -234,6 +266,11 @@ impl Bends {
                 v.push(format!("{n} {:.0} Hz", UNITS_PER_SECOND as f64 / p as f64));
             }
         }
+        match c.video {
+            Some(0) => v.push("映像のクロックを止めた".into()),
+            Some(m) => v.push(format!("映像 {:.3} Hz", m as f64 / 1000.0)),
+            None => {}
+        }
         for (n, p) in FIFO_NAMES.iter().zip(self.fifos) {
             if p != FifoPins::default() {
                 v.push(format!("FIFO {n}"));
@@ -249,6 +286,22 @@ impl Bends {
             ));
         }
         v.join("、")
+    }
+}
+
+/// `clock video` の値：`off` は基板の発振器（`None`）、`0` は止める（`Some(0)`）、ほかは周波数（mHz）。
+fn video_clock(hz: &str) -> Result<Option<u64>, String> {
+    if hz.eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    let f: f64 = hz.parse().map_err(|_| format!("周波数でない: {hz}"))?;
+    let (lo, hi) = VIDEO_CLOCK_HZ;
+    if f == 0.0 {
+        Ok(Some(0))
+    } else if (lo..=hi).contains(&f) {
+        Ok(Some((f * 1000.0).round() as u64))
+    } else {
+        Err(format!("映像のクロックは 0 か {lo}〜{hi} Hz: {hz}"))
     }
 }
 
@@ -490,11 +543,37 @@ mod tests {
             Clocks::default().periods(),
             [PERIOD_8M, PERIOD_20M, PERIOD_384K, PERIOD_8M]
         );
+        assert_eq!(Clocks::default().video_period(), PERIOD_21M);
+        // 映像のクロック（値は mHz）：半分の 10.738635 MHz の周期は 1408（15.12e9÷10738635＝1408.0002 を
+        // 四捨五入）、21.4757 MHz は 704.04 で基板と同じ 704。1 Hz は 1 秒の単位の数、0 は止める、off は基板の発振器
+        b.command("clock video 10.738635e6").unwrap();
+        assert_eq!(b.clocks.video, Some(10_738_635_000));
+        assert_eq!(b.clocks.video_period(), 2 * PERIOD_21M);
+        assert!(
+            b.summary().contains("映像 10738635.000 Hz"),
+            "{}",
+            b.summary()
+        );
+        assert!(!b.is_factory());
+        b.command("clock video 21.4757e6").unwrap();
+        assert_eq!(b.clocks.video_period(), PERIOD_21M);
+        assert!(!b.is_factory());
+        b.command("clock VIDEO 1").unwrap();
+        assert_eq!(b.clocks.video_period(), UNITS_PER_SECOND);
+        b.command("clock video 0").unwrap();
+        assert_eq!(b.clocks.video_period(), 0);
+        assert!(b.summary().contains("止めた"));
+        b.command("clock video off").unwrap();
+        assert!(b.is_factory());
         for bad in [
             "mode on",
             "clock doc",
             "clock vdp 1e6",
             "clock doc -5",
+            "clock video -1",
+            "clock video 1e-6",
+            "clock video 2e8",
+            "clock video fast",
             "fifo port9 open",
             "fifo dac empty=2",
             "sig half",

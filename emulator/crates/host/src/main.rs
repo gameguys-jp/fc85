@@ -7,16 +7,21 @@
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
-//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD]
-//! [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one]`
+//! [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]
+//! [--bend CMD] [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one]`
 //!
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
-//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`sig both|one`、`factory`。ベンド点を
+//! `clock video HZ|0|off`（映像系の 21.47727 MHz。0 で止める）、`fifo dac|dsp_in|dsp_out|adpcm
+//! empty=0|1|open full=0|1|open`、`sig both|one`、`dram unit N`・`dram temp C`、`factory`。ベンド点を
 //! 1 つでも設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
 //! `--bend-script` は「フレーム 命令」の行の台本で、そのフレームの頭で実行する。
 //! `--*-clock HZ` は `--bend "clock … HZ"`、`--char-bend SPEC` は `--bend "char SPEC"`、`--doc-sig one`
 //! は `--bend "sig one"`（DOC の SIG± の配線のジャンパ。DR-011）の短い形。
+//! 画面（窓と `--dump`）は機械の外のテレビの模型（board 層の `tv`）を通す。映像のクロックを替えると、同期と
+//! 色が引込みの範囲を外れて崩れる。工場出荷のクロックでは画面の配列そのまま。テレビの状態が変わると
+//! 標準エラーに出す。仮想機は 1 フレーム（ACRTC のフレームの終わり、上限は CPU の 2 フレーム分。映像の
+//! クロックが基板の半分より遅いか止まっていれば 1/60 秒分）ずつ進めるので、映像のクロックを止めても固まらない。
 //! `--audio-tap` は鳴らす音と WAV に書く音：`line`（既定）はアナログの段の LINE OUT（analog.rs）、`digital` は
 //! チップの出力のデジタルの和（DR-054。`sdk/samples/dsp/verify_wav.py` が標本ごとに照合するのはこちら）。
 
@@ -26,7 +31,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
-use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
+use fc85_board::tv::Tv;
+use fc85_board::video::{RASTER_H, RASTER_W};
 use fc85_chips::hd68000::RunState;
 
 /// 窓に出す範囲（ドット、ライン）。案B の表示（64〜319 ドット、43〜234 ライン）を真ん中に置く。
@@ -125,7 +131,7 @@ fn parse_args() -> Args {
                     .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                     .unwrap_or_default()
             }
-            "--doc-clock" | "--dsp-clock" | "--adpcm-clock" | "--audio-clock" => {
+            "--doc-clock" | "--dsp-clock" | "--adpcm-clock" | "--audio-clock" | "--video-clock" => {
                 let which = &s[2..s.len() - 6];
                 a.bends
                     .extend(it.next().map(|v| format!("clock {which} {v}")));
@@ -146,8 +152,12 @@ fn parse_args() -> Args {
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
-                     [--audio-tap digital|line] [--doc-sig both|one]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
+                     [--audio-tap digital|line] [--doc-sig both|one]\n\
+                     ベンド点の CMD：mode normal|bend|toggle、char SPEC、clock doc|dsp|adpcm|audio HZ|off、\
+                     clock video HZ|0|off（映像系の 21.47727 MHz、0 で止める）、fifo NAME empty=..|full=..|open、\
+                     sig both|one、dram unit N、dram temp C、factory\n\
+                     画面は機械の外のテレビの模型を通す（同期と色の引込み。工場出荷のクロックでは画面の配列そのまま）"
                 );
                 std::process::exit(0);
             }
@@ -290,20 +300,32 @@ fn build_console(a: &Args) -> Console {
     c
 }
 
-/// 画面の配列から、窓に出す範囲を 0RGB の u32 にする。
-fn view(c: &Console, out: &mut [u32]) {
-    let f = &c.sys.ports.acrtc.video.frame;
+/// テレビの絵（`Tv::picture`）から、窓に出す範囲を 0RGB の u32 にする。
+fn view(c: &Console, tv: &Tv, pic: &mut Vec<u32>, out: &mut [u32]) {
+    tv.picture(&c.sys, pic);
     for y in 0..VIEW_H {
         for x in 0..VIEW_W {
             let (sx, sy) = (VIEW_X + x, VIEW_Y + y);
-            let v = if sx < RASTER_W && sy < RASTER_H {
-                f[sy * RASTER_W + sx]
+            out[y * VIEW_W + x] = if sx < RASTER_W && sy < RASTER_H {
+                pic[sy * RASTER_W + sx]
             } else {
                 0
             };
-            let [r, g, b] = rgb888(v);
-            out[y * VIEW_W + x] = (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
         }
+    }
+}
+
+/// テレビの状態が変わったら出す（ホストの表示）。工場出荷と同じに映る状態は、崩れた状態を出した後だけ出す
+/// （起動の「同期なし」から同期したときは黙る）。
+fn report_tv(c: &Console, tv: &Tv, seen: &mut (String, bool)) {
+    let st = tv.status(&c.sys);
+    let s = st.summary();
+    if seen.0 != s {
+        if !st.normal() || seen.1 {
+            eprintln!("{s}");
+            seen.1 = true;
+        }
+        seen.0 = s;
     }
 }
 
@@ -568,6 +590,10 @@ fn main() {
         trace(&mut c, a.trace);
     }
     let mut buf = vec![0u32; VIEW_W * VIEW_H];
+    let tv = Tv::default();
+    let mut pic = Vec::new();
+    // 最初の状態（表示が動き出す前の「同期なし」）は出さない
+    let mut tv_seen = (tv.status(&c.sys).summary(), false);
 
     if a.headless {
         let n = a.frames.unwrap_or(60);
@@ -579,10 +605,11 @@ fn main() {
             }
             c.run_frame();
             report(&c, &mut seen);
+            report_tv(&c, &tv, &mut tv_seen);
             if a.dump_at.contains(&(i + 1))
                 && let Some(p) = &a.dump
             {
-                view(&c, &mut buf);
+                view(&c, &tv, &mut pic, &mut buf);
                 dump_ppm(&numbered(p, i + 1), &buf);
             }
             let mut s = take_audio(&mut c, a.line);
@@ -590,7 +617,7 @@ fn main() {
                 pcm.append(&mut s);
             }
         }
-        view(&c, &mut buf);
+        view(&c, &tv, &mut pic, &mut buf);
         if let Some(p) = &a.dump {
             dump_ppm(p, &buf);
         }
@@ -652,11 +679,12 @@ fn main() {
         }
         push_audio(&mut c, &ring, a.line);
         pace(audio.is_some(), &ring, &mut next);
-        view(&c, &mut buf);
+        view(&c, &tv, &mut pic, &mut buf);
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {
             break;
         }
         report(&c, &mut seen);
+        report_tv(&c, &tv, &mut tv_seen);
         frames += 1;
         if a.frames.is_some_and(|n| frames >= n) {
             break;

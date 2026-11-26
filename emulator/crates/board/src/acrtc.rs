@@ -7,6 +7,12 @@
 //! - 時刻は core 層の単位（1 スロットが 3780）。16 MHz の立上り（q0〜q3）は 945 ごと、ACRTC の 2CLK
 //!   （21.47727 MHz÷4＝5.369318 MHz）の立上りは 2816 ごと。2 つの発振源の位相は `set_phase` で決める
 //!   （既定は 0）。実機の水晶のずれは扱わない。
+//! - 映像系のクロックのジャンパ（仕様書 §11 のベンド点「映像のクロック」、DR-035 (1)）：`set_video_period` で
+//!   21.47727 MHz の周期を替えると、2CLK はその 4 倍になる。速くするときは次の立上りを新しい周期の内に
+//!   寄せ、遅くするときは決まっている次の立上りの後から新しい周期で数える [P]。止めると立上りが来ず、
+//!   戻すと戻した時刻から 1 周期後に来る。止めている間も ACRTC の中の状態は保つ [P][V]。
+//! - VRAM の保持（`vclock`、DR-072）：追跡している（Bend モード）ときは、描画の読み書き、表示の読出し、
+//!   リフレッシュが行を活性化し、リフレッシュの間が延びたセルを崩す。
 //! - Fabric の出力（DACK、R/W、データ）は、アクセスを始めるスロットの頭（P1A のクロック）の 20 ns 後に
 //!   変わる [P]。DACK を戻すのも、P1A のクロックの 20 ns 後。
 //! - ACRTC は、立上りの 40 ns 前の DACK を見る（tDAKS）。DREQ は立上りの 50 ns 後（tDRQD2）、DTACK は
@@ -18,10 +24,12 @@
 //!   DONE の FF を取り込む。アクセスはそのスロットで終わる（Fabric は次のスロットの頭で次を決める）。
 //! - RDY1（Fabric の準備の信号）は、スロットの中ほど（q2 の立上り、MCLK↑）に取り込む 2 段目の DREQ。
 
+use crate::dram::Dram;
 use crate::fabric::{Access, Dir, PortReply};
+use crate::vclock::{self, TrackedVram};
 use crate::video::Video;
 use fc85_chips::hd63484::{Hd63484, Vram};
-use fc85_core::time::{Clock, PERIOD_2CLK, PERIOD_16M, SLOT, Time};
+use fc85_core::time::{Clock, PERIOD_2CLK, PERIOD_16M, PERIOD_21M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 /// Fabric の出力の遅れ（20 ns）。
@@ -113,6 +121,20 @@ pub struct AcrtcBridge {
     pub dack_slots: u64,
     /// 映像の出力段（パレット、画面、映像の割込み）。
     pub video: Video,
+    /// 映像系の 21.47727 MHz の周期（ジャンパ。0 は止まっている）。2CLK はその 4 倍。
+    #[serde(default = "board_21m")]
+    period21: Time,
+    /// VRAM の保持の模型（追跡は Bend モードのときだけ）。
+    #[serde(default = "vram_dram")]
+    pub dram: Dram,
+}
+
+fn board_21m() -> Time {
+    PERIOD_21M
+}
+
+fn vram_dram() -> Dram {
+    Dram::new(vclock::GROUPS)
 }
 
 impl Default for AcrtcBridge {
@@ -142,22 +164,58 @@ impl AcrtcBridge {
             reply: None,
             dack_slots: 0,
             video: Video::new(),
+            period21: PERIOD_21M,
+            dram: vram_dram(),
         }
     }
 
-    /// 次の 2CLK の立上りを、次のスロットの頭から `units` 後にする（0〜2815）。
+    /// 次の 2CLK の立上りを、次のスロットの頭から `units` 後にする（0〜2CLK の周期−1）。止まっていれば何もしない。
     pub fn set_phase(&mut self, units: Time) {
-        self.clk.set_next(self.now + units % PERIOD_2CLK);
+        if let Some(p) = self.period_2clk() {
+            self.clk.set_next(self.now + units % p);
+        }
     }
 
-    /// `t` 以降の最初の 2CLK の立上り。
-    pub fn edge_at_or_after(&self, t: Time) -> Time {
+    /// 映像系の 21.47727 MHz の周期（0 は止まっている）。
+    pub fn video_period(&self) -> Time {
+        self.period21
+    }
+
+    /// 2CLK の周期。止まっていれば `None`。
+    pub fn period_2clk(&self) -> Option<Time> {
+        (self.period21 != 0).then(|| 4 * self.period21)
+    }
+
+    /// 映像系の 21.47727 MHz の周期を替える（0 で止める）。同じ周期なら何もしない（位相を保つ）。
+    pub fn set_video_period(&mut self, period21: Time) {
+        if period21 == self.period21 {
+            return;
+        }
+        let was_running = self.period21 != 0;
+        self.period21 = period21;
+        if period21 == 0 {
+            self.clk.set_next(Time::MAX);
+            return;
+        }
+        let p = 4 * period21;
+        self.clk.set_period(p);
+        let next = if was_running {
+            self.clk.next().min(self.now + p)
+        } else {
+            self.now + p
+        };
+        self.clk.set_next(next);
+    }
+
+    /// `t` 以降の最初の 2CLK の立上り。止まっていれば `None`。
+    pub fn edge_at_or_after(&self, t: Time) -> Option<Time> {
+        let p = self.period_2clk()?;
         let n = self.clk.next();
-        if t <= n {
+        Some(if t <= n {
             n
         } else {
-            n + (t - n).div_ceil(PERIOD_2CLK) * PERIOD_2CLK
-        }
+            n + (t - n).div_ceil(p) * p
+        })
     }
 
     /// RDY1：中ほどで取り込んだ、同期化した DREQ。
@@ -247,10 +305,34 @@ impl AcrtcBridge {
         };
         let dack = self.dack.value(e.saturating_sub(T_DAKS));
         self.acrtc.set_dack(dack, self.bus_write, self.bus_data);
-        self.acrtc.tick(&mut self.vram);
+        if self.dram.tracking() {
+            self.tick_tracked(e);
+        } else {
+            self.acrtc.tick(&mut self.vram);
+        }
         self.video.tick(&self.acrtc, &self.vram, e);
         self.dreq.set(self.acrtc.dreq(), e + T_DRQD);
         self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL);
         self.done.set(self.acrtc.done(), e + T_DND);
+    }
+
+    /// VRAM の保持を追跡しているときの 2CLK：描画の読み書き、リフレッシュ、表示の読出しの順に行を活性化する
+    /// （表示の語は出力段が読む前に）。
+    #[cold]
+    #[inline(never)]
+    fn tick_tracked(&mut self, e: Time) {
+        let mut v = TrackedVram {
+            mem: &mut self.vram.0,
+            dram: &mut self.dram,
+            at: e,
+        };
+        self.acrtc.tick(&mut v);
+        let o = self.acrtc.display_out();
+        if let Some(r) = o.refresh {
+            v.refresh(r);
+        }
+        if let Some(a) = o.fetch {
+            v.activate_word(a);
+        }
     }
 }

@@ -2014,10 +2014,53 @@ fn str_off_resets_the_time_base() {
     s.reg(0x04, 0x8008);
     s.tick();
     assert_eq!(s.a.beam(), (0, 0));
-    assert_eq!(s.tick(), DisplayOut::default());
+    // STR＝0 の間はリフレッシュの番地だけが出る（下の試験）
+    let o = s.tick();
+    assert_eq!(DisplayOut { refresh: None, ..o }, DisplayOut::default());
     s.reg(0x04, 0xC008);
     s.tick();
     assert_eq!(s.a.beam(), (1, 0));
+}
+
+#[test]
+fn refresh_addresses_count_down_in_hsync_and_while_stopped() {
+    // RAM＝0：HSYNC の L の間のメモリサイクルにリフレッシュの番地を出し、1 ずつ減らす。最後のサイクルは
+    // 属性（U85 p.53、p.55、p.72）。案B の HSW＝13 なら、ドット 0、2、…、22 の 12 回（台帳 §3.4 の HSW−1）
+    let mut s = Screen::plan_b();
+    s.tick();
+    s.until(0, 0);
+    let mut seq = Vec::new();
+    let mut dots = vec![Vec::new(); RASTERS];
+    for _ in 0..LINE * RASTERS {
+        let o = s.tick();
+        let (d, r) = s.a.beam();
+        if let Some(a) = o.refresh {
+            dots[usize::from(r)].push(usize::from(d));
+            seq.push(a);
+        }
+    }
+    for (r, d) in dots.iter_mut().enumerate() {
+        d.sort_unstable();
+        assert_eq!(*d, (0..12).map(|k| 2 * k).collect::<Vec<_>>(), "{r}");
+    }
+    assert_eq!(seq.len(), 262 * 12);
+    assert!(seq.windows(2).all(|w| w[1] == w[0].wrapping_sub(1)));
+    // 128 行（HM4864A の A0〜A6）は 11 ラインで一巡する
+    let rows: BTreeSet<u8> = seq[..11 * 12].iter().map(|a| a & 0x7F).collect();
+    assert_eq!(rows.len(), 128);
+    // STR＝0：毎メモリサイクル（2CLK×2）に出し続け、番地は止める前から続けて減る [V]
+    let last = *seq.last().unwrap();
+    s.reg(0x04, 0x8008);
+    let stopped: Vec<Option<u8>> = (0..8).map(|_| s.tick().refresh).collect();
+    assert!(stopped.chunks(2).all(|c| c[0].is_some() && c[1].is_none()));
+    let got: Vec<u8> = stopped.iter().flatten().copied().collect();
+    let want: Vec<u8> = (1..=4).map(|k| last.wrapping_sub(k)).collect();
+    assert_eq!(got, want);
+    // RAM＝1（SRAM）：リフレッシュしない
+    let mut s = Screen::plan_b();
+    s.reg(0x04, 0xC088);
+    let f = s.frame();
+    assert!(f.iter().all(|o| o.refresh.is_none()));
 }
 
 #[test]

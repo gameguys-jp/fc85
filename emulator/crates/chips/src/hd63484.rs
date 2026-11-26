@@ -14,7 +14,8 @@
 //!   追補 4）。段取りはラスタの頭にレジスタから求める（`Plan`）。単一アクセスとインタリーブを作り、重ね合せは
 //!   インタリーブと同じに扱う。読んだ語・DISP・CUD・属性は `display_out` で board 層に渡し、画素にする
 //!   （スムーズスクロールと横のズームのシフトレジスタ）のは board 層。ブロックカーソル（文字画面）、
-//!   ライトペン、インタレースは作っていない。
+//!   ライトペン、インタレースは作っていない。DRAM のリフレッシュの番地（8 bit、メモリサイクルごとに 1 減らす）
+//!   も `display_out` で出す（board 層の VRAM の保持の模型が使う）。
 //! - データの DMA（DDM＝1 の DWT・DMOD・DRD）は、DREQ・DACK・DTACK・DONE のピンで見せる（段階 2）。
 //!   DACK は 2CLK の立上りで取り込み、そのサイクルを T1、次の立上りを T3 として DTACK を出し、DACK＝H を
 //!   取り込んだ立上り（Tn）で FIFO との受け渡しを終える（U85 p.49–50、p.320–321）。ピンの遅れ（tDRQD・
@@ -395,6 +396,12 @@ struct Display {
     /// この 2CLK のピンの出力。
     #[serde(default)]
     out: DisplayOut,
+    /// リフレッシュの番地（8 bit。リフレッシュのメモリサイクルごとに 1 減らす。U85 p.53、p.72）。
+    #[serde(default)]
+    rfa: u8,
+    /// STR＝0 の間の、メモリサイクルの 2 つ目の 2CLK。
+    #[serde(default)]
+    rfa_half: bool,
 }
 
 /// 1 ラスタの表示の段取り。ラスタの頭（HSYNC の始まり）にレジスタから求め、ラスタの途中の書込みは次の
@@ -450,6 +457,9 @@ pub struct DisplayOut {
     pub cud2: bool,
     /// 属性のサイクルの最後の 2CLK：外の回路がラッチする 20 bit（U85 p.55）。
     pub attr: Option<u32>,
+    /// この 2CLK にリフレッシュのメモリサイクルを始め、MAD に出した 8 bit の番地（U85 p.53、p.72）。
+    /// OMR の RAM＝0 なら HSYNC の L の間（最後のメモリサイクルを除く）、STR＝0 なら毎メモリサイクル [V]。
+    pub refresh: Option<u8>,
 }
 
 /// 描画の 1 回のメモリサイクル（実行の順）。`gap` はその前の内部の 2CLK。
@@ -1227,12 +1237,20 @@ impl Hd63484 {
     fn display_tick(&mut self) -> bool {
         self.disp.out = DisplayOut::default();
         if self.omr & OMR_STR == 0 {
-            // STR＝0：表示を止め、時間の基準を戻す（U85 p.70）
+            // STR＝0：表示を止め、時間の基準を戻す（U85 p.70）。MAD にはリフレッシュの番地を出す。
+            // RAM＝0 なら毎メモリサイクルにリフレッシュするとした [V]
             let d = &mut self.disp;
             d.dot = 0;
             d.raster = 0;
             d.hold = false;
             d.plan.line = 0;
+            if self.omr & OMR_RAM == 0 {
+                d.rfa_half = !d.rfa_half;
+                if d.rfa_half {
+                    d.out.refresh = Some(d.rfa);
+                    d.rfa = d.rfa.wrapping_sub(1);
+                }
+            }
             return false;
         }
         if self.disp.plan.line == 0 {
@@ -1259,11 +1277,21 @@ impl Hd63484 {
             hold,
             plan: p,
             out,
+            rfa,
             ..
         } = &mut self.disp;
         let dot = *dot;
-        let mut free = !*hold && dot >= p.refresh;
+        let mut free = !*hold;
         *hold = false;
+        if dot < p.refresh {
+            free = false;
+            // リフレッシュ：HSYNC の L の間のメモリサイクル（最後の属性のサイクルを除く）の頭に番地を出し、
+            // 1 減らす（U85 p.53、p.72）
+            if dot & 1 == 0 && dot + 2 < p.refresh {
+                out.refresh = Some(*rfa);
+                *rfa = rfa.wrapping_sub(1);
+            }
+        }
         let a = dot.wrapping_sub(p.attr_at);
         if a < 2 && p.attr_at != u16::MAX {
             free = false;
