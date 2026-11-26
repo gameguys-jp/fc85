@@ -396,7 +396,7 @@ DOC 子基板
 
 ### HD63484 の表示と映像の出力段（段階 3）
 
-コードは `emulator/crates/chips/src/hd63484.rs`（表示のタイミングとピン）と `emulator/crates/board/src/video.rs`（シフトレジスタ、画素とパレット）。台帳 HD63484.md §3.1〜§3.4・§4.3・§4.5・追補 4、DR-027、DR-053。チップは 2CLK ごとに、読んだ語番地（または語を読まない表示サイクル）、DISP1・DISP2、CUD1・CUD2、属性を `DisplayOut` で出す。出力段はそれだけを見る。
+コードは `emulator/crates/chips/src/hd63484.rs`（表示のタイミングとピン）と `emulator/crates/board/src/video.rs`（シフトレジスタ、画素とパレット）。台帳 HD63484.md §3.1〜§3.4・§4.3・§4.5・追補 4、DR-027、DR-053、DR-069、DR-070。チップは 2CLK ごとに、読んだ語番地（または語を読まない表示サイクル）、DISP1・DISP2、CUD1・CUD2、属性を `DisplayOut` で出す。出力段はそれだけを見る。
 
 | 仕様の項目 | 実装での扱い | 理由 | 影響 |
 |---|---|---|---|
