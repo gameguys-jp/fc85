@@ -2,9 +2,9 @@
 //! 期待値は DR-017、DR-029、台帳 TMS32010.md §2.1・§2.2 と、そこからの手計算で取る。
 //! 状態ポートのビットは仮の配置（OI-053）。拍のラッチは DR-049、Fabric の候補の入れ替えは DR-048。
 
+use fc85_board::dram::DramEnv;
 use fc85_board::dsp::{
     BioSel, DspStatus, STATUS_COMMAND, STATUS_INPUT_READY, STATUS_OUTPUT_SPACE, STATUS_TICK,
-    late_lines,
 };
 use fc85_board::fabric::{Fabric, HostReply};
 use fc85_board::ports::FabricPorts;
@@ -467,38 +467,50 @@ fn tc(hz: f64) -> u64 {
 }
 
 #[test]
-fn an_overclocked_dsp_latches_late_program_lines_from_the_previous_word() {
-    // 使える時間 tc − 100 ns と、RAM と切替回路の 75 ns（台帳 §2.1、仕様書 §05。DR-066）
-    assert_eq!(late_lines(tc(20e6)), 0, "基板の 20 MHz：余裕 25 ns");
-    assert_eq!(late_lines(tc(20.5e6)), 0, "資料の上限 20.5 MHz");
-    assert_eq!(late_lines(tc(22.8e6)), 0, "tc 175.4 ns：ちょうど間に合う");
-    let n23 = late_lines(tc(23e6)).count_ones();
-    assert!(
-        (1..16).contains(&n23),
-        "23 MHz では一部の線だけ遅れる: {n23}"
-    );
-    assert_eq!(
-        late_lines(tc(24.6e6)),
-        0xFFFF,
-        "tc 162.6 ns：全部の線が前の語"
-    );
-    let mut last = 0;
-    for mhz in 20..=26 {
-        let n = late_lines(tc(f64::from(mhz) * 1e6)).count_ones();
-        assert!(n >= last, "速くするほど崩れる線は増える");
-        last = n;
+fn an_overclocked_dsp_latches_late_program_bits_from_the_previous_bus_value() {
+    // 使える時間 tc − 120 ns（台帳 §3.2 の td1 50＋tsu(D) 50 と切替 20 ns）に、HM6168H-55 の tAA 55 ns×
+    // チップの倍率（DR-083）。基板の 20 MHz（余り 80−55f）と資料の上限 20.5 MHz では、どの個体でも間に合う
+    for unit in 0..64 {
+        let mut p = Rig::new().p;
+        p.dsp.set_access_env(DramEnv { unit, temp_c: 70 });
+        for hz in [20e6, 20.5e6] {
+            p.dsp.set_input_period(tc(hz));
+            assert_eq!(p.dsp.prog_time().masks(), (0, 0), "個体 {unit} {hz}");
+        }
     }
-
-    // 同じプログラムを 20 MHz と 25 MHz で動かす：25 MHz では前の語の値で命令を取り込み、暴走する
     let prog = [lack(0x5A), d(SACL, 0), d(OUT + 2, 0), B, 3];
     let mut normal = Rig::new();
     normal.boot(&prog, BioSel::InputReady);
     normal.run(200);
     assert_eq!(normal.p.dsp.late_fetches, 0);
     assert_eq!(normal.p.dsp.read_response(), 0x5A);
+    // 40 MHz（tc 100 ns）では 16 bit とも間に合わず、取り込むのはデータバスに前に乗っていた値：番地 n の
+    // フェッチは番地 n−1 の語（取り込んだ後、線は RAM の値に落ち着く）。最初のフェッチは電源投入のバスの 0
+    // （ADD 0）で、プログラムは 1 語ずれて動き、同じ応答を返す。OUT の後は OUT のデータ（0x5A＝ADD）を
+    // 取り込み、分岐の先は崩れる
     let mut fast = Rig::new();
-    fast.p.dsp.set_input_period(tc(25e6));
+    fast.p.dsp.set_input_period(tc(40e6));
+    assert_eq!(fast.p.dsp.prog_time().masks(), (0xFFFF, 0));
     fast.boot(&prog, BioSel::InputReady);
     fast.run(200);
     assert!(fast.p.dsp.late_fetches > 0);
+    assert_eq!(fast.p.dsp.read_response(), 0x5A);
+    // 個体 0 では、約 25.1 MHz から 1 個ずつ間に合わなくなり（際を通って）、約 25.8 MHz で 4 個とも。間に合わない
+    // bit と際の bit は、チップの 4 bit ずつまとまる
+    let mut part = Rig::new().p;
+    let mut seen = Vec::new();
+    for k in 0..200 {
+        part.dsp.set_input_period(tc(22e6 + 25e3 * f64::from(k)));
+        let (fail, marg) = part.dsp.prog_time().masks();
+        for m in [fail, marg] {
+            assert!(
+                (0..4).all(|c| matches!((m >> (4 * c)) & 15, 0 | 15)),
+                "{m:#x}"
+            );
+        }
+        if !seen.contains(&fail) {
+            seen.push(fail);
+        }
+    }
+    assert_eq!(seen, [0, 0x00F0, 0xF0F0, 0xF0FF, 0xFFFF]);
 }

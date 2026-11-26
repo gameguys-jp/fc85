@@ -51,7 +51,13 @@
 //!   まとまりは、行の下位 7 bit（RA0–RA6）が同じ 2 行（512 byte）。DOC の読出し、リフレッシュのサイクル、
 //!   P2A の読み書きが行を活性化する。追跡は Bend モードのときだけ（`set_bends`）。放電した値は、行の
 //!   RA0（A8）が 0 の行で 0、1 の行で 1（真のセルと補のセル）[P][V]。
+//! - 波形 RAM のアクセス時間（DR-083、`access`）：CLK を上げすぎると、DOC の E Low の読出しで、間に合わない
+//!   チップの bit は、DOC が同じアクセスの頭に AD のバスに出した番地の上位 byte（A8–A15）の bit になる
+//!   （NMOS の入力のピンに残る電荷）[P][V]。CAS̄↓ は取り込みの CLK 2 つ前、RAS̄↓ は 3 つ前、データの
+//!   セットアップは 100 ns（台帳 §3.5）。P2A の窓（E High）の読み書きは入れない（取り込むラッチのセット
+//!   アップが短く、DOC の読出しより後に崩れる）[P][V]。
 
+use crate::access::{AccessTime, Path};
 use crate::acrtc::{T_OUT, T_SETUP};
 use crate::analog::{Hold, SigWiring, sh_alpha_q16};
 use crate::bend::Wire;
@@ -406,6 +412,9 @@ pub struct DocBoard {
     /// 波形 RAM の保持の追跡（Bend モードのときだけ。DR-072）。
     #[serde(default = "wave_dram")]
     dram: Dram,
+    /// DOC の読出しの間に合わない bit（CLK の周期と、`dram` の個体と温度で決める。DR-083）。
+    #[serde(default)]
+    wave_time: AccessTime,
 }
 
 fn default_sh_alpha() -> u32 {
@@ -422,11 +431,13 @@ impl Default for DocBoard {
     }
 }
 
-/// DOC が E Low に見る波形 RAM：A のバスの列の番地、AD のバスの行の番地とデータ、4164 の行の活性化。
+/// DOC が E Low に見る波形 RAM：A のバスの列の番地、AD のバスの行の番地とデータ、4164 の行の活性化、
+/// アクセス時間（DR-083）。
 struct WaveRam<'a> {
     wave: &'a mut [u8],
     lines: Option<&'a mut DocLines>,
     dram: &'a mut Dram,
+    time: &'a mut AccessTime,
     now: Time,
 }
 
@@ -435,8 +446,10 @@ impl WaveBus for WaveRam<'_> {
     fn read_wave(&mut self, addr: u32) -> u8 {
         // BS（bit 16）はつながない
         let addr = addr as u16;
+        // 間に合わない bit は、DOC が AD のバスに出した A8–A15 の電荷が残る（DR-083）[P][V]
+        let high = || (addr >> 8) as u8;
         if self.lines.is_none() && !self.dram.tracking() {
-            return self.wave[usize::from(addr)];
+            return self.time.read8(self.wave[usize::from(addr)], high);
         }
         let (row, col) = match self.lines.as_mut() {
             Some(l) => (l.ad((addr >> 8) as u8), l.a(addr as u8)),
@@ -444,6 +457,7 @@ impl WaveBus for WaveRam<'_> {
         };
         activate_row(self.wave, self.dram, row, self.now);
         let v = self.wave[(usize::from(row) << 8) | usize::from(col)];
+        let v = self.time.read8(v, high);
         match self.lines.as_mut() {
             Some(l) => l.ad(v),
             None => v,
@@ -495,6 +509,7 @@ impl DocBoard {
             sh_sum: [Hold::default(); 2],
             lines: None,
             dram: wave_dram(),
+            wave_time: AccessTime::default(),
         }
     }
 
@@ -512,6 +527,12 @@ impl DocBoard {
             self.dram.stop();
         }
         self.doc.set_retention(env.unit, env.temp_c);
+        self.wave_time.set(Path::Wave, self.fall.period() / 8, env);
+    }
+
+    /// 波形 RAM の読出しの間に合わなさ（DR-083）。
+    pub fn wave_time(&self) -> &AccessTime {
+        &self.wave_time
     }
 
     /// 子基板のバスのテストピン（手を加えていなければ `None`）。
@@ -582,12 +603,14 @@ impl DocBoard {
     }
 
     /// DOC の CLK の周期（既定は 8 MHz。外部クロックのジャンパ。DR-035）。E の周期はその 8 倍。
-    /// 次の E の立下りは変えない。`DOC_CLK_MAX` より長い周期は切り詰める。
+    /// 次の E の立下りは変えない。`DOC_CLK_MAX` より長い周期は切り詰める。波形 RAM の読出しの間に合わない
+    /// bit も決め直す（DR-083）。
     pub fn set_clock_period(&mut self, clk: Time) {
         let clk = clk.clamp(1, DOC_CLK_MAX);
         self.fall.set_period(8 * clk);
         self.doc.set_cycle_time(8 * clk);
         self.sh_alpha = sh_alpha_q16(clk);
+        self.wave_time.set(Path::Wave, clk, self.dram.env());
     }
 
     /// Fabric への答え。
@@ -756,6 +779,7 @@ impl DocBoard {
             wave: &mut self.wave,
             lines: self.lines.as_mut(),
             dram: &mut self.dram,
+            time: &mut self.wave_time,
             now: t,
         });
         if let Slot::Osc { n, addr, wave } = tick.slot {

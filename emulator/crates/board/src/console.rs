@@ -25,6 +25,7 @@ use crate::adpcm::AdpcmCtrl;
 use crate::analog::{self, Analog, SigWiring, TICK};
 use crate::bend::{Bends, FifoPins, Mode, RomLines};
 use crate::doc;
+use crate::dram::DramEnv;
 use crate::dsp::{BioSel, DspCtrl};
 use crate::fabric::{Fabric, HostReply};
 use crate::ports::FabricPorts;
@@ -994,6 +995,12 @@ impl System {
         p.doc_board
             .set_bends(on.then_some((&self.bends.doc_lines, self.bends.dram)), now);
         p.dsp.set_input_period(4 * dsp);
+        // プログラム RAM のアクセス時間の個体と温度（DR-083）：通常モードは個体 0・25 °C
+        p.dsp.set_access_env(if on {
+            self.bends.dram
+        } else {
+            DramEnv::default()
+        });
         p.adpcm_port.set_input_period(adpcm);
         p.audio.set_input_period(audio);
         let pins = if on {

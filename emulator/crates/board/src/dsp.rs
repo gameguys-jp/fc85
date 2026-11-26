@@ -24,17 +24,19 @@
 //!   `STATUS_*` の配置を仮に置く [P]（OI-053）。
 //! - スロットの中の DSP のサイクルは、そのスロットの Fabric のアクセスより前に済ませる（`audio` と
 //!   同じ）[P]。
-//! - プログラム RAM の読出しの間に合わなさ（仕様書 §11 のベンド点「DSPの速さ」、DR-066）：番地から
-//!   データまでに使える時間は tc − td1 − tsu＝tc − 100 ns（台帳 §2.1。20 MHz で 100 ns）。RAM
-//!   （HM6168H-55）と切替回路で 75 ns かかる（仕様書 §05。余裕 25 ns）。CLKIN を上げて使える時間が
-//!   足りなくなると、間に合わないデータの線は前の語の値のまま取り込まれる。線ごとの遅れの差を
-//!   0〜12 ns に散らし、約 22.9 MHz から 1 本ずつ崩れ、約 24.5 MHz で全部の線が前の語になる [P][V]。
-//!   命令のフェッチと TBLR の両方に効く。基板の発振器（20 MHz）では起きない。
+//! - プログラム RAM の読出しの間に合わなさ（仕様書 §11 のベンド点「DSPの速さ」、DR-066、DR-083）：番地
+//!   からデータまでに使える時間は tc − td1 − tsu − 切替＝tc − 120 ns（台帳 §3.2。20 MHz で 80 ns）。
+//!   HM6168H-55 の tAA は最大 55 ns で、チップ（4 bit ずつ）ごとの速さは `access` の倍率（個体と温度）。
+//!   CLKIN を上げて間に合わなくなったチップの bit は、データバスに前に乗っていた値（前に読んだ語、TBLR の
+//!   語、IN・OUT・TBLW のデータ）のまま取り込まれる [P][V]。命令のフェッチと TBLR の両方に効く。
+//!   基板の発振器（20 MHz）では起きない。
 
+use crate::access::{AccessTime, Path};
 use crate::audio::AudioClock;
+use crate::dram::DramEnv;
 use crate::fifo::Fifo;
 use fc85_chips::tms32010::{self, Tms32010};
-use fc85_core::time::{Clock, PERIOD_DSP, Time, UNITS_PER_SECOND};
+use fc85_core::time::{Clock, PERIOD_DSP, Time};
 use serde::{Deserialize, Serialize};
 
 /// プログラム RAM の語数（4K×16）。
@@ -136,37 +138,18 @@ pub struct DspPort {
     tick_seen: Option<Time>,
     /// DSP のサイクルの数（RESET の間も数える）。
     pub cycles: u64,
-    /// プログラム RAM のデータ線に残っている前の語（間に合わない線はこの値になる）。
+    /// DSP のデータバスに残っている前の値（間に合わない bit はこの値になる）。
     #[serde(default)]
     data_bus: u16,
-    /// 間に合わずに前の語の値で取り込んだ読出しの数。
+    /// 間に合わずに前の値の混じった語を取り込んだ読出しの数。
     #[serde(default)]
     pub late_fetches: u64,
-}
-
-/// ナノ秒を時刻の単位（1/15.12 GHz）に。
-const fn ns(n: Time) -> Time {
-    n * UNITS_PER_SECOND / 1_000_000_000
-}
-/// 番地からデータまでに使えない時間：td1(max)＋tsu(D)＝50＋50 ns（台帳 TMS32010.md §2.1）。
-const FETCH_OVERHEAD: Time = ns(100);
-/// RAM と切替回路の番地からデータまでの時間（仕様書 §05、DR-029）[P]。
-const RAM_ACCESS: Time = ns(75);
-/// 線ごとの遅れの差の最大 [P]。
-const LINE_SKEW: Time = ns(12);
-
-/// 命令サイクル `tc` のとき、間に合わないデータの線（1 が間に合わない）。
-pub fn late_lines(tc: Time) -> u16 {
-    let avail = tc.saturating_sub(FETCH_OVERHEAD);
-    let mut mask = 0;
-    for k in 0..16u16 {
-        // 線 k の遅れ：RAM_ACCESS から最大 LINE_SKEW まで早い。並びは線の番号を 5 倍して散らす
-        let early = LINE_SKEW * Time::from((k * 5) % 16) / 15;
-        if avail < RAM_ACCESS - early {
-            mask |= 1 << k;
-        }
-    }
-    mask
+    /// プログラム RAM の読出しの間に合わない bit（命令サイクルと、個体と温度で決める。DR-083）。
+    #[serde(default)]
+    prog_time: AccessTime,
+    /// プログラム RAM の個体と温度（DR-072 の `dram unit`・`dram temp` と同じ値。通常モードは個体 0・25 °C）。
+    #[serde(default)]
+    env: DramEnv,
 }
 
 impl Default for DspPort {
@@ -192,6 +175,8 @@ impl DspPort {
             cycles: 0,
             data_bus: 0,
             late_fetches: 0,
+            prog_time: AccessTime::default(),
+            env: DramEnv::default(),
         }
     }
 
@@ -204,9 +189,22 @@ impl DspPort {
         self.ctrl = ctrl;
     }
 
-    /// CLKIN の 4 倍の周期（既定は 20 MHz の 4 倍＝200 ns）。
+    /// CLKIN の 4 倍の周期（既定は 20 MHz の 4 倍＝200 ns）。プログラム RAM の読出しの間に合わない bit も
+    /// 決め直す（DR-083）。
     pub fn set_input_period(&mut self, period: Time) {
         self.clk.set_period(period);
+        self.prog_time.set(Path::Prog, period, self.env);
+    }
+
+    /// プログラム RAM の個体と温度（DR-083）。
+    pub fn set_access_env(&mut self, env: DramEnv) {
+        self.env = env;
+        self.prog_time.set(Path::Prog, self.clk.period(), env);
+    }
+
+    /// プログラム RAM の読出しの間に合わなさ（DR-083）。
+    pub fn prog_time(&self) -> &AccessTime {
+        &self.prog_time
     }
 
     pub fn status(&self, input: &Fifo, output: &Fifo) -> DspStatus {
@@ -281,7 +279,7 @@ impl DspPort {
             };
             let mut bus = Bus {
                 prog: &mut self.prog,
-                late: late_lines(self.clk.period()),
+                time: &mut self.prog_time,
                 data_bus: &mut self.data_bus,
                 late_fetches: &mut self.late_fetches,
                 input,
@@ -317,8 +315,8 @@ impl DspPort {
 
 struct Bus<'a> {
     prog: &'a mut [u16],
-    /// 間に合わないデータの線。
-    late: u16,
+    /// プログラム RAM の読出しの間に合わない bit。
+    time: &'a mut AccessTime,
     data_bus: &'a mut u16,
     late_fetches: &'a mut u64,
     input: &'a mut Fifo,
@@ -350,7 +348,8 @@ impl Bus<'_> {
 impl tms32010::Bus for Bus<'_> {
     fn read_program(&mut self, addr: u16) -> u16 {
         let v = self.prog[usize::from(addr) % PROG_WORDS];
-        let got = (v & !self.late) | (*self.data_bus & self.late);
+        let bus = &*self.data_bus;
+        let got = self.time.read(v, || *bus);
         if got != v {
             *self.late_fetches += 1;
         }
@@ -360,16 +359,37 @@ impl tms32010::Bus for Bus<'_> {
     }
 
     fn write_program(&mut self, addr: u16, data: u16) {
+        // DSP がデータバスに出した値が残る（DR-083）
+        *self.data_bus = data;
         let a = addr & 0x0FFF;
         if a < 8 {
             self.io.port_tblw += 1;
-            self.port_out(a as u8, data);
+            self.port_write(a as u8, data);
         } else {
             self.prog[usize::from(a)] = data;
         }
     }
 
     fn port_in(&mut self, port: u8) -> u16 {
+        let v = self.port_value(port);
+        // 周辺がデータバスに出した値が残る（DR-083）
+        *self.data_bus = v;
+        v
+    }
+
+    fn port_out(&mut self, port: u8, data: u16) {
+        *self.data_bus = data;
+        self.port_write(port, data);
+    }
+
+    fn bio_low(&mut self) -> bool {
+        self.bio_low
+    }
+}
+
+impl Bus<'_> {
+    /// IN のポートの値。
+    fn port_value(&mut self, port: u8) -> u16 {
         match port {
             0 => {
                 if self.input.is_empty() {
@@ -391,7 +411,8 @@ impl tms32010::Bus for Bus<'_> {
         }
     }
 
-    fn port_out(&mut self, port: u8, data: u16) {
+    /// OUT のポートへの書込み。
+    fn port_write(&mut self, port: u8, data: u16) {
         match port {
             1 => {
                 if !self.output.shift_in(data) {
@@ -405,9 +426,5 @@ impl tms32010::Bus for Bus<'_> {
             }
             _ => {}
         }
-    }
-
-    fn bio_low(&mut self) -> bool {
-        self.bio_low
     }
 }

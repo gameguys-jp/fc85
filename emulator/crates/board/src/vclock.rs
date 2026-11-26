@@ -28,9 +28,10 @@ use fc85_chips::hd63484::Vram;
 use fc85_core::time::{PERIOD_16M, PERIOD_21M, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
+use crate::access::AccessTime;
 use crate::bend::{Mode, video_period_of};
 use crate::console::System;
-use crate::dram::Dram;
+use crate::dram::{Dram, DramEnv};
 
 /// 行のまとまり（128 行のリフレッシュ）の数。
 pub const GROUPS: usize = 128;
@@ -98,6 +99,8 @@ impl System {
         } else {
             PERIOD_21M
         });
+        // VRAM のアクセス時間（DR-083）：通常モードは個体 0・25 °C
+        a.set_access_env(if on { env } else { DramEnv::default() });
         a.dram.set_env(env);
         self.main_dram.dram.set_env(env);
         self.main_dram.watchdog = !(on && self.bends.refresh_hsync_only);
@@ -247,10 +250,13 @@ fn vram_activate(dram: &mut Dram, mem: &mut [u16], g: usize, t: Time) {
     }
 }
 
-/// 追跡しているときの VRAM：ACRTC の読み書きが行を活性化する。
+/// 追跡しているときの VRAM：ACRTC の読み書きが行を活性化する。アクセス時間が足りなければ、読出しの間に
+/// 合わない bit は 1、書込みの間に合わない bit は前の値のまま（DR-083）。
 pub struct TrackedVram<'a> {
     pub mem: &'a mut [u16],
     pub dram: &'a mut Dram,
+    pub read: &'a mut AccessTime,
+    pub write: &'a mut AccessTime,
     /// この 2CLK の立上りの時刻。
     pub at: Time,
 }
@@ -276,11 +282,16 @@ impl TrackedVram<'_> {
 impl Vram for TrackedVram<'_> {
     fn read(&mut self, addr: u32) -> u16 {
         self.activate_word(addr);
-        self.mem[(addr & 0xFFFF) as usize]
+        // 間に合わない bit：DRAM の Dout は Hi-Z で、MAD の双方向バッファの浮いた入力は 1 [P][V]
+        self.read
+            .read(self.mem[(addr & 0xFFFF) as usize], || 0xFFFF)
     }
     fn write(&mut self, addr: u32, data: u16) {
         self.activate_word(addr);
-        self.mem[(addr & 0xFFFF) as usize] = data;
+        // 間に合わない bit：書きの CAS̄↓＋tRSH がサイクルの終わり（RAS̄↑）に入らず、前の値のまま [P][V]
+        let m = &mut self.mem[(addr & 0xFFFF) as usize];
+        let old = *m;
+        *m = self.write.read(data, || old);
     }
 }
 

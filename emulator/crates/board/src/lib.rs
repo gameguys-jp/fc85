@@ -5,9 +5,11 @@
 //! 次に、ACRTC の DMA（port 1）のつなぎ（`acrtc`）、音声クロックと本体 DAC（`audio`）、ADPCM の
 //! アダプタ（`adpcm`）、DSP のアダプタ（`dsp`）、DOC 子基板と port 2 のアダプタ（`doc`）、音声のアナログの段
 //! （`analog`。段階 4）、DRAM の保持の模型（`dram`。ベンド点）、映像のクロックのベンド点（`vclock`）と
-//! 機械の外のテレビの模型（`tv`）。時刻は core 層の単位で数える。
+//! 機械の外のテレビの模型（`tv`）、クロックを上げすぎたときのメモリのアクセス時間の模型（`access`。
+//! ベンド点、DR-083）。時刻は core 層の単位で数える。
 //! 状態はすべて serde で保存・復元できる（DR-040）。
 
+pub mod access;
 pub mod acrtc;
 pub mod adpcm;
 pub mod analog;

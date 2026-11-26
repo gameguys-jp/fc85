@@ -32,6 +32,7 @@ use fc85_chips::hd63484::Hd63484;
 use fc85_core::time::Time;
 use serde::{Deserialize, Serialize};
 
+use crate::access::AccessTime;
 use crate::acrtc::VramMem;
 
 /// 画面の横（2CLK）。案B の 1 ライン（HC 171×2＝342）を入れる。
@@ -169,8 +170,9 @@ impl Video {
         }
     }
 
-    /// ACRTC の 2CLK の後（`t` はその立上り）：画素を 1 つ出し、ブランキングと割込みを更新する。
-    pub fn tick(&mut self, acrtc: &Hd63484, vram: &VramMem, t: Time) {
+    /// ACRTC の 2CLK の後（`t` はその立上り）：画素を 1 つ出し、ブランキングと割込みを更新する。表示の読出しは
+    /// VRAM の読出しの間に合わない bit（`read`、DR-083）を通す。
+    pub fn tick(&mut self, acrtc: &Hd63484, vram: &VramMem, read: &mut AccessTime, t: Time) {
         let noise = if self.strobes.is_empty() {
             None
         } else {
@@ -232,7 +234,9 @@ impl Video {
             if fetched {
                 if self.group == 0 {
                     // 穴（語を読まない表示サイクル）は 0 の語とする [P]
-                    let value = o.fetch.map_or(0, |a| vram.0[(a & 0xFFFF) as usize]);
+                    let value = o
+                        .fetch
+                        .map_or(0, |a| read.read(vram.0[(a & 0xFFFF) as usize], || 0xFFFF));
                     let due = 4 - ((self.attr >> 8) & 3);
                     if self.loads < 2 {
                         let n = usize::from((self.head + self.loads) & 1);

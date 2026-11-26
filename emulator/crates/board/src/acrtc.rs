@@ -13,6 +13,10 @@
 //!   戻すと戻した時刻から 1 周期後に来る。止めている間も ACRTC の中の状態は保つ [P][V]。
 //! - VRAM の保持（`vclock`、DR-072）：追跡している（Bend モード）ときは、描画の読み書き、表示の読出し、
 //!   リフレッシュが行を活性化し、リフレッシュの間が延びたセルを崩す。
+//! - VRAM のアクセス時間（`access`、DR-083）：映像系のクロックを上げすぎると、読出し（描画、DMA、表示）で
+//!   間に合わないチップの bit は 1（浮いた LS・ALS の入力）、書込みで間に合わないチップの bit は前の値の
+//!   まま [P][V]。読みの CAS̄↓ は中央＋40 ns、書きの CAS̄↓ は中央＋90 ns、RAS̄↓ は始まり＋100 ns、RAS̄↑ は
+//!   サイクルの終わり（review-digital.md §5.1 の範囲から選んだ）[P]。
 //! - Fabric の出力（DACK、R/W、データ）は、アクセスを始めるスロットの頭（P1A のクロック）の 20 ns 後に
 //!   変わる [P]。DACK を戻すのも、P1A のクロックの 20 ns 後。
 //! - ACRTC は、立上りの 40 ns 前の DACK を見る（tDAKS）。DREQ は立上りの 50 ns 後（tDRQD2）、DTACK は
@@ -24,7 +28,8 @@
 //!   DONE の FF を取り込む。アクセスはそのスロットで終わる（Fabric は次のスロットの頭で次を決める）。
 //! - RDY1（Fabric の準備の信号）は、スロットの中ほど（q2 の立上り、MCLK↑）に取り込む 2 段目の DREQ。
 
-use crate::dram::Dram;
+use crate::access::{AccessTime, Path};
+use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
 use crate::vclock::{self, TrackedVram};
 use crate::video::Video;
@@ -127,6 +132,14 @@ pub struct AcrtcBridge {
     /// VRAM の保持の模型（追跡は Bend モードのときだけ）。
     #[serde(default = "vram_dram")]
     pub dram: Dram,
+    /// VRAM の読出しと書込みの間に合わない bit（2CLK の周期と、個体と温度で決める。DR-083）。
+    #[serde(default)]
+    vram_read: AccessTime,
+    #[serde(default)]
+    vram_write: AccessTime,
+    /// VRAM の個体と温度（DR-072 の `dram unit`・`dram temp` と同じ値。通常モードは個体 0・25 °C）。
+    #[serde(default)]
+    access_env: DramEnv,
 }
 
 fn board_21m() -> Time {
@@ -166,6 +179,9 @@ impl AcrtcBridge {
             video: Video::new(),
             period21: PERIOD_21M,
             dram: vram_dram(),
+            vram_read: AccessTime::default(),
+            vram_write: AccessTime::default(),
+            access_env: DramEnv::default(),
         }
     }
 
@@ -186,13 +202,15 @@ impl AcrtcBridge {
         (self.period21 != 0).then(|| 4 * self.period21)
     }
 
-    /// 映像系の 21.47727 MHz の周期を替える（0 で止める）。同じ周期なら何もしない（位相を保つ）。
+    /// 映像系の 21.47727 MHz の周期を替える（0 で止める）。同じ周期なら何もしない（位相を保つ）。VRAM の
+    /// 読み書きの間に合わない bit も決め直す（DR-083）。
     pub fn set_video_period(&mut self, period21: Time) {
         if period21 == self.period21 {
             return;
         }
         let was_running = self.period21 != 0;
         self.period21 = period21;
+        self.set_access_env(self.access_env);
         if period21 == 0 {
             self.clk.set_next(Time::MAX);
             return;
@@ -205,6 +223,19 @@ impl AcrtcBridge {
             self.now + p
         };
         self.clk.set_next(next);
+    }
+
+    /// VRAM の個体と温度（DR-083）。2CLK の周期と合わせて、読み書きの間に合わない bit を決める。
+    pub fn set_access_env(&mut self, env: DramEnv) {
+        self.access_env = env;
+        let p = 4 * self.period21;
+        self.vram_read.set(Path::VramRead, p, env);
+        self.vram_write.set(Path::VramWrite, p, env);
+    }
+
+    /// VRAM の読出しと書込みの間に合わなさ（DR-083）。
+    pub fn vram_time(&self) -> (&AccessTime, &AccessTime) {
+        (&self.vram_read, &self.vram_write)
     }
 
     /// `t` 以降の最初の 2CLK の立上り。止まっていれば `None`。
@@ -305,25 +336,28 @@ impl AcrtcBridge {
         };
         let dack = self.dack.value(e.saturating_sub(T_DAKS));
         self.acrtc.set_dack(dack, self.bus_write, self.bus_data);
-        if self.dram.tracking() {
+        if self.dram.tracking() || self.vram_read.bits() | self.vram_write.bits() != 0 {
             self.tick_tracked(e);
         } else {
             self.acrtc.tick(&mut self.vram);
         }
-        self.video.tick(&self.acrtc, &self.vram, e);
+        self.video
+            .tick(&self.acrtc, &self.vram, &mut self.vram_read, e);
         self.dreq.set(self.acrtc.dreq(), e + T_DRQD);
         self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL);
         self.done.set(self.acrtc.done(), e + T_DND);
     }
 
-    /// VRAM の保持を追跡しているときの 2CLK：描画の読み書き、リフレッシュ、表示の読出しの順に行を活性化する
-    /// （表示の語は出力段が読む前に）。
+    /// VRAM の保持を追跡しているか、アクセス時間が足りないときの 2CLK：描画の読み書き、リフレッシュ、表示の
+    /// 読出しの順に行を活性化する（表示の語は出力段が読む前に）。描画の読み書きは間に合わない bit を崩す。
     #[cold]
     #[inline(never)]
     fn tick_tracked(&mut self, e: Time) {
         let mut v = TrackedVram {
             mem: &mut self.vram.0,
             dram: &mut self.dram,
+            read: &mut self.vram_read,
+            write: &mut self.vram_write,
             at: e,
         };
         self.acrtc.tick(&mut v);
