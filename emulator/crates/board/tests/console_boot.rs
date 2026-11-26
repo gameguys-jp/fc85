@@ -134,6 +134,44 @@ fn the_sample_cartridge_starts_and_plays_adpcm() {
 }
 
 #[test]
+fn an_unclaimed_doc_interrupt_does_not_halt_the_bios() {
+    // DR-076：DOC の割込みには基板の許可がない。ベンドで崩れたレジスタ（DR-074）や線（DR-073）が IE を
+    // 立てても、BIOS の既定の処理が要求を取り（DOC が遅すぎればマスクを上げ）、VBlank を数え続ける
+    let frame_at = |c: &Console| {
+        let i = 0x600; // bios_frame（$100600）
+        u32::from_be_bytes(c.sys.main_ram[i..i + 4].try_into().unwrap())
+    };
+    let spurious = |c: &Console| u16::from_be_bytes([c.sys.main_ram[0x658], c.sys.main_ram[0x659]]);
+    // docbus A0=1 は起動から：BIOS のレジスタの書込みが奇数のオシレータに入り、IE が立つ
+    for (bend, warm) in [("clock doc 10e3", 120), ("docbus A0=1", 0)] {
+        let Some(mut c) = boot(true) else {
+            eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+            return;
+        };
+        // 起動の音を鳴らし終えてから入れる。DOC の CLK が約 1.1 MHz より遅いと、68000 の DOC への
+        // アクセスはバスの時間切れ（DR-052）になるので、BIOS が音を鳴らす間は止まる（OI-076）
+        for _ in 0..warm {
+            c.run_frame();
+        }
+        c.sys.bend(bend).unwrap();
+        c.sys.bend("mode bend").unwrap();
+        for _ in 0..60 {
+            c.run_frame();
+        }
+        let f = frame_at(&c);
+        for _ in 0..20 {
+            c.run_frame();
+        }
+        assert!(
+            frame_at(&c) >= f + 19,
+            "{bend}：BIOS が止まった（PC {:06X}）",
+            c.cpu.pc
+        );
+        assert!(spurious(&c) > 0, "{bend}：DOC の割込みが来ていない");
+    }
+}
+
+#[test]
 fn the_patch_cartridge_runs_every_page() {
     // sdk/samples/patches の SAMPLE 3：仕様書 §11 の実験パッチを、ACRTC の DMA（port 1）、Data Fabric、
     // DOC の波形 RAM、ADPCM、文字 ROM（port 9）、Temporal RAM でつなぐ（sdk/samples/patches/README.md）

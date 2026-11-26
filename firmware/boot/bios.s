@@ -99,6 +99,7 @@ fill_jump_table:
         MOVE.L  #irq_input,JUMP_TABLE+(VEC_AUTO1-1+IRQ_INPUT)*6+2
         MOVE.L  #irq_acia,JUMP_TABLE+(VEC_AUTO1-1+IRQ_ACIA)*6+2
         MOVE.L  #irq_video,JUMP_TABLE+(VEC_AUTO1-1+IRQ_VIDEO)*6+2
+        MOVE.L  #irq_doc,JUMP_TABLE+(VEC_AUTO1-1+IRQ_DOC)*6+2
         MOVE.L  #irq_count,JUMP_TABLE+(VEC_AUTO1+6)*6+2
         RTS
 
@@ -219,6 +220,36 @@ irq_input:
         OR.W    D0,bios_input_status
         ADDQ.W  #1,bios_input_events
         MOVE.W  (SP)+,D0
+        RTE
+
+; レベル 4：DOC。アプリが項目を書いていないときの既定（DR-076）。DOC の割込みには基板の許可がなく、
+; ベンドで崩れたレジスタ（DR-074）や線（DR-073）が IE を立てると要求が来る。要求を 1 つ取り、その
+; オシレータの IE を落として数える。DOC が遅すぎて応えない（バスの時間切れ）ときは、戻る先の割込みの
+; マスクを 4 以上にする（レベル 5・6 はそのまま受ける）。
+irq_doc:
+        MOVEM.L D0-D1/A0,-(SP)
+        ADDQ.W  #1,bios_spurious
+        MOVE.L  JUMP_TABLE+VEC_BUS_ERROR*6+2,-(SP)
+        MOVE.L  #.berr,JUMP_TABLE+VEC_BUS_ERROR*6+2
+        MOVE.B  DOC_IRQ,D0              ; bit 7＝0 で要求あり。bit 5–1 がオシレータの番号
+        BMI.S   .done
+        ANDI.W  #$003E,D0               ; 番号×2＝レジスタの番地の差（DOC_OSC_STRIDE）
+        LEA     DOC_CONTROL,A0
+        MOVE.B  0(A0,D0.W),D1
+        ANDI.B  #$FF-DOC_CTL_IE,D1
+        MOVE.B  D1,0(A0,D0.W)
+.done   MOVE.L  (SP)+,JUMP_TABLE+VEC_BUS_ERROR*6+2
+        MOVEM.L (SP)+,D0-D1/A0
+        RTE
+.berr   LEA     14(SP),SP               ; バスエラーの 7 語を捨てる
+        MOVE.L  (SP)+,JUMP_TABLE+VEC_BUS_ERROR*6+2
+        MOVE.W  12(SP),D0               ; 戻る先の SR（D0–D1/A0 の 12 byte の上）
+        ANDI.W  #$0700,D0
+        CMPI.W  #$0400,D0
+        BHS.S   .keep
+        ANDI.W  #$F8FF,12(SP)
+        ORI.W   #$0400,12(SP)
+.keep   MOVEM.L (SP)+,D0-D1/A0
         RTE
 
 ; スプリアス割込みとレベル 7（予約）：数えるだけ。
