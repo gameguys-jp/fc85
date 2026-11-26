@@ -51,10 +51,10 @@ pub const VIRQ_VBLANK: u16 = 0x8000;
 /// 属性の BLINK1（MA18。U85 p.55）。
 const ATTR_BLINK1: u32 = 1 << 18;
 
-/// 表示の語を、シフトレジスタに入れるまで持つ。`due` が 0 なら空。
+/// 表示の語を、シフトレジスタに入れるまで持つ。`at` は入れる 2CLK（`Video::clock` の値）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Load {
-    due: u8,
+    at: u32,
     value: u16,
 }
 
@@ -85,11 +85,16 @@ pub struct Video {
     /// 今の画素の残りのドット（横のズーム）。
     #[serde(default)]
     sub: u8,
-    /// 読んだ表示の語の、シフトレジスタに入れるまでの列と、その数。
+    /// 読んだ表示の語の、シフトレジスタに入れるまでの列（2 つの輪）と、その頭と数。`clock` は表示が動いている
+    /// 間の 2CLK の数。
     #[serde(default)]
     pipe: [Load; 2],
     #[serde(default)]
+    head: u8,
+    #[serde(default)]
     loads: u8,
+    #[serde(default)]
+    clock: u32,
     /// 次にシフトレジスタに入れる語までの表示サイクルの数（横のズーム）。
     #[serde(default)]
     group: u8,
@@ -132,7 +137,9 @@ impl Video {
             left: 0,
             sub: 0,
             pipe: [Load::default(); 2],
+            head: 0,
             loads: 0,
+            clock: 0,
             group: 0,
             attr: 0,
             strobes: Vec::new(),
@@ -164,58 +171,63 @@ impl Video {
         let (dot, raster) = acrtc.beam();
         let o = acrtc.display_out();
         self.raster = raster;
-        if dot == 0 {
-            self.hsync_at = t;
-            self.group = 0;
-            if raster == 0 {
-                self.frames += 1;
+        self.clock = self.clock.wrapping_add(1);
+        if dot < 16 {
+            if dot == 0 {
+                self.hsync_at = t;
+                self.group = 0;
+                if raster == 0 {
+                    self.frames += 1;
+                }
             }
-        }
-        if dot < 16 && !self.direct {
-            // 写し：HSYNC の始まりから 2CLK に 1 語ずつ [P]
-            self.front[usize::from(dot)] = self.back[usize::from(dot)];
+            if !self.direct {
+                // 写し：HSYNC の始まりから 2CLK に 1 語ずつ [P]
+                self.front[usize::from(dot)] = self.back[usize::from(dot)];
+            }
         }
         if let Some(a) = o.attr {
             self.attr = a;
         }
-        let zoom = ((self.attr >> 12) & 15) as u8 + 1;
-        if self.loads > 0 {
-            for l in &mut self.pipe {
-                if l.due > 0 {
-                    l.due -= 1;
-                    if l.due == 0 {
-                        self.shift = l.value;
-                        self.left = 4;
-                        self.sub = zoom;
-                        self.loads -= 1;
+        let fetched = o.fetch.is_some() || o.hole;
+        let mut index = 0;
+        if self.left | self.loads != 0 || fetched {
+            let zoom = ((self.attr >> 12) & 15) as u8 + 1;
+            if self.loads > 0 {
+                let l = self.pipe[usize::from(self.head)];
+                if l.at == self.clock {
+                    self.shift = l.value;
+                    self.left = 4;
+                    self.sub = zoom;
+                    self.head ^= 1;
+                    self.loads -= 1;
+                }
+            }
+            if self.left > 0 {
+                index = self.shift & 15;
+                self.sub = self.sub.saturating_sub(1);
+                if self.sub == 0 {
+                    self.shift >>= 4;
+                    self.left -= 1;
+                    self.sub = zoom;
+                }
+            }
+            if fetched {
+                if self.group == 0 {
+                    // 穴（語を読まない表示サイクル）は 0 の語とする [P]
+                    let value = o.fetch.map_or(0, |a| vram.0[(a & 0xFFFF) as usize]);
+                    let due = 4 - ((self.attr >> 8) & 3);
+                    if self.loads < 2 {
+                        let n = usize::from((self.head + self.loads) & 1);
+                        self.pipe[n] = Load {
+                            at: self.clock.wrapping_add(due),
+                            value,
+                        };
+                        self.loads += 1;
                     }
+                    self.group = zoom - 1;
+                } else {
+                    self.group -= 1;
                 }
-            }
-        }
-        let index = if self.left > 0 {
-            let i = self.shift & 15;
-            self.sub = self.sub.saturating_sub(1);
-            if self.sub == 0 {
-                self.shift >>= 4;
-                self.left -= 1;
-                self.sub = zoom;
-            }
-            i
-        } else {
-            0
-        };
-        if o.fetch.is_some() || o.hole {
-            if self.group == 0 {
-                // 穴（語を読まない表示サイクル）は 0 の語とする [P]
-                let value = o.fetch.map_or(0, |a| vram.0[(a & 0xFFFF) as usize]);
-                let due = 4 - ((self.attr >> 8) & 3) as u8;
-                if let Some(l) = self.pipe.iter_mut().find(|l| l.due == 0) {
-                    *l = Load { due, value };
-                    self.loads += 1;
-                }
-                self.group = zoom - 1;
-            } else {
-                self.group -= 1;
             }
         }
         let color = if o.disp1 || o.disp2 {

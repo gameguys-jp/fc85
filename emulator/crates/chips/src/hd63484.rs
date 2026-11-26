@@ -1299,14 +1299,12 @@ impl Hd63484 {
         // DISP（DSK だけ遅らせる。U85 p.71）。DSP＝0：DISP1 は背景、DISP2 はウィンドウの表示期間。
         // DSP＝1：DISP1 は両方の横、DISP2 は両方の縦の表示期間（U85 p.76）
         let x = dot.wrapping_sub(p.dsk);
-        let hb = x >= p.h_start && x < p.h_end;
-        let hw = x >= p.w_start && x < p.w_end;
         if p.dsp {
-            out.disp1 = hb || hw;
+            out.disp1 = (x >= p.h_start && x < p.h_end) || (x >= p.w_start && x < p.w_end);
             out.disp2 = p.bg == 2 || p.win == 2;
         } else {
-            out.disp1 = p.bg == 2 && hb;
-            out.disp2 = p.win == 2 && hw;
+            out.disp1 = p.bg == 2 && x >= p.h_start && x < p.h_end;
+            out.disp2 = p.win == 2 && x >= p.w_start && x < p.w_end;
         }
         out.cud1 = dot >= p.cud1.0 && dot < p.cud1.1;
         out.cud2 = dot >= p.cud2.0 && dot < p.cud2.1;
