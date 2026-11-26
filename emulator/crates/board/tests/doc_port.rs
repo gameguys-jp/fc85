@@ -266,7 +266,8 @@ fn the_doc_plays_what_the_fabric_wrote() {
         r.step();
         if r.p.doc_board.cycles != cycles {
             cycles = r.p.doc_board.cycles;
-            if let Some(o) = r.p.doc_board.last_osc {
+            // リセットの後の走査は 22 番から 31 番を回ってから 0 番に来る（台帳 ES5503 追補 2026-11-26）
+            if let Some(o) = r.p.doc_board.last_osc.filter(|o| o.n == 0) {
                 assert_eq!(o.addr >> 8, 0x30);
                 assert_eq!(o.wave, (o.addr & 0xFF) as u8 % 255 + 1, "{o:?}");
                 reads += 1;

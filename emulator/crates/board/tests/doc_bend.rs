@@ -112,7 +112,10 @@ fn the_doc_reads_through_the_bent_lines() {
             continue;
         }
         cycles = b.cycles;
-        let o = b.last_osc.unwrap();
+        // リセットの後の走査は 22 番から 31 番を回ってから 0 番に来る（台帳 ES5503 追補 2026-11-26）
+        let Some(o) = b.last_osc.filter(|o| o.n == 0) else {
+            continue;
+        };
         assert_eq!(o.addr >> 8, 0x30, "DOC の中の番地は頁 0x30");
         let c = o.addr as usize & 0xFE;
         let c = (c & !6) | ((c >> 1) & 2) | ((c << 1) & 4);

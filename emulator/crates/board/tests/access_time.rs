@@ -209,7 +209,11 @@ fn an_overclocked_doc_reads_the_high_address_byte() {
     play(&mut p, 0xFF);
     for k in 0..400 {
         p.run_slot(k * SLOT, None);
-        let v = p.last_osc.map_or(0x80, |o| o.wave);
+        // リセットの後の走査は 22 番から 31 番を回ってから 0 番に来る（台帳 ES5503 追補 2026-11-26）
+        let Some(v) = p.last_osc.filter(|o| o.n == 0).map(|o| o.wave) else {
+            assert!(k < 100, "0 番に来ない");
+            continue;
+        };
         assert_eq!(
             v & !marg as u8,
             (0x80 | fail as u8) & !marg as u8,

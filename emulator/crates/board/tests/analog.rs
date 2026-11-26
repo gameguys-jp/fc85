@@ -338,6 +338,12 @@ fn doc_system(wave: u8, vol: u8, control: u8) -> System {
     s.ports.doc = true;
     set_wave(&mut s, wave);
     let doc = &mut s.ports.doc_board.doc;
+    // BIOS と同じく、ほかのオシレータは止めて音量 0、チャンネル 15 に置く（firmware/boot/sound.s）。
+    // リセットの後の走査は 22 番から 31 番を回ってから 0 番に来る（台帳 ES5503 追補 2026-11-26）
+    for n in 1..32 {
+        doc.write(0xA0 + n, 0xF1);
+        doc.write(0x40 + n, 0);
+    }
     for (reg, v) in [
         (0x00, 0x00),
         (0x20, 0x00),

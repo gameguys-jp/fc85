@@ -15,12 +15,13 @@
 //! - オシレータのレジスタはダイナミックで、走査で訪れたときに書き戻される（E2 p.15。台帳 §3.1・§4.7）。
 //!   訪れない間が保持時間を超えたビットは 1 になる。保持時間はビットごとに分布から決める [P][V]
 //!   （`REG_T_MIN_S` ほか）。時刻は core 層の単位で、`tick` ごとに E の周期（`set_cycle_time`）だけ進む。
-//!   全体のレジスタ（0xE0〜0xE2）と割込みのテーブルは崩れない [P]。
+//!   全体のレジスタ（0xE0〜0xE2）と割込みの提示は崩れない [P]。オシレータごとの見えないビット（前の訪問の
+//!   停止と、割込みの要求）は、制御のレジスタと一緒に崩れて 1 になる（MAME v3）[V]。
+//! - 停止・スワップ・割込みの細部は、MAME v3（IIGS の実機の測定に基づく）と V3 で突き合わせた
+//!   （`docs/impl/v3-mame.md`）。データシートと違うところは台帳の追補（2026-11-26）に書いた。
 //! - 走査の最後の 2 サイクルで、波形 RAM の行を 1 つずつリフレッシュする（`WaveBus::refresh`。E2 p.1）。
 //!   行のカウンタは 8 bit で、リフレッシュのサイクルごとに 1 進む [P][V]。
 //! - 資料で決まらない動作は、`docs/impl/emulator.md` §03 にどう扱ったかを書く。
-
-use std::collections::VecDeque;
 
 use fc85_core::time::{PERIOD_DOC_E, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
@@ -53,8 +54,9 @@ const R_CTRL: usize = 5;
 const R_SIZE: usize = 6;
 const R_ACC: usize = 7;
 const REGS: usize = 8;
-/// レジスタのビットの数（SIZE の bit 7 はない。アキュムレータは 24 bit）。
-const REG_BITS: [u32; REGS] = [8, 8, 8, 8, 8, 8, 7, 24];
+/// レジスタのビットの数（SIZE の bit 7 はない。アキュムレータは 24 bit）。制御は、外から見えない
+/// 2 つのビット（前の訪問の停止ビットと、割込みの要求）を bit 8・9 として一緒に扱う。
+const REG_BITS: [u32; REGS] = [8, 8, 8, 8, 8, 10, 7, 24];
 
 /// 波形 RAM（64K×1 の DRAM）。board 層（またはテスト）が実装する。
 pub trait WaveBus {
@@ -100,10 +102,16 @@ struct Osc {
     size: u8,
     /// 24 bit のアキュムレータ。
     acc: u32,
+    /// 前の訪問のときの停止ビット（MAME v3）。
+    #[serde(default)]
+    prevhalt: bool,
+    /// 割込みの要求（IE＝1 で完了した。MAME v3）。
+    #[serde(default)]
+    irqpend: bool,
 }
 
 impl Osc {
-    /// 消えたレジスタ。全ビット 1（MAME の解釈）[V]。
+    /// 消えたレジスタ。全ビット 1（MAME の解釈。見えないビットも 1）[V]。
     const DECAYED: Osc = Osc {
         freq: 0xFFFF,
         vol: 0xFF,
@@ -112,6 +120,8 @@ impl Osc {
         control: 0xFF,
         size: 0x7F,
         acc: 0x00FF_FFFF,
+        prevhalt: true,
+        irqpend: true,
     };
 
     /// レジスタ `r` のビット `mask` を 1 にする（崩れたビット）。
@@ -122,7 +132,11 @@ impl Osc {
             R_VOL => self.vol |= mask as u8,
             R_DATA => self.data |= mask as u8,
             R_PTR => self.ptr |= mask as u8,
-            R_CTRL => self.control |= mask as u8,
+            R_CTRL => {
+                self.control |= mask as u8;
+                self.prevhalt |= mask & 0x100 != 0;
+                self.irqpend |= mask & 0x200 != 0;
+            }
             R_SIZE => self.size |= mask as u8 & 0x7F,
             R_ACC => self.acc |= mask & 0x00FF_FFFF,
             _ => {}
@@ -158,24 +172,33 @@ impl Osc {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-enum Next {
-    Off,
-    Osc(u8),
-    Refresh(u8),
-}
+/// リフレッシュの 2 スロットの間、走査のカウンタがいる値（21 と 22）。リセットの後も 21 にいる。
+/// MAME v3（IIGS の DOCGRADE の測定に基づく。台帳 追補 2026-11-26）[V]。
+const IDLE_SCAN: u8 = 21;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Es5503 {
     osc: [Osc; OSCILLATORS],
     /// 有効なオシレータの数 N（1〜32）。
     enabled: u8,
-    next: Next,
-    /// 割込みテーブル：IE＝0 で完了したオシレータ（E1 p.7）。
-    table: u32,
-    /// OIR に渡った要求。先頭が OIR に見えている（先入れ先出し、E1 p.7）。
-    stack: VecDeque<u8>,
-    last_irq: u8,
+    /// 走査のカウンタ（最後に訪れたオシレータ。リフレッシュの間は `IDLE_SCAN` と次の値）。
+    #[serde(default = "default_idle_scan")]
+    scan: u8,
+    /// リフレッシュの何スロット目に入るか（0 は走査中、1・2 はリフレッシュ）。
+    #[serde(default = "default_one")]
+    idle: u8,
+    /// リセットの後、0xE1 に書くまで走査しない（MAME の解釈）。
+    #[serde(default = "default_true")]
+    scan_off: bool,
+    /// OIR が示すオシレータ（最後に提示した要求）。
+    #[serde(default)]
+    rege0: u8,
+    /// 割込みを提示している（IRQ̄ が Low）。要求は 1 件ずつ提示する（MAME v3）。
+    #[serde(default)]
+    irq_active: bool,
+    /// 提示した DOC サイクルの時刻。同じサイクルのうちに 0xE0 を読んでも、要求は消えない（MAME v3）。
+    #[serde(default)]
+    present_at: Time,
     sig: i32,
     reset_low: bool,
     adc: u8,
@@ -211,6 +234,12 @@ pub struct Es5503 {
 
 fn default_cycle_time() -> Time {
     PERIOD_DOC_E
+}
+fn default_idle_scan() -> u8 {
+    IDLE_SCAN
+}
+fn default_one() -> u8 {
+    1
 }
 fn default_true() -> bool {
     true
@@ -251,10 +280,12 @@ impl Es5503 {
         Self {
             osc: [Osc::DECAYED; OSCILLATORS],
             enabled: 1,
-            next: Next::Off,
-            table: 0,
-            stack: VecDeque::new(),
-            last_irq: 0,
+            scan: IDLE_SCAN,
+            idle: 1,
+            scan_off: true,
+            rege0: 0,
+            irq_active: false,
+            present_at: 0,
             sig: 0,
             reset_low: false,
             adc: 0,
@@ -275,13 +306,17 @@ impl Es5503 {
     // ---- ピン ----
 
     /// RES ピン。`low` が true でリセット。有効数を 1 にし、割込みの要求を消し、走査を止める。
+    /// 走査のカウンタは 21 で、リフレッシュの 1 スロット目と同じ状態になる（MAME v3）[V]。
     /// オシレータのレジスタは変えない（MAME の解釈。走査されないので、やがて消える）[V]。
     pub fn set_reset(&mut self, low: bool) {
         if low {
             self.enabled = 1;
-            self.next = Next::Off;
-            self.table = 0;
-            self.stack.clear();
+            self.scan = IDLE_SCAN;
+            self.idle = 1;
+            self.scan_off = true;
+            // 提示をやめる。オシレータごとの要求は残る（MAME v3）[V]
+            self.irq_active = false;
+            self.present_at = 0;
             self.sig = 0;
             self.adc_busy = 0;
         }
@@ -338,13 +373,19 @@ impl Es5503 {
                     _ => o.size | 0x80,
                 }
             }
-            0xE0 => match self.stack.pop_front() {
-                Some(n) => {
-                    self.last_irq = n;
-                    0x41 | (n << 1)
+            // OIR：bit7 は割込みの提示がないとき 1、bit5–1 は最後に提示したオシレータ（E1 p.7）。
+            // 読むと提示した要求を消す。ただし提示した DOC サイクルのうちに読んだときは残る（MAME v3）[V]
+            0xE0 => {
+                let v = 0x41 | (self.rege0 << 1);
+                if !self.irq_active {
+                    return v | 0x80;
                 }
-                None => 0xC1 | (self.last_irq << 1),
-            },
+                if self.present_at != self.now {
+                    self.osc[usize::from(self.rege0)].irqpend = false;
+                    self.irq_active = false;
+                }
+                v
+            }
             0xE1 => 0xC1 | ((self.enabled - 1) << 1),
             0xE2 => {
                 // 変換中に読むと値は失われ、変換をやり直す（E1 p.10）。前の値を返す [V]。
@@ -371,12 +412,10 @@ impl Es5503 {
                     0x60 => return,
                     0x80 => o.ptr = value,
                     0xA0 => {
+                        // CPU が止めても割込みは立たず、スワップの相手も動かない。頭に戻すのは走査の仕事。
+                        // 書くと、まだ提示していない要求を消す（MAME v3）[V]
                         o.control = value;
-                        // IE を 1 にすると、テーブルに残っていた要求が OIR へ渡る（E1 p.7）
-                        if o.ie() && self.table & (1 << i) != 0 {
-                            self.table &= !(1 << i);
-                            self.stack.push_back(i as u8);
-                        }
+                        o.irqpend = false;
                     }
                     _ => o.size = value & 0x7F,
                 }
@@ -385,8 +424,11 @@ impl Es5503 {
             }
             0xE1 => {
                 self.enabled = ((value >> 1) & 0x1F) + 1;
-                if self.next == Next::Off && !self.reset_low {
-                    self.next = Next::Osc(0);
+                // リフレッシュのスロットの間に書くと、残りのリフレッシュをやめ、カウンタのいる値から
+                // 走査を続ける。リセットの後は 22 番から走査を始める（MAME v3）[V]
+                self.idle = 0;
+                if !self.reset_low {
+                    self.scan_off = false;
                 }
             }
             _ => {}
@@ -401,7 +443,7 @@ impl Es5503 {
     }
     /// IRQ ピンが Low か。
     pub fn irq(&self) -> bool {
-        !self.stack.is_empty()
+        self.irq_active
     }
     pub fn accumulator(&self, n: usize) -> u32 {
         self.osc[n].acc
@@ -432,36 +474,31 @@ impl Es5503 {
                 self.adc = self.adc_input;
             }
         }
-        let (slot, channel, strobe) = match self.next {
-            _ if self.reset_low => {
-                self.sig = 0;
-                (Slot::Stopped, 0x0F, false)
-            }
-            Next::Off => {
-                self.sig = 0;
-                (Slot::Stopped, 0x0F, false)
-            }
-            Next::Refresh(k) => {
-                self.next = if k == 0 {
-                    Next::Refresh(1)
-                } else {
-                    Next::Osc(0)
-                };
-                bus.refresh(self.refresh_row);
-                self.refresh_row = self.refresh_row.wrapping_add(1);
-                (Slot::Refresh, 0x0F, false)
-            }
-            Next::Osc(n) => {
-                let (addr, wave) = self.visit(usize::from(n), bus);
-                // 走査の終わりは等値比較。すでに終点を過ぎていれば 31 まで回る（台帳 §6）
-                self.next = if n + 1 == self.enabled {
-                    Next::Refresh(0)
-                } else {
-                    Next::Osc((n + 1) & 0x1F)
-                };
-                let ch = self.osc[usize::from(n)].control >> 4;
-                (Slot::Osc { n, addr, wave }, ch, true)
-            }
+        // 走査：最後のオシレータの次の 2 スロットがリフレッシュで、その間カウンタは 21・22 にいる。
+        // 終わりは、そのスロットの初めに、カウンタと N−1 の等値比較で決める（すでに過ぎていれば 31 まで
+        // 回る。台帳 §6）
+        let (slot, channel, strobe) = if self.reset_low || self.scan_off {
+            self.sig = 0;
+            (Slot::Stopped, 0x0F, false)
+        } else if self.idle == 1 {
+            self.idle = 2;
+            self.scan = IDLE_SCAN + 1;
+            self.refresh_slot(bus)
+        } else if self.idle == 0 && self.scan == self.enabled - 1 {
+            self.idle = 1;
+            self.scan = IDLE_SCAN;
+            self.refresh_slot(bus)
+        } else {
+            let n = if self.idle == 2 {
+                0
+            } else {
+                (self.scan + 1) & 0x1F
+            };
+            self.idle = 0;
+            self.scan = n;
+            let (addr, wave) = self.visit(usize::from(n), bus);
+            let ch = self.osc[usize::from(n)].control >> 4;
+            (Slot::Osc { n, addr, wave }, ch, true)
         };
         Tick {
             slot,
@@ -473,6 +510,13 @@ impl Es5503 {
     }
 
     // ---- 内部 ----
+
+    /// リフレッシュのスロット。波形 RAM の行を 1 つ活性化する。SIG± は前のスロットの値を保つ。
+    fn refresh_slot(&mut self, bus: &mut impl WaveBus) -> (Slot, u8, bool) {
+        bus.refresh(self.refresh_row);
+        self.refresh_row = self.refresh_row.wrapping_add(1);
+        (Slot::Refresh, 0x0F, false)
+    }
 
     /// レジスタの番地（0x00〜0xDF）から、オシレータの中のレジスタの番号。
     fn reg_index(reg: u8) -> usize {
@@ -514,7 +558,8 @@ impl Es5503 {
         self.osc[i].set_bits(r, mask);
     }
 
-    /// オシレータを 1 つ訪れる（台帳 §4.2〜§4.4）。読んだ番地と値を返し、SIG± を決める。
+    /// オシレータを 1 つ訪れる（台帳 §4.2〜§4.4、追補 2026-11-26）。読んだ番地と値を返し、SIG± を決める。
+    /// 停止・スワップ・割込みの細部は、IIGS の実機の測定に基づく MAME v3 の動作に合わせた [V]。
     fn visit(&mut self, i: usize, bus: &mut impl WaveBus) -> (u32, u8) {
         // 前に訪れてから選別の最短を過ぎていれば、レジスタを崩してから使う。訪れると全部を書き戻す
         if self.now.saturating_sub(self.visited[i]) >= self.safe {
@@ -523,14 +568,19 @@ impl Es5503 {
             }
         }
         self.visited[i] = self.now;
-        let before = self.osc[i];
         let even = i & 1 == 0;
         let partner = i ^ 1;
+        let was_halted = self.osc[i].halted();
+        let mode = self.osc[i].mode();
+        let p = &self.osc[partner];
+        let partner_swapped = p.halted() && p.mode() == MODE_SWAP;
 
-        // M0＝1 かつ H＝1 なら、アキュムレータを 0 にする（E1 p.8）
-        if before.halted() && before.mode() & 1 == 1 {
+        // ワンショットとスワップ（M0＝1）は、止まっているのを見つけた次の訪問で頭に戻る（1 訪問遅れる）。
+        // CPU がこのモードで動かすと頭から始まり、フリーランと同期は止まったところから続く（MAME v3）[V]
+        if self.osc[i].prevhalt && mode & 1 == 1 {
             self.osc[i].acc = 0;
         }
+        self.osc[i].prevhalt = was_halted;
         // 止まっているオシレータも読む（MAME）
         let addr = self.osc[i].address();
         let wave = bus.read_wave(addr);
@@ -540,9 +590,8 @@ impl Es5503 {
         }
 
         let mut sig = 0;
-        let ended;
-        if !before.halted() {
-            let mode = before.mode();
+        let mut ended = false;
+        if !was_halted {
             if wave != 0 {
                 if mode == MODE_SYNC_AM && !even {
                     // AM：奇数番は鳴らさず、上の偶数番の音量を波形値で上書きする（E1 p.8、MAME）
@@ -553,8 +602,8 @@ impl Es5503 {
                     sig = i32::from((wave ^ 0x80) as i8) * i32::from(self.osc[i].vol);
                 }
             }
-            let top = before.top();
-            let acc = (self.osc[i].acc & (top - 1)) + u32::from(before.freq);
+            let top = self.osc[i].top();
+            let acc = (self.osc[i].acc & (top - 1)) + u32::from(self.osc[i].freq);
             self.osc[i].acc = acc;
             if wave == 0 {
                 self.osc[i].control |= 1;
@@ -563,39 +612,43 @@ impl Es5503 {
                 self.osc[i].acc = acc & (top - 1);
                 ended = true;
                 match mode {
-                    MODE_ONESHOT | MODE_SWAP => self.osc[i].control |= 1,
-                    // 同期：偶数番がテーブルの頭に戻ると、上の奇数番も頭に戻す（E1 p.8）
-                    MODE_SYNC_AM if even => self.osc[partner].acc = 0,
+                    // ワンショット：組の奇数番がスワップで止まっていれば、偶数番は止まらずに続ける（MAME v3）[V]
+                    MODE_ONESHOT if !even || !partner_swapped => self.osc[i].control |= 1,
+                    // 同期：偶数番がテーブルの頭に戻ると、自分と上の奇数番を頭から始める（E1 p.8、MAME v3）
+                    MODE_SYNC_AM if even => {
+                        self.osc[i].acc = 0;
+                        self.osc[partner].acc = 0;
+                    }
+                    MODE_SWAP => self.osc[i].control |= 1,
                     _ => {}
                 }
-            } else {
-                ended = false;
             }
         } else {
             // 0 で止まったオシレータは、訪れるたびに 0 を見つける（MAME）
             ended = wave == 0;
+            // 組の奇数番がスワップで止まっていれば、止まっている偶数番は動き出す（MAME v3）[V]
+            if even && partner_swapped && wave != 0 {
+                self.osc[i].control &= !1;
+            }
         }
 
         if ended {
-            self.request_irq(i as u8);
-            // スワップ：自分が止まったら、組の相手の停止を解く（E1 p.8）。偶数番・奇数番とも [V]
-            if before.mode() == MODE_SWAP && !before.halted() && self.osc[i].halted() {
+            // 割込みの要求は IE＝1 のときだけ立つ（MAME v3。E1 p.7 のテーブルとは違う。追補 2026-11-26）[V]
+            if self.osc[i].ie() {
+                self.osc[i].irqpend = true;
+            }
+            // スワップ：偶数番が止まって終わると、組の奇数番を止まったところから動かす（E1 p.8、MAME v3）[V]
+            if even && mode == MODE_SWAP && self.osc[i].halted() {
                 self.osc[partner].control &= !1;
             }
         }
+        // 要求は 1 件ずつ、走査の順に提示し、0xE0 を読むまで保つ（MAME v3）[V]
+        if self.osc[i].irqpend && !self.irq_active {
+            self.rege0 = i as u8;
+            self.irq_active = true;
+            self.present_at = self.now;
+        }
         self.sig = sig;
         (addr, wave)
-    }
-
-    fn request_irq(&mut self, n: u8) {
-        if self.stack.contains(&n) {
-            return;
-        }
-        if self.osc[usize::from(n)].ie() {
-            self.table &= !(1 << n);
-            self.stack.push_back(n);
-        } else {
-            self.table |= 1 << n;
-        }
     }
 }

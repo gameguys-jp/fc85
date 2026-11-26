@@ -48,10 +48,16 @@ fn boot(n: u8) -> (Es5503, Ram) {
         doc.write(0xA0 + i, ONESHOT | HALT);
     }
     doc.write(0xE1, (n - 1) * 2);
-    for _ in 0..(u32::from(n) + 2) {
-        doc.tick(&mut ram);
+    // リセットの後の走査は 22 番から始まる。リフレッシュの 2 サイクルを過ぎ、次が 0 番になるまで進める
+    let mut prev = Slot::Stopped;
+    for _ in 0..100 {
+        let s = doc.tick(&mut ram).slot;
+        if prev == Slot::Refresh && s == Slot::Refresh {
+            return (doc, ram);
+        }
+        prev = s;
     }
-    (doc, ram)
+    panic!("リフレッシュに来ない");
 }
 
 /// オシレータ `n` を訪れるまで進める。
@@ -91,7 +97,33 @@ fn power_on_waits_for_the_first_e1_write() {
     }
     doc.write(0xE1, 0x1E);
     assert_eq!(doc.enabled(), 16);
-    assert!(matches!(doc.tick(&mut ram).slot, Slot::Osc { n: 0, .. }));
+    // リセットの後、走査のカウンタは 21 にいるので、22 番から 31 番まで回ってから 0 番に来る（MAME v3、
+    // 台帳 追補 2026-11-26）
+    let first: Vec<u8> = (0..12)
+        .map(|_| match doc.tick(&mut ram).slot {
+            Slot::Osc { n, .. } => n,
+            _ => 99,
+        })
+        .collect();
+    assert_eq!(first, [22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1]);
+}
+
+#[test]
+fn e1_write_in_the_refresh_cycles_cuts_them_short() {
+    // リフレッシュの 1 サイクル目の後（カウンタ 21）に書くと 22 番から、2 サイクル目の後（22）なら 23 番から
+    // 走査を続ける（MAME v3、台帳 追補 2026-11-26）
+    for (refreshes, first) in [(1, 22u8), (2, 23)] {
+        let (mut doc, mut ram) = boot(4);
+        visit(&mut doc, &mut ram, 3);
+        for _ in 0..refreshes {
+            assert_eq!(doc.tick(&mut ram).slot, Slot::Refresh);
+        }
+        doc.write(0xE1, 3 * 2);
+        assert!(
+            matches!(doc.tick(&mut ram).slot, Slot::Osc { n, .. } if n == first),
+            "リフレッシュ {refreshes} 回の後"
+        );
+    }
 }
 
 #[test]
@@ -216,12 +248,17 @@ fn free_run_wraps_every_256_samples_217_hz() {
     doc.write(0xA0, IE);
     let mut at = Vec::new();
     let mut cycle = 0u64;
+    let mut prev = false;
     while at.len() < 3 {
         cycle += 1;
-        if doc.tick(&mut ram).irq {
+        let irq = doc.tick(&mut ram).irq;
+        if irq && !prev {
             at.push(cycle);
+        } else if irq {
+            // 提示したサイクルのうちに読むと要求が残るので、次のサイクルに読む
             assert_eq!(doc.read(0xE0), 0x41, "OIR：bit7＝0、オシレータ 0");
         }
+        prev = doc.irq();
     }
     let period = at[2] - at[1];
     assert_eq!(period, 256 * 18);
@@ -243,13 +280,18 @@ fn zero_halts_and_data_register_keeps_the_last_nonzero() {
     assert!(t[2].irq);
     assert_eq!(doc.control(0) & HALT, HALT);
     assert_eq!(doc.read(0x60), 0xA0, "0 は波形データのレジスタに入らない");
+    // 提示した DOC サイクルのうちに 0xE0 を読んでも、要求は残る（MAME v3、台帳 追補 2026-11-26）
     assert_eq!(doc.read(0xE0), 0x41);
+    assert!(doc.irq(), "提示したサイクルのうちに読んでも消えない");
+    assert_eq!(doc.tick(&mut ram).slot, Slot::Refresh);
+    assert_eq!(doc.read(0xE0), 0x41);
+    assert!(!doc.irq(), "次のサイクルに読むと消える");
     // フリーランで 0 に止まったオシレータは、訪れるたびに 0 を見つける
     assert!(visit(&mut doc, &mut ram, 0).irq);
 }
 
 #[test]
-fn one_shot_halts_at_the_end_and_rewinds() {
+fn one_shot_halts_at_the_end_and_rewinds_a_visit_late() {
     let (mut doc, mut ram) = boot(1);
     set_osc(&mut doc, 0, 0x300, 1, 0x10, 0);
     doc.write(0xA0, ONESHOT);
@@ -259,8 +301,37 @@ fn one_shot_halts_at_the_end_and_rewinds() {
     visit(&mut doc, &mut ram, 0);
     assert_eq!(doc.control(0) & HALT, HALT);
     assert_eq!(doc.accumulator(0), 0x100, "端数が残る");
+    // M0＝1 で止まっているのを見つけた、その次の訪問で 0 に戻る（MAME v3、台帳 追補 2026-11-26）
     visit(&mut doc, &mut ram, 0);
-    assert_eq!(doc.accumulator(0), 0, "M0＝1、H＝1 で 0 に戻る");
+    assert_eq!(
+        doc.accumulator(0),
+        0x100,
+        "止まったのを見つけた訪問ではまだ戻らない"
+    );
+    visit(&mut doc, &mut ram, 0);
+    assert_eq!(doc.accumulator(0), 0, "その次の訪問で戻る");
+}
+
+#[test]
+fn cpu_restart_rewinds_only_one_shot_and_swap() {
+    // CPU が H で止めて動かし直すと、ワンショットは頭から、フリーランは止まったところから続く
+    // （MAME v3、台帳 追補 2026-11-26）
+    for (mode, first) in [(0u8, 0x100F_u32), (ONESHOT, 0x1000)] {
+        let (mut doc, mut ram) = boot(1);
+        set_osc(&mut doc, 0, 0x300, 1, 0x10, 0);
+        doc.write(0xA0, mode);
+        visits(&mut doc, &mut ram, 0, 10);
+        assert_eq!(doc.accumulator(0), 0x1E00);
+        doc.write(0xA0, mode | HALT);
+        visit(&mut doc, &mut ram, 0);
+        assert_eq!(doc.control(0) & HALT, HALT, "CPU が止めた");
+        doc.write(0xA0, mode);
+        assert_eq!(
+            addr_of(&visit(&mut doc, &mut ram, 0)),
+            first,
+            "モード {mode}"
+        );
+    }
 }
 
 #[test]
@@ -279,7 +350,45 @@ fn swap_pairs_take_turns() {
     assert_eq!(addr_of(&t), 0x2000, "奇数番はテーブルの頭から");
     visits(&mut doc, &mut ram, 1, 255);
     assert_eq!(doc.control(1) & HALT, HALT);
-    assert_eq!(doc.control(0) & HALT, 0, "奇数番が止まると偶数番が動き出す");
+    // 奇数番が止まっても、すぐには相手を動かさない。偶数番は、次に訪れたときにスワップで止まった奇数番を
+    // 見て動き出す（MAME v3、台帳 追補 2026-11-26）
+    assert_eq!(doc.control(0) & HALT, HALT, "まだ止まっている");
+    visit(&mut doc, &mut ram, 0);
+    assert_eq!(doc.control(0) & HALT, 0, "次の訪問で動き出す");
+    assert_eq!(
+        addr_of(&visit(&mut doc, &mut ram, 0)),
+        0x1000,
+        "偶数番も頭から"
+    );
+}
+
+#[test]
+fn one_shot_even_keeps_going_while_the_partner_waits_in_swap() {
+    // 組の奇数番がスワップで止まっていると、ワンショットの偶数番はテーブルの終わりで止まらない
+    // （MAME v3、台帳 追補 2026-11-26）
+    let (mut doc, mut ram) = boot(2);
+    set_osc(&mut doc, 0, 0x400, 1, 0x10, 0);
+    set_osc(&mut doc, 1, 0, 1, 0x20, 0);
+    doc.write(0xA1, SWAP | HALT);
+    doc.write(0xA0, ONESHOT);
+    visits(&mut doc, &mut ram, 0, 128);
+    assert_eq!(doc.accumulator(0), 0, "テーブルの終わりを過ぎた");
+    assert_eq!(doc.control(0) & HALT, 0, "止まらない");
+    assert_eq!(doc.control(1) & HALT, HALT, "奇数番も動かない");
+}
+
+#[test]
+fn sync_restarts_the_even_one_without_the_remainder() {
+    // 同期の偶数番がテーブルの終わりを過ぎると、端数を捨てて自分も頭から始める（MAME v3）
+    let (mut doc, mut ram) = boot(2);
+    set_osc(&mut doc, 0, 0x300, 1, 0x10, 0);
+    set_osc(&mut doc, 1, 0x100, 1, 0x20, 0);
+    doc.write(0xA0, SYNC_AM);
+    doc.write(0xA1, 0);
+    visits(&mut doc, &mut ram, 0, 170);
+    assert_eq!(doc.accumulator(0), 170 * 0x300);
+    visit(&mut doc, &mut ram, 0);
+    assert_eq!((doc.accumulator(0), doc.accumulator(1)), (0, 0));
 }
 
 #[test]
@@ -343,37 +452,73 @@ fn halted_oscillator_still_fetches_and_outputs_center() {
 
 // ---- 割込み（台帳 §4.6） ----
 
-#[test]
-fn irq_requests_come_out_first_in_first_out() {
+/// ワンショットの 2 つ：オシレータ 1 が 128 回目、オシレータ 0 が 256 回目の訪問で終わる。
+/// オシレータ 1 の要求を提示し、オシレータ 0 の要求が待っているところまで進める。
+fn two_one_shots() -> (Es5503, Ram) {
     let (mut doc, mut ram) = boot(2);
-    // オシレータ 1 は 1 周目、オシレータ 0 は 2 周目に 0 を読む
     set_osc(&mut doc, 0, 0x200, 1, 0x10, 0);
-    set_osc(&mut doc, 1, 0x200, 1, 0x20, 0);
-    ram.fill(0x1000, &[0x80, 0x00]);
-    ram.fill(0x2000, &[0x00]);
-    doc.write(0xA0, IE);
-    doc.write(0xA1, IE);
-    visit(&mut doc, &mut ram, 1);
-    let t = visit(&mut doc, &mut ram, 0);
-    assert!(t.irq);
-    assert_eq!(doc.read(0xE0), 0x41 | (1 << 1), "先に完了したオシレータ 1");
-    assert!(doc.irq());
-    assert_eq!(doc.read(0xE0), 0x41);
-    assert!(!doc.irq());
-    assert_eq!(doc.read(0xE0), 0xC1, "要求がなければ bit7＝1");
+    set_osc(&mut doc, 1, 0x400, 1, 0x20, 0);
+    doc.write(0xA0, ONESHOT | IE);
+    doc.write(0xA1, ONESHOT | IE);
+    assert!(visits(&mut doc, &mut ram, 1, 128)[127].irq);
+    assert_eq!(doc.control(1) & HALT, HALT);
+    visits(&mut doc, &mut ram, 0, 128);
+    assert_eq!(doc.control(0) & HALT, HALT);
+    (doc, ram)
 }
 
 #[test]
-fn ie_zero_keeps_the_request_until_ie_is_set() {
+fn irq_requests_are_presented_one_at_a_time_in_scan_order() {
+    // 要求は 1 件ずつ提示し、0xE0 を読むと消える。待っている要求は、走査がそのオシレータを訪れたときに
+    // 提示する（MAME v3、台帳 追補 2026-11-26。E1 p.7 の先入れ先出しのスタックとは違う）[V]
+    let (mut doc, mut ram) = two_one_shots();
+    assert!(doc.irq());
+    assert_eq!(doc.read(0xE0), 0x41 | (1 << 1), "先に提示したオシレータ 1");
+    assert!(!doc.irq(), "オシレータ 0 の要求は、まだ提示していない");
+    assert_eq!(
+        doc.read(0xE0),
+        0xC1 | (1 << 1),
+        "提示がなければ bit7＝1。番号は前のまま"
+    );
+    assert!(
+        !doc.tick(&mut ram).irq,
+        "オシレータ 1 は終わったところで止まっている"
+    );
+    assert!(
+        visit(&mut doc, &mut ram, 0).irq,
+        "オシレータ 0 を訪れて提示する"
+    );
+    doc.tick(&mut ram);
+    assert_eq!(doc.read(0xE0), 0x41);
+    assert!(!doc.irq());
+}
+
+#[test]
+fn control_write_drops_a_request_not_yet_presented() {
+    let (mut doc, mut ram) = two_one_shots();
+    doc.write(0xA0, ONESHOT | HALT | IE);
+    assert_eq!(doc.read(0xE0), 0x41 | (1 << 1));
+    for _ in 0..8 {
+        assert!(!doc.tick(&mut ram).irq, "書込みで消えた要求は提示しない");
+    }
+}
+
+#[test]
+fn ie_zero_completions_raise_no_request() {
+    // IE＝0 で終わっても要求は立たず、あとで IE を 1 にしても渡らない（MAME v3、台帳 追補 2026-11-26。
+    // E1 p.7 の割込みのテーブルとは違う）[V]
     let (mut doc, mut ram) = boot(1);
     set_osc(&mut doc, 0, 0x200, 1, 0x10, 0);
-    ram.fill(0x1000, &[0x00]);
+    ram.fill(0x1000, &[0x00, 0x00]);
     doc.write(0xA0, ONESHOT);
     let t = visit(&mut doc, &mut ram, 0);
-    assert!(!t.irq, "IE＝0 では OIR に渡らない");
+    assert!(!t.irq, "IE＝0 では要求が立たない");
     doc.write(0xA0, ONESHOT | HALT | IE);
-    assert!(doc.irq(), "IE を 1 にすると渡る（E1 p.7）");
-    assert_eq!(doc.read(0xE0), 0x41);
+    assert!(!doc.irq(), "IE を 1 にしても渡らない");
+    assert!(
+        visit(&mut doc, &mut ram, 0).irq,
+        "0 で止まったまま、次に訪れたときに 0 を見つけて要求を立てる"
+    );
 }
 
 // ---- レジスタ（台帳 §4.1、§3.7、§4.7、§4.8） ----
@@ -605,7 +750,10 @@ fn reset_stops_the_scan_and_clears_requests() {
     );
     assert_eq!(doc.enabled(), 1);
     doc.write(0xE1, 0x06);
-    assert!(matches!(doc.tick(&mut ram).slot, Slot::Osc { n: 0, .. }));
+    assert!(
+        matches!(doc.tick(&mut ram).slot, Slot::Osc { n: 22, .. }),
+        "カウンタは 21 に戻るので、22 番から"
+    );
 }
 
 #[test]
