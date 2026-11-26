@@ -225,7 +225,9 @@ impl System {
             self.ports.temporal.rptr = 0;
         }
         self.vblank_prev = vblank;
-        self.line();
+        if self.analog.due(self.ports.now()) {
+            self.line();
+        }
         while self.next_sample < self.ports.now() {
             let s = self.mix();
             self.audio_out.push(s);
@@ -789,6 +791,7 @@ impl System {
     /// 標本の時刻の条件は `mix` と同じ（`next_sample` から始める）。入力は刻みの間の平均：DOC の S/H の和は
     /// 子基板が積分したもの、本体 DAC のラッチは最後の拍の時刻に変わったとし（拍がなければ刻みの時刻。
     /// DIRECT の書込み）、DA OUT は変わった時刻をアダプタが記録する。
+    #[inline(never)]
     fn line(&mut self) {
         let now = self.ports.now();
         loop {

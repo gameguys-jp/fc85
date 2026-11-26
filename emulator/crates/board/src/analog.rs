@@ -455,6 +455,12 @@ impl Analog {
         }
     }
 
+    /// 時刻 `now` の前に、処理する刻みがあるか（まだ始めていなければ true）。スロットごとに呼ぶので軽くする。
+    #[inline]
+    pub fn due(&self, now: Time) -> bool {
+        self.next.is_none_or(|k| k * TICK < now)
+    }
+
     /// 始めたばかりの刻みか（入力の積分を捨てて、今の出力を出す）。
     pub fn is_fresh(&self) -> bool {
         self.fresh
