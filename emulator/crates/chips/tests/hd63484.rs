@@ -1773,7 +1773,7 @@ fn splits_stack_upper_base_and_lower() {
 
 /// ウィンドウ：メモリサイクル 48 から 32 メモリサイクル（96〜159 ドット）、ラスタ 53 から 10 ラスタ、
 /// SAR3＝$3000、MW3＝$10。HWR の HWS は HSYNC の終わりから（48−13＝35、書く値は 34）、VWR の VWS は
-/// VSYNC の終わりから（53−3＝50、書く値は 49）（U85 p.89–91）。
+/// VSYNC の終わりから（53−3＝50、書く値は 49）（U85 p.83–84、p.89–90）。
 fn windowed(dcr: u16) -> Screen {
     let mut s = Screen::plan_b();
     for (ar, v) in [

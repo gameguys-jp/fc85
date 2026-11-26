@@ -144,7 +144,7 @@ fn horizontal_zoom_widens_each_pixel() {
 
 #[test]
 fn window_shows_one_display_cycle_after_disp2() {
-    // ウィンドウ：96〜159 ドット（DISP2）、ラスタ 53〜62、SAR3＝$3000（U85 p.89–91）。前読みがないので、
+    // ウィンドウ：96〜159 ドット（DISP2）、ラスタ 53〜62、SAR3＝$3000（U85 p.83–84、p.89–90）。前読みがないので、
     // 語は 100〜163 に出る [V]。背景はラスタ 53 が基本画面の行 10
     let mut c = Cpu::case_b();
     for a in 0x3000..0x3100 {

@@ -61,7 +61,7 @@ ACRTC_SSW0      EQU     $8C             ; 上画面のラスタの数（U85 p.91
 ACRTC_SSW2      EQU     $8E             ; 下画面のラスタの数
 ACRTC_BCR       EQU     $90             ; 属性の点滅：BON1・BOFF1・BON2・BOFF2（4 bit ずつ、U85 p.92–93）
 ACRTC_HWR       EQU     $92             ; ウィンドウの横：上位 HWS−1（HSYNC の終わりから）、下位 HWW−1
-ACRTC_VWS       EQU     $94             ; ウィンドウの縦の始まり−1（VSYNC の終わりから、U85 p.89–91）
+ACRTC_VWS       EQU     $94             ; ウィンドウの縦の始まり−1（VSYNC の終わりから、U85 p.89–90）
 ACRTC_VWW       EQU     $96             ; ウィンドウのラスタの数
 ACRTC_GCRX      EQU     $98             ; グラフィックカーソル：上位 CXE、下位 CXS（HSYNC の始まりからのメモリサイクル）
 ACRTC_GCRYS     EQU     $9A             ; CYS（VSYNC の終わりからのラスタ、U85 p.94）
