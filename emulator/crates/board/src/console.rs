@@ -18,7 +18,7 @@
 
 use fc85_chips::hd6850::Hd6850;
 use fc85_chips::hd68000::{Bus, BusReply, Hd68000, IackReply, Size};
-use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, SLOT, Time};
+use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, PERIOD_21M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::adpcm::AdpcmCtrl;
@@ -28,6 +28,7 @@ use crate::doc;
 use crate::dsp::{BioSel, DspCtrl};
 use crate::fabric::{Fabric, HostReply};
 use crate::ports::FabricPorts;
+use crate::vclock::MainRamRefresh;
 
 /// Boot ROM（64 KiB）と Main RAM（128 KiB）の大きさ。
 pub const BOOT_ROM_BYTES: usize = 0x1_0000;
@@ -38,10 +39,16 @@ pub const BERR_HALF_CLOCKS: u64 = 131;
 /// BERR で終わるサイクルの長さ（S0 からのクロック数）。DR-052。
 pub const BERR_CYCLE_CLOCKS: u32 = 67;
 
+/// DTACK の認識が時間切れに間に合わない待ちの数（S4 の終わりの 2.5 クロックから 65.5 クロックまで）。DR-052。
+const BERR_WAITS: u64 = (BERR_HALF_CLOCKS - 5) / 2;
+
 /// Main RAM のリフレッシュ（HSYNC ごとに 5 行、12.5 クロック）。DR-026。
 const REFRESH: Time = 25 * PERIOD_8M / 2;
-/// パレットの裏から表への写し（16 語×186 ns＝3.0 µs、24 クロック）。DR-027。
-const PALETTE_COPY: Time = 24 * PERIOD_8M;
+
+/// パレットの裏から表への写し（16 語×2CLK。基板の 2CLK で 3.0 µs、24 クロック）。DR-027。`p` は 2CLK の周期。
+fn palette_copy(p: Time) -> Time {
+    (16 * p).div_ceil(PERIOD_8M) * PERIOD_8M
+}
 /// ACRTC の CS：S4 の立上りで登録する FF の遅れ（20 ns）、ACRTC の CS のセットアップ（40 ns）、
 /// DTACK の遅れ（tDTKZL の中央 35 ns）、68000 の DTACK のセットアップ（20 ns）。host-acrtc-interface.md §5。
 const ACRTC_CS: Time = 302;
@@ -126,6 +133,9 @@ pub struct System {
     /// ホストが取り出す。保存には入れない。
     #[serde(skip)]
     pub line_out: Vec<(i16, i16)>,
+    /// Main RAM のリフレッシュのカウンタと保持の模型（`vclock`。追跡は Bend モードのときだけ）。
+    #[serde(default)]
+    pub main_dram: MainRamRefresh,
 }
 
 impl Default for System {
@@ -169,11 +179,17 @@ fn upper_lane(v: u8, size: Size) -> u16 {
     }
 }
 
-/// ACRTC のアクセスの T1（ACRTC が CS を認識する 2CLK の立上り）と、68000 の待ち。`edge` は 2CLK の
-/// 立上りの 1 つ（位相の基準）。CS は S4 の立上りで登録し（DR-016）、T1 の次の立上りの後に DTACK が出る
-/// （host-acrtc-interface.md §5.1。遅れは中央の値）。
+/// ACRTC のアクセスの T1（ACRTC が CS を認識する 2CLK の立上り）と、68000 の待ち（基板の 2CLK）。`edge` は
+/// 2CLK の立上りの 1 つ（位相の基準）。CS は S4 の立上りで登録し（DR-016）、T1 の次の立上りの後に DTACK が
+/// 出る（host-acrtc-interface.md §5.1。遅れは中央の値）。
 pub fn acrtc_timing(s0: Time, edge: Time) -> (Time, u32) {
-    let p = PERIOD_2CLK;
+    let (t1, dtack) = acrtc_cycle(s0, edge, PERIOD_2CLK);
+    let (_, waits) = doc::host_recognize(s0, dtack);
+    (t1, waits)
+}
+
+/// 2CLK の周期 `p` のときの T1 と、68000 が DTACK を取り込める最初の時刻（セットアップの後）。
+pub fn acrtc_cycle(s0: Time, edge: Time, p: Time) -> (Time, Time) {
     let at_or_after = |t: Time| {
         if t <= edge {
             edge - (edge - t) / p * p
@@ -182,9 +198,7 @@ pub fn acrtc_timing(s0: Time, edge: Time) -> (Time, u32) {
         }
     };
     let t1 = at_or_after(s0 + 2 * PERIOD_8M + ACRTC_CS + ACRTC_CS_SETUP);
-    let ack = t1 + p + ACRTC_DTACK;
-    let (_, waits) = doc::host_recognize(s0, ack + CPU_DTACK_SETUP - 1);
-    (t1, waits)
+    (t1, t1 + p + ACRTC_DTACK + CPU_DTACK_SETUP - 1)
 }
 
 /// 1 回のアクセスの結果（値と待ち）。`None` は DTACK を返さない（バスの時間切れでバスエラー）。
@@ -217,6 +231,7 @@ impl System {
             sample_period: fc85_core::time::UNITS_PER_SECOND / Time::from(AUDIO_RATE),
             analog: Analog::new(),
             line_out: Vec::new(),
+            main_dram: MainRamRefresh::new(),
         }
     }
 
@@ -227,6 +242,15 @@ impl System {
 
     /// 1 スロット進める。
     pub fn step_slot(&mut self) {
+        self.slot();
+        if self.main_dram.dram.tracking() {
+            self.refresh_main_ram();
+        }
+    }
+
+    /// 1 スロット（Main RAM のリフレッシュの模型を除く）。
+    #[inline(always)]
+    fn slot(&mut self) {
         self.fabric.step_slot(&mut self.ports);
         let (vblank, _) = self.ports.acrtc.video.blank_levels();
         if vblank && !self.vblank_prev {
@@ -248,10 +272,26 @@ impl System {
         }
     }
 
-    /// 時刻 `t` を含むスロットまで進める（`now ≤ t < now＋SLOT`）。
+    /// Main RAM のリフレッシュ：HSYNC ごとに 5 行（DR-026）。保持を追跡している（Bend モード）ときだけ。
+    #[cold]
+    #[inline(never)]
+    fn refresh_main_ram(&mut self) {
+        let v = &self.ports.acrtc.video;
+        self.main_dram
+            .hsync(&mut self.main_ram, v.lines, v.hsync_at);
+    }
+
+    /// 時刻 `t` を含むスロットまで進める（`now ≤ t < now＋SLOT`）。Main RAM の保持を追跡していない（通常
+    /// モード）ときは、スロットごとに確かめない。
     pub fn sync_time(&mut self, t: Time) {
-        while self.ports.now() + SLOT <= t {
-            self.step_slot();
+        if self.main_dram.dram.tracking() {
+            while self.ports.now() + SLOT <= t {
+                self.step_slot();
+            }
+        } else {
+            while self.ports.now() + SLOT <= t {
+                self.slot();
+            }
         }
     }
 
@@ -362,6 +402,11 @@ impl System {
                 self.sync(at);
                 let w = self.main_ram_waits(at);
                 let off = (addr - 0x10_0000) as usize;
+                if self.main_dram.dram.tracking() {
+                    // RAS で語の行を活性化する（Bend モードの保持の模型）
+                    self.main_dram
+                        .access(&mut self.main_ram, off >> 1, at * PERIOD_8M);
+                }
                 match write {
                     Some(v) => {
                         mem_write(&mut self.main_ram, off, size, v);
@@ -422,6 +467,10 @@ impl System {
 
     /// ACRTC（DR-016）：CS を S4 の立上りで登録し、ACRTC が 2CLK の立上り（T1）で認識し、次の立上りの
     /// 後に DTACK を出す（host-acrtc-interface.md §5.1、遅れは中央の値）。
+    ///
+    /// 映像のクロックを遅くすると待ちが延び、DTACK の認識が S0 から 65.5 クロックの立下りに間に合わなければ
+    /// バスの時間切れ（DR-052）。T1 が AS の戻る前（S0 から 66.5 クロック [P]）なら ACRTC はそのアクセスを
+    /// 受ける（読出しの副作用、書込み）[P][V]。クロックが止まっていれば ACRTC は CS を見ない。
     fn acrtc(&mut self, at: u64, addr: u32, size: Size, write: Option<u16>) -> Access {
         self.sync(at);
         if size == Size::Byte {
@@ -429,7 +478,21 @@ impl System {
         }
         let rs = addr & 2 != 0;
         let s0 = at * PERIOD_8M;
-        let (t1, waits) = acrtc_timing(s0, self.ports.acrtc.edge_at_or_after(s0));
+        let bridge = &self.ports.acrtc;
+        let (Some(edge), Some(p)) = (bridge.edge_at_or_after(s0), bridge.period_2clk()) else {
+            return None;
+        };
+        let (t1, dtack) = acrtc_cycle(s0, edge, p);
+        let berr = s0 + BERR_HALF_CLOCKS * PERIOD_8M / 2;
+        let waits = if dtack < berr {
+            let (recognized, waits) = doc::host_recognize(s0, dtack);
+            (recognized < berr).then_some(waits)
+        } else {
+            None
+        };
+        if waits.is_none() && t1 >= s0 + (2 * u64::from(BERR_CYCLE_CLOCKS) - 1) * PERIOD_8M / 2 {
+            return None;
+        }
         self.sync_time(t1);
         let a = &mut self.ports.acrtc.acrtc;
         let v = match write {
@@ -439,7 +502,7 @@ impl System {
             }
             None => a.read(rs),
         };
-        ok(v, waits)
+        waits.map(|w| (v, w))
     }
 
     /// DOC のブリッジ（DR-051）。DTACK まで進め、時間切れならバスエラー。
@@ -738,17 +801,28 @@ impl System {
         if size == Size::Byte {
             return None;
         }
+        // 写しの長さは 2CLK の 16 周期を CPU のクロックに切り上げたもの（基板の 2CLK で 24 クロック）。
+        // 映像のクロックが写しの途中で止まっていれば、写しは終わらない
+        let copy_end = match self.ports.acrtc.period_2clk() {
+            Some(p) => self.ports.acrtc.video.hsync_at + palette_copy(p),
+            None if self.ports.acrtc.acrtc.beam().0 < 16 => Time::MAX,
+            None => 0,
+        };
         let v = &mut self.ports.acrtc.video;
         let off = addr & 0x3F;
         match (off, write) {
             (0x00..=0x1F, Some(x)) => {
-                // 写しの間の書込みは、写しが終わるまで待つ
+                // 写しの間の書込みは、写しが終わるまで待つ。DTACK が時間切れ（DR-052）に間に合わなければ
+                // バスエラーで、書込みは起きない [P]
                 let mut waits = 0;
                 if !v.direct && self.ports.acrtc.acrtc.display_running() {
                     let t = (at + 2) * PERIOD_8M;
-                    let end = v.hsync_at + PALETTE_COPY;
-                    if t >= v.hsync_at && t < end {
-                        waits = (end - t).div_ceil(PERIOD_8M) as u32;
+                    if t >= v.hsync_at && t < copy_end {
+                        let w = (copy_end - t).div_ceil(PERIOD_8M);
+                        if w >= BERR_WAITS {
+                            return None;
+                        }
+                        waits = w as u32;
                     }
                 }
                 // 書込みのストローブは S4〜S7（DIRECT の点状のノイズ）[P]
@@ -908,6 +982,7 @@ impl System {
         {
             f.pins = pin;
         }
+        self.apply_video_bends(on);
     }
 
     /// ベンド点の命令（`Bends::command`）を 1 行実行し、回路に入れる。
@@ -1039,13 +1114,16 @@ impl Console {
     }
 
     /// 次のフレーム（ACRTC のラスタが 0 に戻る）まで進める。上限は 2 フレーム分。
-    /// 表示が止まっていれば約 1/60 秒。
+    /// 表示が止まっているか、映像のクロックを基板の半分より遅くした（止めた）ときは約 1/60 秒
+    /// （ホストが仮想機の時刻で進め、フレームを待って固まらない）。
     pub fn run_frame(&mut self) {
         const FRAME: u64 = 8_000_000 / 60;
         let f = self.sys.ports.acrtc.video.frames;
         let start = self.cpu.clock;
+        let p21 = self.sys.ports.acrtc.video_period();
+        let slow = p21 == 0 || p21 > 2 * PERIOD_21M;
         while self.sys.ports.acrtc.video.frames == f {
-            let limit = if self.sys.ports.acrtc.acrtc.display_running() {
+            let limit = if self.sys.ports.acrtc.acrtc.display_running() && !slow {
                 start + 2 * FRAME
             } else {
                 start + FRAME

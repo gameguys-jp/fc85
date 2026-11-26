@@ -119,6 +119,16 @@ pub struct Video {
     pub hsync_at: Time,
     /// 今のラスタ（VSYNC の始まりから）。
     pub raster: u16,
+    /// HSYNC の数（Main RAM のリフレッシュ。DR-026）と、その前の HSYNC の始まりの時刻（テレビの模型）。
+    #[serde(default)]
+    pub lines: u64,
+    #[serde(default)]
+    pub hsync_prev: Time,
+    /// 今のフレームと前のフレームの始まり（ラスタ 0 の HSYNC）の時刻（テレビの模型）。
+    #[serde(default)]
+    pub frame_at: Time,
+    #[serde(default)]
+    pub frame_prev: Time,
 }
 
 impl Default for Video {
@@ -152,6 +162,10 @@ impl Video {
             vblank: false,
             hsync_at: 0,
             raster: 0,
+            lines: 0,
+            hsync_prev: 0,
+            frame_at: 0,
+            frame_prev: 0,
         }
     }
 
@@ -174,10 +188,14 @@ impl Video {
         self.clock = self.clock.wrapping_add(1);
         if dot < 16 {
             if dot == 0 {
+                self.hsync_prev = self.hsync_at;
                 self.hsync_at = t;
+                self.lines += 1;
                 self.group = 0;
                 if raster == 0 {
                     self.frames += 1;
+                    self.frame_prev = self.frame_at;
+                    self.frame_at = t;
                 }
             }
             if !self.direct {
