@@ -41,7 +41,8 @@ ACRTC_SR_RFF    EQU     $08             ; 読出し FIFO が満杯
 ACRTC_SR_RFR    EQU     $04             ; 読出し FIFO に語がある
 ACRTC_SR_WFR    EQU     $02             ; 書込み FIFO に空きがある
 ACRTC_SR_WFE    EQU     $01             ; 書込み FIFO が空
-ACRTC_SR_CED_B  EQU     5               ; BTST 用のビット番号
+ACRTC_SR_CER_B  EQU     7               ; BTST 用のビット番号
+ACRTC_SR_CED_B  EQU     5
 ACRTC_SR_RFR_B  EQU     2
 ACRTC_SR_WFR_B  EQU     1
 ACRTC_SR_WFE_B  EQU     0

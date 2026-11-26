@@ -4,6 +4,10 @@
 //! キーボードを PORT_A に渡す。F5 で状態を保存し、F9 で戻す。F2 で通常モードと Bend モードを
 //! 切り替える（DR-065）。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
+//! クロックのつまみ（外部の発振器・VCO を回す操作）：F3 で回すクロック（DOC、映像、DSP、ADPCM、音声）を
+//! 選び、PageUp・PageDown で半音ずつ、Shift を押しながらなら 1/8 半音ずつ上げ下げする。押し続けると
+//! 回り続ける。Home で基板の発振器に戻す。回すと Bend モードに入る。
+//!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
@@ -13,7 +17,7 @@
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
 //! `clock video HZ|0|off`（映像系の 21.47727 MHz。0 で止める）、`fifo dac|dsp_in|dsp_out|adpcm
-//! empty=0|1|open full=0|1|open`、`sig both|one`、`dram unit N|temp C`、
+//! empty=0|1|open full=0|1|open`、`sig both|one`、`dram unit N|temp C|refresh hsync|auto`、
 //! `docbus A3=0,A4=A5,A5=A4,D7=1,A9=Z`（DOC 子基板のバスのテストピン。A0〜A7 と A8〜A15＝D0〜D7。
 //! `normal` で戻す）、`factory`。ベンド点を
 //! 1 つでも設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
@@ -32,10 +36,12 @@ mod midi;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use fc85_board::bend::Mode;
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
 use fc85_board::tv::Tv;
 use fc85_board::video::{RASTER_H, RASTER_W};
 use fc85_chips::hd68000::RunState;
+use fc85_core::time::UNITS_PER_SECOND;
 
 /// 窓に出す範囲（ドット、ライン）。案B の表示（64〜319 ドット、43〜234 ライン）を真ん中に置く。
 const VIEW_X: usize = 22;
@@ -158,7 +164,7 @@ fn parse_args() -> Args {
                      [--audio-tap digital|line] [--doc-sig both|one]\n\
                      --bend CMD：mode normal|bend|toggle、char A1=A2,D6=0,D2=Z、clock doc|dsp|adpcm|audio HZ|off、\
                      clock video HZ|0|off（映像系の 21.47727 MHz、0 で止める）、\
-                     fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open、sig both|one、dram unit N|temp C、\
+                     fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open、sig both|one、dram unit N|temp C|refresh hsync|auto、\
                      docbus A3=0,A4=A5,D7=1,A9=Z（DOC のバスのテストピン。normal で戻す）、factory\n\
                      画面は機械の外のテレビの模型を通す（同期と色の引込み。工場出荷のクロックでは画面の配列そのまま）"
                 );
@@ -197,6 +203,70 @@ fn bend(c: &mut Console, cmd: &str) {
     match c.sys.bend(cmd) {
         Ok(()) => eprintln!("ベンド点：{cmd}（{}）", c.sys.bends.summary()),
         Err(e) => eprintln!("ベンド点：{e}"),
+    }
+}
+
+/// クロックのつまみ：`clock` の名前、表示の名前、基板の発振器の周波数。
+const KNOBS: [(&str, &str, f64); 5] = [
+    ("doc", "DOC の CLK", 8e6),
+    ("video", "映像のクロック", 21_477_272.727),
+    ("dsp", "DSP の CLKIN", 20e6),
+    ("adpcm", "ADPCM の XT", 384e3),
+    ("audio", "音声クロック", 8e6),
+];
+
+/// つまみ `i` の今の周波数（Hz。0 は止まっている）。
+fn knob_hz(c: &Console, i: usize) -> f64 {
+    let k = &c.sys.bends.clocks;
+    let per = |p: Option<u64>| p.map(|p| UNITS_PER_SECOND as f64 / p as f64);
+    match i {
+        0 => per(k.doc),
+        1 => k.video.map(|m| m as f64 / 1000.0),
+        2 => per(k.dsp),
+        3 => per(k.adpcm),
+        _ => per(k.audio),
+    }
+    .unwrap_or(KNOBS[i].2)
+}
+
+fn fmt_hz(f: f64) -> String {
+    if f >= 1e6 {
+        format!("{:.4} MHz", f / 1e6)
+    } else if f >= 1e3 {
+        format!("{:.3} kHz", f / 1e3)
+    } else {
+        format!("{f:.2} Hz")
+    }
+}
+
+/// つまみ `i` を `semitones` 回す（`None` は基板の発振器に戻す）。止まっていれば基板の周波数から回す。
+fn turn_knob(c: &mut Console, i: usize, semitones: Option<f64>) {
+    let (name, label, f0) = KNOBS[i];
+    let cmd = match semitones {
+        Some(s) => {
+            let f = knob_hz(c, i);
+            let f = if f > 0.0 { f * 2f64.powf(s / 12.0) } else { f0 };
+            format!("clock {name} {}", f.clamp(1.0, 4.0 * f0))
+        }
+        None => format!("clock {name} off"),
+    };
+    if c.sys.bends.mode != Mode::Bend {
+        let _ = c.sys.bend("mode bend");
+    }
+    match c.sys.bend(&cmd) {
+        Ok(()) => {
+            let f = knob_hz(c, i);
+            if f > 0.0 {
+                eprintln!(
+                    "つまみ：{label} {}（基板から {:+.2} 半音）",
+                    fmt_hz(f),
+                    12.0 * (f / f0).log2()
+                );
+            } else {
+                eprintln!("つまみ：{label} 止まっている");
+            }
+        }
+        Err(e) => eprintln!("つまみ：{e}"),
     }
 }
 
@@ -552,18 +622,32 @@ fn trace(c: &mut Console, n: u64) {
     c.sys.sync(t);
 }
 
-/// バスの警告が増えたら出す（ホストの表示。仮想機は変えない）。
-fn report(c: &Console, seen: &mut (u64, u64, bool, u64)) {
+/// 出した警告の数（`report`）。
+#[derive(Default)]
+struct Seen {
+    bus_errors: u64,
+    doc_rule: u64,
+    halted: bool,
+    bridge: u64,
+    /// ブリッジの時間切れを最後に出したフレーム。
+    bridge_frame: Option<u64>,
+}
+
+/// ブリッジの時間切れ（DR-079）を出す間（フレーム）。クロックを下げている間は毎フレーム増えるので、まとめる。
+const BRIDGE_REPORT_FRAMES: u64 = 120;
+
+/// バスの警告が増えたら出す（ホストの表示。仮想機は変えない）。`frame` はホストのフレームの数。
+fn report(c: &Console, seen: &mut Seen, frame: u64) {
     let l = &c.sys.log;
     let halted = c.cpu.state == RunState::Halted;
-    if halted && !seen.2 {
+    if halted && !seen.halted {
         eprintln!(
             "68000 が止まった（二重バスフォルト。PC {:06X}）。リセットまで動かない",
             c.cpu.pc
         );
     }
-    seen.2 = halted;
-    if l.bus_errors != seen.0 {
+    seen.halted = halted;
+    if l.bus_errors != seen.bus_errors {
         if let Some((addr, w)) = l.last_bus_error {
             eprintln!(
                 "バスエラー {} 回（最後は {addr:06X} の{}）",
@@ -571,34 +655,40 @@ fn report(c: &Console, seen: &mut (u64, u64, bool, u64)) {
                 if w { "書込み" } else { "読出し" }
             );
         }
-        seen.0 = l.bus_errors;
+        seen.bus_errors = l.bus_errors;
     }
-    if l.bridge_timeouts != seen.3 {
+    if l.bridge_timeouts != seen.bridge
+        && seen
+            .bridge_frame
+            .is_none_or(|f| frame >= f + BRIDGE_REPORT_FRAMES)
+    {
         if let Some((addr, w)) = l.last_bridge_timeout {
             eprintln!(
-                "ブリッジの時間切れ {} 回（最後は {addr:06X} の{}。DR-079）",
+                "ブリッジの時間切れ {} 回（前の表示から +{}。最後は {addr:06X} の{}。DR-079）",
                 l.bridge_timeouts,
+                l.bridge_timeouts - seen.bridge,
                 if w { "書込み" } else { "読出し" }
             );
         }
-        seen.3 = l.bridge_timeouts;
+        seen.bridge = l.bridge_timeouts;
+        seen.bridge_frame = Some(frame);
     }
     // Bend モードでは規約違反を警告しない（実行はどちらのモードでも同じ。DR-065）
-    if l.doc_rule_warnings != seen.1 && c.sys.bends.mode == fc85_board::bend::Mode::Normal {
+    if l.doc_rule_warnings != seen.doc_rule && c.sys.bends.mode == Mode::Normal {
         if let Some(addr) = l.last_doc_rule {
             eprintln!(
                 "DOC の窓の規約（DR-030）に反した命令 {} 回（最後は {addr:06X}）",
                 l.doc_rule_warnings
             );
         }
-        seen.1 = l.doc_rule_warnings;
+        seen.doc_rule = l.doc_rule_warnings;
     }
 }
 
 fn main() {
     let a = parse_args();
     let mut c = build_console(&a);
-    let mut seen = (0, 0, false, 0);
+    let mut seen = Seen::default();
     if a.trace > 0 {
         trace(&mut c, a.trace);
     }
@@ -617,7 +707,7 @@ fn main() {
                 c.sys.set_ports(v, 0);
             }
             c.run_frame();
-            report(&c, &mut seen);
+            report(&c, &mut seen, i);
             report_tv(&c, &tv, &mut tv_seen);
             if a.dump_at.contains(&(i + 1))
                 && let Some(p) = &a.dump
@@ -674,6 +764,7 @@ fn main() {
     let mut next = std::time::Instant::now();
     let mut midi = midi::Midi::open(a.midi_in, a.midi_out);
     let mut frames = 0u64;
+    let mut knob = 0usize;
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
         if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
             save_state(&c);
@@ -683,6 +774,25 @@ fn main() {
         }
         if w.is_key_pressed(minifb::Key::F2, minifb::KeyRepeat::No) {
             bend(&mut c, "mode toggle");
+        }
+        if w.is_key_pressed(minifb::Key::F3, minifb::KeyRepeat::No) {
+            knob = (knob + 1) % KNOBS.len();
+            eprintln!(
+                "つまみ：{}（今 {}）",
+                KNOBS[knob].1,
+                fmt_hz(knob_hz(&c, knob))
+            );
+        }
+        let fine = w.is_key_down(minifb::Key::LeftShift) || w.is_key_down(minifb::Key::RightShift);
+        let step = if fine { 0.125 } else { 1.0 };
+        if w.is_key_pressed(minifb::Key::PageUp, minifb::KeyRepeat::Yes) {
+            turn_knob(&mut c, knob, Some(step));
+        }
+        if w.is_key_pressed(minifb::Key::PageDown, minifb::KeyRepeat::Yes) {
+            turn_knob(&mut c, knob, Some(-step));
+        }
+        if w.is_key_pressed(minifb::Key::Home, minifb::KeyRepeat::No) {
+            turn_knob(&mut c, knob, None);
         }
         run_bend_script(&mut c, &a, frames);
         c.sys.set_ports(pad(&w), 0);
@@ -699,7 +809,7 @@ fn main() {
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {
             break;
         }
-        report(&c, &mut seen);
+        report(&c, &mut seen, frames);
         report_tv(&c, &tv, &mut tv_seen);
         frames += 1;
         if a.frames.is_some_and(|n| frames >= n) {

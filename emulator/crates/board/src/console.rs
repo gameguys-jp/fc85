@@ -282,13 +282,15 @@ impl System {
         }
     }
 
-    /// Main RAM のリフレッシュ：HSYNC ごとに 5 行（DR-026）。保持を追跡している（Bend モード）ときだけ。
+    /// Main RAM のリフレッシュ：HSYNC ごとに 5 行（DR-026）、HSYNC が 72 µs 来なければ見張りのカウンタで
+    /// 5 行（DR-081）。保持を追跡している（Bend モード）ときだけ。
     #[cold]
     #[inline(never)]
     fn refresh_main_ram(&mut self) {
+        let now = self.ports.now();
         let v = &self.ports.acrtc.video;
         self.main_dram
-            .hsync(&mut self.main_ram, v.lines, v.hsync_at);
+            .advance(&mut self.main_ram, v.lines, v.hsync_at, now);
     }
 
     /// 時刻 `t` を含むスロットまで進める（`now ≤ t < now＋SLOT`）。Main RAM の保持を追跡していない（通常
@@ -371,13 +373,15 @@ impl System {
         [0, 0, 2, 1][(at % 4) as usize]
     }
 
-    /// Main RAM のリフレッシュとぶつかったときの待ち（DR-026）。
+    /// Main RAM のリフレッシュとぶつかったときの待ち（DR-026）。HSYNC が止まっていれば、見張りのカウンタの
+    /// リフレッシュ（DR-081）とぶつかる。
     fn main_ram_waits(&self, at: u64) -> u32 {
-        let hs = self.ports.acrtc.video.hsync_at;
-        if !self.ports.acrtc.acrtc.display_running() {
+        let watchdog = self.main_dram.watchdog;
+        if !watchdog && !self.ports.acrtc.acrtc.display_running() {
             return 0;
         }
         let t = at * PERIOD_8M;
+        let hs = crate::vclock::main_refresh_start(self.ports.acrtc.video.hsync_at, t, watchdog);
         let end = hs + REFRESH;
         if t >= hs && t + PERIOD_8M < end {
             (end - (t + PERIOD_8M)).div_ceil(PERIOD_8M) as u32

@@ -116,6 +116,9 @@ pub struct Bends {
     /// DOC 子基板のバスのテストピン（仕様書 §11 のベンド点「DOC波形RAMの線」。`docbus`）。
     #[serde(default)]
     pub doc_lines: DocLines,
+    /// Main RAM のリフレッシュの見張りのカウンタ（DR-081）を切り、HSYNC だけにする（`dram refresh hsync`）。
+    #[serde(default)]
+    pub refresh_hsync_only: bool,
 }
 
 impl Bends {
@@ -127,6 +130,7 @@ impl Bends {
             && self.sig == SigWiring::Both
             && self.dram == DramEnv::default()
             && self.doc_lines.is_normal()
+            && !self.refresh_hsync_only
     }
 
     /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
@@ -138,6 +142,8 @@ impl Bends {
     /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
     /// - `sig both|one`：DOC の SIG± の配線（`one` は SIG+ だけの初期の片側の配線。DR-011）
     /// - `dram unit <N>`・`dram temp <°C>`：DRAM の個体と温度（リフレッシュが遅れたときの崩れ方。DR-072）
+    /// - `dram refresh hsync|auto`：Main RAM のリフレッシュを HSYNC だけにする（見張りのカウンタを切る。
+    ///   DR-081）か、戻す
     /// - `docbus A3=0,A4=A5,A5=A4,D7=1,A9=Z`：DOC 子基板のバスのテストピン（`normal` で戻す。`DocLines::parse`）
     /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
     pub fn command(&mut self, line: &str) -> Result<(), String> {
@@ -239,7 +245,18 @@ impl Bends {
                         }
                         self.dram.temp_c = t;
                     }
-                    _ => return Err(format!("dram unit <N> か dram temp <°C>: {line}")),
+                    "refresh" => {
+                        self.refresh_hsync_only = match v.to_ascii_lowercase().as_str() {
+                            "hsync" => true,
+                            "auto" => false,
+                            _ => return Err(format!("dram refresh hsync|auto: {line}")),
+                        };
+                    }
+                    _ => {
+                        return Err(format!(
+                            "dram unit <N>、dram temp <°C>、dram refresh hsync|auto: {line}"
+                        ));
+                    }
                 }
             }
             "factory" => {
@@ -294,6 +311,9 @@ impl Bends {
                 "DRAM 個体 {} {} °C",
                 self.dram.unit, self.dram.temp_c
             ));
+        }
+        if self.refresh_hsync_only {
+            v.push("Main RAM のリフレッシュは HSYNC だけ".into());
         }
         v.join("、")
     }

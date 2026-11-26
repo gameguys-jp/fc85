@@ -7,7 +7,7 @@ use fc85_board::console::{
 };
 use fc85_board::doc::host_recognize;
 use fc85_board::tv::{Chroma, Hsync, Tv};
-use fc85_board::vclock::{discharged, main_row, vram_row};
+use fc85_board::vclock::{MAIN_REFRESH_WATCHDOG, discharged, main_row, vram_row};
 use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
 use fc85_chips::hd68000::{Bus, BusReply, Size, fc};
 use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, PERIOD_21M};
@@ -266,14 +266,54 @@ fn main_ram_keeps_its_data_in_normal_mode_and_at_the_factory_clock() {
 }
 
 #[test]
+fn the_refresh_watchdog_keeps_main_ram_when_the_video_clock_stops() {
+    // DR-081：HSYNC が 72 µs（1088640）来なければ、見張りのカウンタが 5 行をリフレッシュする。128 行の一巡は
+    // 25.6 回で 1.84 ms、70 °C の最短の保持 2.21 ms より短い。映像のクロックを止めて 0.1 s、何も崩れない
+    assert_eq!(MAIN_REFRESH_WATCHDOG, 1_088_640);
+    let mut c = Cpu::new();
+    c.acrtc_case_b();
+    c.idle(1000);
+    c.bend("mode bend");
+    c.bend("dram temp 70");
+    c.bend("clock video 0");
+    fill_main_ram(&mut c.sys);
+    let before = c.sys.main_ram.clone();
+    c.idle(800_000);
+    for row in 0..256u32 {
+        c.rw(0x10_0000 + row * 512);
+    }
+    assert!(c.sys.main_ram == before);
+
+    // CPU の Main RAM のアクセスは、見張りのリフレッシュ（最後の HSYNC＋72 µs×k から 12.5 クロック）と
+    // ぶつかると待つ。S0 が始まりから d（0≦d＜1890）後なら、待ちは ⌈(12.5×1890−1890−d)÷1890⌉＝11 か 12
+    let hs = c.sys.ports.acrtc.video.hsync_at;
+    let k = (c.clock * PERIOD_8M - hs) / MAIN_REFRESH_WATCHDOG + 1;
+    let start = hs + k * MAIN_REFRESH_WATCHDOG;
+    c.clock = start.div_ceil(PERIOD_8M);
+    let at = c.clock * PERIOD_8M;
+    assert!(at - start < PERIOD_8M);
+    let expect = (start + 25 * PERIOD_8M / 2 - (at + PERIOD_8M)).div_ceil(PERIOD_8M) as u32;
+    assert_eq!(
+        c.rd(0x10_0000),
+        BusReply::Ok {
+            data: before[0] as u16 * 256 + before[1] as u16,
+            waits: expect
+        }
+    );
+    assert!((11..=12).contains(&expect), "{expect}");
+}
+
+#[test]
 fn main_ram_decays_when_the_video_clock_stops() {
-    // 85 °C（保持は 25 °C の 1/64。最短 50 ms÷64＝0.78 ms）で映像のクロックを止め、HSYNC ごとのリフレッシュを
-    // 止める。0.1 s は 25 °C の 6.4 s で、崩れる割合は 0.999×Φ(ln 6.4÷0.5)＋0.001×Φ(ln 32÷0.5)＝0.999897
+    // 85 °C（保持は 25 °C の 1/64。最短 50 ms÷64＝0.78 ms）で映像のクロックを止め、見張りのカウンタを切って
+    // （`dram refresh hsync`、DR-081）HSYNC ごとのリフレッシュを止める。0.1 s は 25 °C の 6.4 s で、崩れる
+    // 割合は 0.999×Φ(ln 6.4÷0.5)＋0.001×Φ(ln 32÷0.5)＝0.999897
     let mut c = Cpu::new();
     c.acrtc_case_b();
     c.idle(1000);
     c.bend("mode bend");
     c.bend("dram temp 85");
+    c.bend("dram refresh hsync");
     c.bend("clock video 0");
     fill_main_ram(&mut c.sys);
     let before = c.sys.main_ram.clone();
@@ -322,13 +362,15 @@ fn main_ram_loses_a_few_weak_cells_at_15_mhz_and_70_c() {
     // 崩れる割合は 0.999×Φ(ln 0.05365÷0.5)＋0.001×Φ(ln 0.2683÷0.5)＝4.2527e-6（25 ラインは 3.366e-6）。
     // 1048576 bit のうち崩れるのは平均 4.5 bit（弱いセルの裾だけ）。個体 1 では、分位点（dram.rs の hash）が
     // 4.2527e-6 より小さいセルは 5 つ（6.2e-7、2.7e-6、3.1e-6、3.5e-6、3.8e-6。次は 4.26e-6）。
-    // 個体 0 は最小が 6.1e-6 で、1 つも崩れない
+    // 個体 0 は最小が 6.1e-6 で、1 つも崩れない。見張りのカウンタ（DR-081）は 72 µs で満ちるので、
+    // 91.2 µs のラインでは働く。崩れを見るために切る（`dram refresh hsync`）
     let mut c = Cpu::new();
     c.acrtc_case_b();
     c.idle(1000);
     c.bend("mode bend");
     c.bend("dram temp 70");
     c.bend("dram unit 1");
+    c.bend("dram refresh hsync");
     c.bend("clock video 15e6");
     fill_main_ram(&mut c.sys);
     let before = c.sys.main_ram.clone();

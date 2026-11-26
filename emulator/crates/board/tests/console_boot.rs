@@ -216,6 +216,47 @@ fn stopping_the_video_clock_does_not_halt_the_bios() {
 }
 
 #[test]
+fn the_patch_cartridge_comes_back_after_a_slow_doc_clock() {
+    // DR-079・DR-080・DR-082：SAMPLE 3 で DOC の CLK を 10 kHz に 1 秒下げてから戻す。下げている間に
+    // Fabric の port 2 が時間切れになり、ACRTC のコマンドの列がずれて CER で止まる。BIOS の FIFO の
+    // 待ちが CER を見てすぐ打ち切る（CCR の DDM は保つ）ので、戻して 2 秒のうちにアプリが動き出す
+    let Some(cart) = rom("sdk/samples/patches/build/patches.bin") else {
+        eprintln!("sdk/samples/patches/build/patches.bin がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(true) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    for _ in 0..120 {
+        c.run_frame();
+    }
+    c.sys.bend("clock doc 10e3").unwrap();
+    c.sys.bend("mode bend").unwrap();
+    for _ in 0..60 {
+        c.run_frame();
+    }
+    c.sys.bend("mode normal").unwrap();
+    let f = bios_frame(&c);
+    let mut in_cart = 0;
+    for _ in 0..120 {
+        c.run_frame();
+        if (0x40_0000..0x50_0000).contains(&c.cpu.pc) {
+            in_cart += 1;
+        }
+    }
+    assert!(bios_frame(&c) >= f + 119, "VBlank が止まった");
+    assert!(
+        in_cart > 10,
+        "アプリが動き出さない（PC {:06X}、{in_cart}）",
+        c.cpu.pc
+    );
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+}
+
+#[test]
 fn the_patch_cartridge_runs_every_page() {
     // sdk/samples/patches の SAMPLE 3：仕様書 §11 の実験パッチを、ACRTC の DMA（port 1）、Data Fabric、
     // DOC の波形 RAM、ADPCM、文字 ROM（port 9）、Temporal RAM でつなぐ（sdk/samples/patches/README.md）

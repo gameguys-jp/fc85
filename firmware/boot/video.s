@@ -69,26 +69,34 @@ acrtc_put:
         MOVE.W  (SP)+,D7
         RTS
 
-; SR の WFR を待つ。D7 を壊す。65536 回（工場出荷のクロックで約 0.4 秒）読んでも立たなければ、ACRTC が
-; 終わらないコマンドを続けているとみなし、打ち切って続ける（DR-080）。ベンドで書込みが抜けて
-; （DR-079）コマンドの列がずれると、パラメタをコマンドとして読み、巨大な図形を描き続けることがある。
+; SR の WFR を待つ。D7 を壊す。ベンドで書込みが抜けて（DR-079）コマンドの列がずれると、ACRTC は
+; パラメタをコマンドとして読み、巨大な図形を描き続けるか、誤り（CER）で止まる（ABT まで動かない）。
+; CER が立っていればすぐに、65536 回（工場出荷のクロックで約 0.4 秒）読んでも WFR が立たなければ、
+; 打ち切って続ける（DR-080）。
 acrtc_wait_wfr:
         MOVE.W  D6,-(SP)
         MOVEQ   #-1,D6
 .poll   MOVE.W  ACRTC_SR,D7
+        BTST    #ACRTC_SR_CER_B,D7
+        BNE.S   .abort
         BTST    #ACRTC_SR_WFR_B,D7
         DBNE    D6,.poll
         BNE.S   .ok
-        BSR.S   acrtc_abort
+.abort  BSR.S   acrtc_abort
 .ok     MOVE.W  (SP)+,D6
         RTS
 
-; コマンドを打ち切り（CCR の ABT。FIFO も空になる）、CCR を BIOS の既定に戻し、AR を r00 にする。
+; コマンドを打ち切り（CCR の ABT。FIFO も空になる）、AR を r00 にする。CCR のほかのビット（アプリが
+; 立てた DDM など）は保つ。D7 を壊す。
 acrtc_abort:
         MOVE.W  #ACRTC_CCR,ACRTC_AR
-        MOVE.W  #ACRTC_CCR_ABT|ACRTC_CCR_GBM4,ACRTC_DATA
+        MOVE.W  ACRTC_DATA,D7
+        ORI.W   #ACRTC_CCR_ABT,D7
         MOVE.W  #ACRTC_CCR,ACRTC_AR
-        MOVE.W  #ACRTC_CCR_GBM4,ACRTC_DATA
+        MOVE.W  D7,ACRTC_DATA
+        ANDI.W  #$FFFF-ACRTC_CCR_ABT,D7
+        MOVE.W  #ACRTC_CCR,ACRTC_AR
+        MOVE.W  D7,ACRTC_DATA
         MOVE.W  #ACRTC_FIFO,ACRTC_AR
         RTS
 

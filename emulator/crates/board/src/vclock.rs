@@ -11,8 +11,9 @@
 //!   行のまとまりは 128 個、1 つが 2 行×256 列＝512 語。
 //! - Main RAM の行は 68000 の A9〜A16（語の番地の bit 8〜15）、列は A1〜A8 [P]。同じ 512 byte の中を使う
 //!   プログラムの作業領域（スタック、変数）は、CPU のアクセスで行が活性化されて残り、ほかが崩れる。
-//!   リフレッシュは 7 bit のカウンタで、HSYNC ごとに 5 行（DR-026）。CPU の Main RAM へのアクセスも、
-//!   その語の行を活性化する。
+//!   リフレッシュは 7 bit のカウンタで、HSYNC ごとに 5 行（DR-026）。HSYNC が `MAIN_REFRESH_WATCHDOG`
+//!   （72 µs）来なければ、16 MHz 系の見張りのカウンタが代わりに 5 行をリフレッシュする（DR-081）。ベンドの
+//!   `dram refresh hsync` は見張りを切る。CPU の Main RAM へのアクセスも、その語の行を活性化する。
 //! - VRAM の行は ACRTC の語の番地の bit 0〜7、列は bit 8〜15 [P]。ACRTC はリフレッシュの番地を MAD に出す
 //!   （8 bit、台帳 §3.1）ので、それを行の番地の線に通すにはこの割当てになる（MAD7–0 に出るとした [V]）。
 //!   表示の読出し（1 ラインに連続した 65 語）、描画の読み書き、リフレッシュが行を活性化する。表示の読出しは
@@ -24,7 +25,7 @@
 //!   VRAM が `VRAM_CHIP0` から（データの bit i がチップ CHIP0＋i）、セルの番号は語の番地。
 
 use fc85_chips::hd63484::Vram;
-use fc85_core::time::{PERIOD_21M, Time, UNITS_PER_SECOND};
+use fc85_core::time::{PERIOD_16M, PERIOD_21M, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 use crate::bend::{Mode, video_period_of};
@@ -35,6 +36,10 @@ use crate::dram::Dram;
 pub const GROUPS: usize = 128;
 /// Main RAM の HSYNC ごとのリフレッシュの行の数（DR-026）。
 pub const MAIN_ROWS_PER_HSYNC: u64 = 5;
+/// HSYNC が来ないときに Main RAM のリフレッシュを起こす見張りのカウンタの周期：16 MHz÷16 を 72 数える
+/// （72 µs。HSYNC ごとに 0 に戻す）。128 行を 25.6 回で一巡して 1.84 ms で、2 ms に収まる。工場出荷の
+/// HSYNC（63.69 µs）では満ちない。DR-081 [P]。
+pub const MAIN_REFRESH_WATCHDOG: Time = 72 * 16 * PERIOD_16M;
 /// `DramEnv::decays` のチップの番号の始まり。
 pub const MAIN_RAM_CHIP0: u32 = 0x100;
 pub const VRAM_CHIP0: u32 = 0x200;
@@ -95,6 +100,7 @@ impl System {
         });
         a.dram.set_env(env);
         self.main_dram.dram.set_env(env);
+        self.main_dram.watchdog = !(on && self.bends.refresh_hsync_only);
         if on {
             a.dram.start(now);
             self.main_dram.start(now, a.video.lines);
@@ -105,7 +111,7 @@ impl System {
     }
 }
 
-/// Main RAM のリフレッシュの回路（DR-026）と保持の模型。
+/// Main RAM のリフレッシュの回路（DR-026、DR-081）と保持の模型。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MainRamRefresh {
     pub dram: Dram,
@@ -113,6 +119,27 @@ pub struct MainRamRefresh {
     pub row: u8,
     /// 数えた HSYNC（`Video::lines`）。
     lines: u64,
+    /// HSYNC が来ないときの見張りのカウンタ（DR-081）が働くか。ベンドの `dram refresh hsync` で切る。
+    #[serde(default = "yes")]
+    pub watchdog: bool,
+    /// 見張りのカウンタが次に満ちる時刻（追跡しているときだけ使う）。
+    #[serde(default)]
+    next_watchdog: Time,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// 時刻 `t` の直前に Main RAM のリフレッシュが始まった時刻：最後の HSYNC `hs` か、見張りがあればその後の
+/// 72 µs ごと（DR-081）。`t` が `hs` より前なら `hs`。
+#[inline]
+pub fn main_refresh_start(hs: Time, t: Time, watchdog: bool) -> Time {
+    if watchdog && t > hs {
+        hs + (t - hs) / MAIN_REFRESH_WATCHDOG * MAIN_REFRESH_WATCHDOG
+    } else {
+        hs
+    }
 }
 
 impl Default for MainRamRefresh {
@@ -127,6 +154,8 @@ impl MainRamRefresh {
             dram: Dram::new(GROUPS),
             row: 0,
             lines: 0,
+            watchdog: true,
+            next_watchdog: 0,
         }
     }
 
@@ -134,8 +163,41 @@ impl MainRamRefresh {
     pub fn start(&mut self, now: Time, lines: u64) {
         if !self.dram.tracking() {
             self.lines = lines;
+            self.next_watchdog = now + MAIN_REFRESH_WATCHDOG;
         }
         self.dram.start(now);
+    }
+
+    /// 5 行をリフレッシュし、カウンタを進める。
+    fn refresh_rows(&mut self, ram: &mut [u8], rows: u64, t: Time) {
+        for k in 0..rows.min(GROUPS as u64) {
+            let g = (u64::from(self.row) + k) as usize & (GROUPS - 1);
+            self.activate(ram, g, t);
+        }
+        self.row = ((u64::from(self.row) + rows % GROUPS as u64) % GROUPS as u64) as u8;
+    }
+
+    /// 時刻 `now` まで進める：見張りのカウンタが満ちた分と、HSYNC（`lines` 本目が `hs`）の分をリフレッシュ
+    /// する（DR-026、DR-081）。追跡しているときにスロットごとに呼ぶ。
+    pub fn advance(&mut self, ram: &mut [u8], lines: u64, hs: Time, now: Time) {
+        let new = lines != self.lines;
+        if self.watchdog {
+            let until = if new { hs } else { now };
+            // 長く進めていなければ、位相を保って最後の 32 回だけにする（それより前の分は 128 行を一巡済み）
+            let w = MAIN_REFRESH_WATCHDOG;
+            if self.next_watchdog + 32 * w < until {
+                self.next_watchdog += (until - 32 * w - self.next_watchdog) / w * w;
+            }
+            while self.next_watchdog < until || (!new && self.next_watchdog == until) {
+                let t = self.next_watchdog;
+                self.refresh_rows(ram, MAIN_ROWS_PER_HSYNC, t);
+                self.next_watchdog = t + w;
+            }
+        }
+        if new {
+            self.hsync(ram, lines, hs);
+            self.next_watchdog = hs + MAIN_REFRESH_WATCHDOG;
+        }
     }
 
     /// 行のまとまり `g` を活性化し、崩れるセルがあれば崩す。
@@ -167,11 +229,7 @@ impl MainRamRefresh {
         }
         self.lines = lines;
         let rows = n.saturating_mul(MAIN_ROWS_PER_HSYNC);
-        for k in 0..rows.min(GROUPS as u64) {
-            let g = (u64::from(self.row) + k) as usize & (GROUPS - 1);
-            self.activate(ram, g, t);
-        }
-        self.row = ((u64::from(self.row) + rows % GROUPS as u64) % GROUPS as u64) as u8;
+        self.refresh_rows(ram, rows, t);
     }
 }
 
