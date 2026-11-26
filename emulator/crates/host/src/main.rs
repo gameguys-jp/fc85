@@ -6,8 +6,12 @@
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
-//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]`
+//! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]
+//! [--audio-tap digital|line] [--doc-sig both|one]`
 //!
+//! `--audio-tap` は鳴らす音と WAV に書く音：`line`（既定）はアナログの段の LINE OUT（analog.rs）、`digital` は
+//! チップの出力のデジタルの和（DR-054。`sdk/samples/dsp/verify_wav.py` が標本ごとに照合するのはこちら）。
+//! `--doc-sig` は DOC の SIG± の配線のジャンパ（DR-011）：`both`（既定）は両側の差、`one` は初期の片側の配線。
 //! `--*-clock` はベンド点の外部クロックのジャンパ（DR-035）：DOC の CLK（既定 8 MHz）、DSP の CLKIN
 //! （既定 20 MHz）、MSM5205 の発振（既定 384 kHz）、音声クロックの分周器の入力（既定 8 MHz）。
 //! `--char-bend` は文字 ROM のソケットの線（DR-063）：`A3=0`（GND）、`A3=1`（+5 V）、`A3=Z`（浮かせ）、
@@ -18,6 +22,7 @@ mod midi;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use fc85_board::analog::SigWiring;
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console};
 use fc85_board::video::{RASTER_H, RASTER_W, rgb888};
 use fc85_chips::hd68000::RunState;
@@ -62,6 +67,10 @@ struct Args {
     midi_out: Option<usize>,
     /// 文字 ROM のソケットの線（`A3=0,D0=D1,D7=Z` の形。DR-063）。
     char_bend: Option<String>,
+    /// 鳴らして WAV に書く音：true は LINE OUT、false はデジタルの和。
+    line: bool,
+    /// DOC の SIG± の配線（DR-011）。
+    doc_sig: SigWiring,
 }
 
 fn parse_args() -> Args {
@@ -82,6 +91,8 @@ fn parse_args() -> Args {
         midi_in: None,
         midi_out: None,
         char_bend: None,
+        line: true,
+        doc_sig: SigWiring::Both,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -116,12 +127,33 @@ fn parse_args() -> Args {
             "--dsp-clock" => a.clocks[1] = it.next().and_then(|v| v.parse().ok()),
             "--adpcm-clock" => a.clocks[2] = it.next().and_then(|v| v.parse().ok()),
             "--audio-clock" => a.clocks[3] = it.next().and_then(|v| v.parse().ok()),
+            "--audio-tap" => {
+                a.line = match it.next().as_deref() {
+                    Some("line") => true,
+                    Some("digital") => false,
+                    v => {
+                        eprintln!("--audio-tap は digital か line（{v:?}）");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            "--doc-sig" => {
+                a.doc_sig = match it.next().as_deref() {
+                    Some("both") => SigWiring::Both,
+                    Some("one") => SigWiring::One,
+                    v => {
+                        eprintln!("--doc-sig は both か one（{v:?}）");
+                        std::process::exit(2);
+                    }
+                }
+            }
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] \
+                     [--audio-tap digital|line] [--doc-sig both|one]"
                 );
                 std::process::exit(0);
             }
@@ -188,6 +220,7 @@ fn default_path(rel: &str) -> Option<String> {
 fn build_console(a: &Args) -> Console {
     let mut c = Console::new();
     c.sys.ports.doc = a.doc;
+    c.sys.ports.doc_board.sig_wiring = a.doc_sig;
     let boot = a
         .boot
         .clone()
@@ -375,10 +408,21 @@ fn pace(audio: bool, ring: &Ring, next: &mut std::time::Instant) {
     }
 }
 
+/// 鳴らす音（`--audio-tap`）を取り出し、もう一方は捨てる。
+fn take_audio(c: &mut Console, line: bool) -> Vec<(i16, i16)> {
+    let (keep, drop) = if line {
+        (&mut c.sys.line_out, &mut c.sys.audio_out)
+    } else {
+        (&mut c.sys.audio_out, &mut c.sys.line_out)
+    };
+    drop.clear();
+    std::mem::take(keep)
+}
+
 /// 仮想機の音声をリングに入れる。遅れすぎたら古いものを捨てる（ホストの安全層。仮想機は変えない）。
-fn push_audio(c: &mut Console, ring: &Ring) {
+fn push_audio(c: &mut Console, ring: &Ring, line: bool) {
     let mut q = ring.lock().unwrap();
-    q.extend(c.sys.audio_out.drain(..));
+    q.extend(take_audio(c, line));
     let max = AUDIO_RATE as usize / 5;
     while q.len() > max {
         q.pop_front();
@@ -518,10 +562,9 @@ fn main() {
                 view(&c, &mut buf);
                 dump_ppm(&numbered(p, i + 1), &buf);
             }
+            let mut s = take_audio(&mut c, a.line);
             if a.wav.is_some() {
-                pcm.append(&mut c.sys.audio_out);
-            } else {
-                c.sys.audio_out.clear();
+                pcm.append(&mut s);
             }
         }
         view(&c, &mut buf);
@@ -580,7 +623,7 @@ fn main() {
         while let Some(b) = c.sys.acia.take_sent() {
             midi.send(b);
         }
-        push_audio(&mut c, &ring);
+        push_audio(&mut c, &ring, a.line);
         pace(audio.is_some(), &ring, &mut next);
         view(&c, &mut buf);
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {

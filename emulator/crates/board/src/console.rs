@@ -22,6 +22,7 @@ use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, SLOT, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::adpcm::AdpcmCtrl;
+use crate::analog::{self, Analog, TICK};
 use crate::doc;
 use crate::dsp::{BioSel, DspCtrl};
 use crate::fabric::{Fabric, HostReply};
@@ -111,6 +112,13 @@ pub struct System {
     /// 次の音声の標本の時刻と、その間隔。
     next_sample: Time,
     pub sample_period: Time,
+    /// 音声のアナログの段（analog.rs）。DOC の S/H は `ports.doc_board` が持つ。
+    #[serde(default)]
+    pub analog: Analog,
+    /// LINE OUT（アナログの段の出力、48 kHz、L・R）。`audio_out` と同じ時刻に 1 標本ずつ出す。
+    /// ホストが取り出す。保存には入れない。
+    #[serde(skip)]
+    pub line_out: Vec<(i16, i16)>,
 }
 
 impl Default for System {
@@ -198,6 +206,8 @@ impl System {
             audio_out: Vec::new(),
             next_sample: 0,
             sample_period: fc85_core::time::UNITS_PER_SECOND / Time::from(AUDIO_RATE),
+            analog: Analog::new(),
+            line_out: Vec::new(),
         }
     }
 
@@ -215,6 +225,7 @@ impl System {
             self.ports.temporal.rptr = 0;
         }
         self.vblank_prev = vblank;
+        self.line();
         while self.next_sample < self.ports.now() {
             let s = self.mix();
             self.audio_out.push(s);
@@ -772,6 +783,54 @@ impl System {
         r += a / 2;
         let c = |x: i32| x.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
         (c(l), c(r))
+    }
+
+    /// LINE OUT（analog.rs）：192 kHz の刻みを `now` の前まで進め、48 kHz の標本を `line_out` に出す。
+    /// 標本の時刻の条件は `mix` と同じ（`next_sample` から始める）。入力は刻みの間の平均：DOC の S/H の和は
+    /// 子基板が積分したもの、本体 DAC のラッチは最後の拍の時刻に変わったとし（拍がなければ刻みの時刻。
+    /// DIRECT の書込み）、DA OUT は変わった時刻をアダプタが記録する。
+    fn line(&mut self) {
+        let now = self.ports.now();
+        loop {
+            let t = self.analog.next_tick(self.next_sample);
+            if t >= now {
+                break;
+            }
+            let p = &mut self.ports;
+            let a = &mut self.analog;
+            for (h, u) in a
+                .dac
+                .iter_mut()
+                .zip([p.main_dac.left(), p.main_dac.right()])
+            {
+                let v = i64::from(u) - 128;
+                if v != h.value() {
+                    let at = p.audio.beat_at().filter(|&b| b + TICK > t).unwrap_or(t);
+                    h.set(at, v);
+                }
+            }
+            let da = i64::from(p.adpcm_port.da_out);
+            if da != a.da.value() {
+                a.da.set(p.adpcm_port.da_at, da);
+            }
+            let doc = p.doc_board.take_line(t);
+            let dac = [a.dac[0].take(t), a.dac[1].take(t)];
+            let da = a.da.take(t);
+            let span = TICK as f64;
+            let inp = analog::Inputs {
+                doc: if p.doc {
+                    [doc[0] as f64 / span, doc[1] as f64 / span]
+                } else {
+                    [0.0; 2]
+                },
+                dac: [dac[0] as f64 / span, dac[1] as f64 / span],
+                dac_on: !p.doc,
+                da: da as f64 / span,
+            };
+            if let Some(s) = a.tick(&inp) {
+                self.line_out.push(s);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ ホストから

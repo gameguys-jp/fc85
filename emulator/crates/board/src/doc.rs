@@ -32,9 +32,14 @@
 //!   出す。68000 はその後の最初のクロックの立下りで DTACK を認識する（S4 の終わりより前にはならない）。
 //!   68000 の書込みは預からない（68000 は DTACK まで番地とデータを保つ）[P]。
 //! - 68000 のクロック（8 MHz）は 16 MHz の 2 分周で、立上りは `PERIOD_8M` の倍数の時刻 [P]。
-//! - DOC の出力（SIG±、CA、CSTRB）のサンプルホールドとミキサは段階 4。今は最後の値を記録するだけ。
+//! - DOC の出力段（段階 4）：CSTRB ごとに、CA3–CA0 のチャネルの S/H を 2 通りに更新する。デジタルの出力
+//!   （`chan`、DR-054）は SIG の値をそのまま取る。アナログの S/H（`sh`、analog.rs）は SIG± の配線
+//!   （`sig_wiring`、DR-011 のジャンパ）で電流を決め、RC の充電で `sh_alpha` だけ近づく。偶数・奇数の和の
+//!   時間の積分を LINE OUT（`console` の `line`）が刻みごとに取り出す（`take_line`）。片側の配線の電流は、
+//!   訪れたオシレータの音量のレジスタを使う [V]。
 
 use crate::acrtc::{T_OUT, T_SETUP};
+use crate::analog::{Hold, SigWiring, sh_alpha_q16};
 use crate::fabric::{Access, Dir, PortReply};
 use fc85_chips::es5503::{Es5503, Slot, WaveBus};
 use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time};
@@ -218,6 +223,22 @@ pub struct DocBoard {
     bridge: Bridge,
     /// 68000 が使った窓の数。
     pub host_windows: u64,
+    /// SIG± の配線（DR-011 のジャンパ。仕様書 §11 のベンド点「DOC 出力の片側」）。Bend の切り替えはここ。
+    #[serde(default)]
+    pub sig_wiring: SigWiring,
+    /// アナログの S/H が 1 回の CSTRB で差を縮める割合（Q16）。CLK の周期で決まる（analog.rs）。
+    #[serde(default = "default_sh_alpha")]
+    sh_alpha: u32,
+    /// アナログの S/H 16 個の値（SIG± の差の半分の単位×65536。analog.rs の `doc_volts_per_unit`）。
+    #[serde(default)]
+    sh: [i64; 16],
+    /// S/H の偶数（L）・奇数（R）の和の、時間の積分（LINE OUT の入力）。
+    #[serde(default)]
+    sh_sum: [Hold; 2],
+}
+
+fn default_sh_alpha() -> u32 {
+    sh_alpha_q16(PERIOD_8M)
 }
 
 impl Default for DocBoard {
@@ -261,6 +282,10 @@ impl DocBoard {
             windows: 0,
             bridge: Bridge::default(),
             host_windows: 0,
+            sig_wiring: SigWiring::Both,
+            sh_alpha: default_sh_alpha(),
+            sh: [0; 16],
+            sh_sum: [Hold::default(); 2],
         }
     }
 
@@ -325,6 +350,7 @@ impl DocBoard {
     /// 次の E の立下りは変えない。
     pub fn set_clock_period(&mut self, clk: Time) {
         self.fall.set_period(8 * clk);
+        self.sh_alpha = sh_alpha_q16(clk);
     }
 
     /// Fabric への答え。
@@ -460,12 +486,48 @@ impl DocBoard {
         }
         self.last_sig = tick.sig;
         if tick.strobe {
-            self.chan[usize::from(tick.channel & 15)] = tick.sig;
+            let c = usize::from(tick.channel & 15);
+            self.chan[c] = tick.sig;
+            if let Slot::Osc { n, .. } = tick.slot {
+                self.sample_hold(t, c, tick.sig, n);
+            }
         }
         for (s, &c) in self.chan_sum.iter_mut().zip(&self.chan) {
             *s += i64::from(c);
         }
         self.chan_cycles += 1;
+    }
+
+    /// アナログの S/H（CSTRB の Low の間に、チャネル `c` の保持容量を SIG の電圧へ充電する）。
+    /// 電流は I± ＝ I_FS×(音量/255)×(1/2 ± s/256)。両側は差 2×sig、片側は SIG+ だけで sig＋128×音量
+    /// （単位は差の半分）[P][V]。
+    fn sample_hold(&mut self, t: Time, c: usize, sig: i32, n: u8) {
+        let x = match self.sig_wiring {
+            SigWiring::Both => 2 * i64::from(sig),
+            SigWiring::One => i64::from(sig) + 128 * i64::from(self.doc.volume(usize::from(n))),
+        } << 16;
+        let d = ((x - self.sh[c]) * i64::from(self.sh_alpha)) >> 16;
+        if d != 0 {
+            self.sh[c] += d;
+            let side = &mut self.sh_sum[c & 1];
+            let v = side.value() + d;
+            side.set(t, v);
+        }
+    }
+
+    /// アナログの S/H 16 個の値（analog.rs の単位）。
+    pub fn sample_holds(&self) -> &[i64; 16] {
+        &self.sh
+    }
+
+    /// S/H の割合（Q16）。
+    pub fn sh_alpha(&self) -> u32 {
+        self.sh_alpha
+    }
+
+    /// LINE OUT：前に取り出してから `to` までの、S/H の偶数（L）・奇数（R）の和の積分（値×時刻の単位）。
+    pub fn take_line(&mut self, to: Time) -> [i64; 2] {
+        [self.sh_sum[0].take(to), self.sh_sum[1].take(to)]
     }
 
     /// 前に呼んでからのチャネルごとの平均を返し、和を 0 にする。DOC のサイクルがなければ今の値。
