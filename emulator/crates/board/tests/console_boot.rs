@@ -492,3 +492,72 @@ fn the_showcase_cartridge_draws_beyond_sixteen_colours() {
     assert!(colours.len() > 48, "色が {} しかない", colours.len());
     assert_ne!(frames[0], frames[1], "画面が止まっている");
 }
+
+#[test]
+fn the_showcase_cartridge_reloads_the_dsp_after_an_overclock() {
+    // DR-083：DSP の CLKIN を 25.3 MHz に上げると、プログラム RAM の読出しが間に合わず、崩れた命令の
+    // TBLW がプログラム RAM を書き換える。誤りにならない所（透視の表を引く命令）が書き換わると、
+    // 尾の語は合ったまま頂点が 1 点に集まる。SAMPLE 6 は誤りのあとに初めて通ったときにもプログラムを
+    // 読み込み直すので（sdk/samples/showcase/README.md §04）、クロックを戻すと元の立方体に戻る
+    let (Some(cart), Some(code)) = (
+        rom("sdk/samples/showcase/build/showcase.bin"),
+        rom("sdk/samples/showcase/build/xform.bin"),
+    ) else {
+        eprintln!("sdk/samples/showcase/build/ がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(false) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    let code: Vec<u16> = code
+        .chunks(2)
+        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        .collect();
+    let app = 0x800;
+    let errors = |c: &Console| -> u32 {
+        (0..3)
+            .map(|k| {
+                u32::from(u16::from_be_bytes([
+                    c.sys.main_ram[app + 2 + 2 * k],
+                    c.sys.main_ram[app + 3 + 2 * k],
+                ]))
+            })
+            .sum()
+    };
+    // 画面の座標（Staging RAM の $0100 から X・Y×8）
+    let vertices = |c: &Console| -> Vec<(i16, i16)> {
+        let s = &c.sys.ports.staging;
+        let w = |k: usize| i16::from_be_bytes([s[0x100 + 2 * k], s[0x101 + 2 * k]]);
+        (0..8).map(|v| (w(2 * v), w(2 * v + 1))).collect()
+    };
+    let mut after = 0;
+    for i in 0..260 {
+        match i {
+            120 => {
+                c.sys.bend("mode bend").unwrap();
+                c.sys.bend("clock dsp 25.3e6").unwrap();
+            }
+            200 => {
+                c.sys.bend("clock dsp off").unwrap();
+                assert!(errors(&c) > 0, "上げても誤りがない");
+            }
+            230 => after = errors(&c),
+            _ => {}
+        }
+        c.sys.set_ports(0, 0);
+        c.run_frame();
+    }
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(errors(&c), after, "戻してからも誤りが続く");
+    let prog = &c.sys.ports.dsp.prog[..code.len()];
+    let changed = prog.iter().zip(&code).filter(|(a, b)| a != b).count();
+    assert_eq!(changed, 0, "プログラム RAM が {changed} 語違う");
+    let v = vertices(&c);
+    assert!(
+        v.iter().any(|p| *p != v[0]),
+        "頂点が 1 点に集まっている {v:?}"
+    );
+}

@@ -83,6 +83,7 @@ FIELDS_PER_LOOP EQU     2               ; 1 ループに描き直す数の欄
 WAIT_LOOPS      EQU     6250            ; VBlank：1 回 32 クロックで約 25 ms
 FAB_WAIT        EQU     6250            ; DSP の結果：約 25 ms
 PRG_WAIT        EQU     1000            ; DSP の PRGBUS
+RELOAD_EVERY    EQU     4               ; 誤りがこの回数続いたら、DSP のプログラムを読み込み直す（2 の冪）
 
 ; Staging RAM（port 0 の byte 番地）
 IN_STAGE        EQU     $0000
@@ -132,6 +133,7 @@ v_bios_irq6     RS.L    1               ; 差し替える前のレベル 6 の�
 v_draw          RS.W    1               ; 描いている頁（0・1）
 v_start         RS.L    1               ; このループの始まりの bios_frame
 v_seq           RS.W    1               ; DSP への塊の番号
+v_err_run       RS.W    1               ; DSP の誤りが続いた回数
 v_kicked        RS.W    1               ; このループで DSP に送った
 v_ang_a         RS.W    1
 v_ang_b         RS.W    1
@@ -412,7 +414,11 @@ dsp_kick:
         RTS
 
 ; DSP の結果を待つ。出力：D0.W＝0 なら A0＝座標（Staging RAM の X, Y×CUBE_VERTS）。0 でなければ誤りで、
-; 数えて DSP と Fabric を初期化し直した。D1・A1 を壊す。
+; 数えて DSP と Fabric を初期化し直した。誤りが RELOAD_EVERY 回続いたら、プログラムも読み込み直す。
+; 誤りのあとに初めて通ったときも、その結果は捨てて読み込み直す（D0.W＝1）。DSP が崩れた命令（DSP の
+; クロックを上げすぎたときなど。DR-083）の TBLW でプログラム RAM を書き換えていると、リセットだけでは
+; 戻らず、誤りにならない所（透視の表を引く命令など）なら、尾の語は合ったまま座標だけが崩れるため。
+; D1・A1 を壊す。
 dsp_fetch:
         LEA     FABRIC_CH1,A1
         MOVE.W  #FAB_WAIT-1,D1
@@ -433,16 +439,38 @@ dsp_fetch:
         CMP.W   STAGING+OUT_STAGE+4*CUBE_VERTS,D0
         BNE     .terr
         LEA     STAGING+OUT_STAGE,A0
+        TST.W   v_err_run
+        BNE     .healed
         MOVEQ   #0,D0
         RTS
+.healed CLR.W   v_err_run
+        MOVE.L  D2,-(SP)
+        BSR     dsp_reload
+        MOVE.L  (SP)+,D2
+        BRA     .fail
 .ferr   ADDQ.W  #1,v_err_fabric
         BRA     .reset
 .derr   ADDQ.W  #1,v_err_dsp
         BRA     .reset
 .terr   ADDQ.W  #1,v_err_tail
-.reset  BSR     dsp_restart
-        MOVEQ   #1,D0
+.reset  ADDQ.W  #1,v_err_run
+        MOVE.W  v_err_run,D1
+        ANDI.W  #RELOAD_EVERY-1,D1
+        BNE     .restart
+        MOVEM.L D2/A0,-(SP)
+        BSR     dsp_reload
+        MOVEM.L (SP)+,D2/A0
+        BRA     .fail
+.restart
+        BSR     dsp_restart
+.fail   MOVEQ   #1,D0
         RTS
+
+; 両チャネルを止め、DSP のプログラムを読み込み直して確かめる（dsp_load）。D0〜D2・A0・A1 を壊す。
+dsp_reload:
+        MOVE.W  #FAB_STOP,FABRIC_CH0+FAB_CTRL
+        MOVE.W  #FAB_STOP,FABRIC_CH1+FAB_CTRL
+        BRA     dsp_load
 
 ; 両チャネルを止め、DSP をリセットし、port 3・4 の FIFO を初期化して、DSP を解く（プログラムは RAM に残る）。
 dsp_restart:
