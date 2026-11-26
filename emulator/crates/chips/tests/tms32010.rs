@@ -532,6 +532,25 @@ fn indirect_can_load_the_next_arp() {
 }
 
 #[test]
+fn sar_of_the_stepped_ar_stores_the_new_value() {
+    // T3 3-55〜3-56 の WARNING の例：AR0＝10 で SAR AR0,*+ は 10 番地に 11、SAR AR0,*- は 9 を書く
+    let prog = [
+        larp(0),
+        lark(0, 10),
+        ind(SAR0, IND_INC),
+        lark(0, 10),
+        ind(SAR0, IND_DEC),
+    ];
+    let (mut cpu, mut bus) = boot(&prog);
+    run(&mut cpu, &mut bus, 3);
+    assert_eq!(cpu.data(10), 11);
+    assert_eq!(cpu.ar(0), 11);
+    run(&mut cpu, &mut bus, 2);
+    assert_eq!(cpu.data(10), 9);
+    assert_eq!(cpu.ar(0), 9);
+}
+
+#[test]
 fn banz_tests_9_bits_and_always_decrements() {
     let prog = [d(LAR0, 0), BANZ, 10, d(LAR0, 1), BANZ, 20];
     let (mut cpu, mut bus) = boot(&prog);

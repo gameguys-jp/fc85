@@ -52,7 +52,7 @@
 |---|---|---|
 | MSM5205 | ADPCM の既知列（DR-021 の列を含む） | 実装した。試験 12 件 |
 | HD63484 | 描画・COPY・FIFO | ホストとのやり取りと、コマンド 38 種（レジスタ・データ転送、直線・矩形・多角形・円・楕円・弧・塗り・パターン・PAINT・図形コピー）、演算・色・領域モードを実装した。段階 2 でデータの DMA のピン（DREQ・DACK・DTACK・DONE）を足した。段階 3 で表示（同期、上・基本・下画面とウィンドウ、縦横のズーム、グラフィックカーソル、属性と点滅、DSK・CSK）と、表示・リフレッシュ・属性のサイクルと描画のバスの取り合いを足した。段階 4 で、映像のクロックのベンド点のために DRAM のリフレッシュの番地の出力を足した。試験 77 件。コマンドの DMA、ブロックカーソル（文字画面）、ライトペン、インタレースはまだ |
-| TMS32010 | 乗算・FIR・外部 I/O。サイクル数は TI の資料どおり | 実装した。試験 33 件 |
+| TMS32010 | 乗算・FIR・外部 I/O。サイクル数は TI の資料どおり | 実装した。試験 34 件。MAME との照合（V3）は 96 万命令で、既知の差のほかは一致（[v3-mame.md](v3-mame.md)） |
 | ES5503 | 発音と停止 | 実装した。レジスタの保持と波形 RAM のリフレッシュの行も足した。試験 24 件 |
 | HD68000 | 段階 1 の対象外 | 段階 3 で実装した（命令、例外、2 語のプリフェッチ、命令の時間）。データなしの試験 24 件（ほかに速さの試験 1 件）と、SST との照合 99.43%（994325/1000060。合わない分は資料に従った） |
 | HD6850 | 段階 1 の対象外 | 段階 3 で実装した（byte の単位の送受信、割込み、マスタリセット）。試験は本体のバスの試験に含む |
@@ -104,15 +104,16 @@
 | RS の最小幅（§3.5：5 サイクル以上） | 見ない。RS を外した 1 サイクル後に 0 番地から実行する | 短いパルスの動作が資料にない [V] | 短い RS を使う Bend |
 | 144〜255 番地（§4.2、§7 の 6） | 読むと 0、書込みは捨てる | 資料にない [V] | 範囲外を指す間接アドレスの Bend |
 | DMOV・LTD の番地の境界（§3.8、§7 の 6） | 127 番地からは 128 番地へ写す。143 番地からは写さない | 資料にない [V] | 遅延線をページの境界に置くソフト |
+| DMOV・LTD で 255 番地を指すとき（§7 の 6） | 写さない（0 番地へ回り込まない） | 資料にない [V]。MAME は 0 番地へ回り込む（V3 の既知の差） | 範囲外を指す間接アドレスの Bend |
 | スタックの POP（§4.1） | 最上段を取り出し、最下段の値はそのまま残す（MAME と同じ） | 資料にない [V] | 5 回目以降の POP・RET の値 |
-| SUBC・ABS の OV | 変えない。ABS の 0x80000000 は OVM＝1 なら 0x7FFFFFFF（§4.3） | T1 の各命令の頁は OV に触れない。MAME は SUBC で OV を立てる [V] | BV の分岐 |
+| SUBC・ABS の OV | 変えない。ABS の 0x80000000 は OVM＝1 なら 0x7FFFFFFF（§4.3） | T1 の各命令の頁は OV に触れない。MAME の SUBC にも OV の式はあるが、条件がいつも偽で、OV を変えない（V3 で確認） [V] | BV の分岐 |
 | 加減算の OV（ADD 系、SUB 系、APAC、SPAC、LTA、LTD） | 32 bit の符号付きのあふれで OV＝1。OVM＝1 なら最大・最小の値にする。OV は BV か LST でしか消えない | T1 §2.2.1.1、§2.2.2.1 | — |
-| SAR・SST を間接で使い、指している AR を増減するとき | 増減の前の値を書く | 資料にない [V]。MAME は増減の後の値を書く（SAR） | AR を自分の指す先へ書く Bend |
-| SST の間接での次の ARP | 指定どおりに変える | T1 の書式（`SST *,<ARP>`）。MAME は変えない | — |
+| SAR を間接で使い、指している AR を増減するとき | 増減の後の値を書く。SST は次の ARP に変える前の状態語を書く [V] | SAR は T3 3-55〜3-56 の例（AR0＝10 で `SAR AR0,*+` は 11 を書く）[D]。以前は資料にないとして増減の前の値を書いていた（V3 で見つけて直した）。SST は MAME と同じ | — |
+| SST の間接での次の ARP | 指定どおりに変える | T1・T3 3-59 の書式（`SST *,<ARP>`）。MAME は変えない（V3 では MAME の誤りとして手元で直した） | — |
 | SST の番地 | 直接は DP によらずページ 1（§4.1）。間接は AR の下位 8 bit | 間接の番地の資料はない [V] | — |
 | LAR・LST を間接で使い、同じ AR・ARP を変えるとき | 読んだ値が勝つ | 資料にない [V]。MAME と同じ | — |
 | SACH のシフト（§4.3：0・1・4） | 2・3・5・6・7 も同じ式（左シフトして上位 16 bit）で扱う | 未定義の符号 [V] | Bend だけで使う |
-| 未定義の命令 | 1 サイクルの NOP として実行し、回数を数える | 資料にない [V] | — |
+| 未定義の命令 | 1 サイクルの NOP として実行し、回数を数える | 資料にない [V]。MAME は 0 サイクルで何もしない。7F の群は下位 5 bit だけで解読する（7FA0〜7FFF を 7F80〜7F9F の命令にする） | — |
 | OUT と 0〜7 番地への TBLW（§2.2） | コアは別の関数（`port_out`、`write_program`）で呼ぶ。区別できないことは board 層で再現する | 外部ピンでは同じ WE と番地 | — |
 | データ RAM への直接の書込み（`set_data`） | 試験と Bend の道具。実機にはない | エミュレータだけの内部介入（仕様書 §11） | — |
 
@@ -510,13 +511,14 @@ DOC 子基板
 | シフトと論理 | `shifts_and_sign_extension`、`logic_ops_touch_only_the_low_half` | ADD・LAC の符号拡張、ADDS・ZALS・LACK の非拡張、SACH のシフト 0・1・4、AND は上位を 0 に | 合格 |
 | 除算 | `sixteen_subc_divide` | 1000÷7 を SUBC 16 回で。下位に商 142、上位に余り 6 | 合格 |
 | FIR | `three_tap_fir_with_ltd_and_mpy` | 3 タップ（LT・MPY・LTD・APAC）。0.5 のインパルスへの応答が 0x2000、0x1000、0x0800、0。1 標本 15 サイクル（§3.7 から計算） | 合格 |
-| アドレス | `indirect_uses_low_8_bits_and_steps_in_9_bits`、`indirect_can_load_the_next_arp`、`banz_tests_9_bits_and_always_decrements`、`dp_selects_page_and_sst_always_uses_page_1` | 番地は AR の下位 8 bit、増減は下位 9 bit（§4.1、§4.2）。SST の直接はページ 1 | 合格 |
+| アドレス | `indirect_uses_low_8_bits_and_steps_in_9_bits`、`indirect_can_load_the_next_arp`、`sar_of_the_stepped_ar_stores_the_new_value`、`banz_tests_9_bits_and_always_decrements`、`dp_selects_page_and_sst_always_uses_page_1` | 番地は AR の下位 8 bit、増減は下位 9 bit（§4.1、§4.2）。SAR は増減の後の値（T3 3-56）。SST の直接はページ 1 | 合格 |
 | 状態とスタック | `lst_restores_status_but_not_intm`、`stack_is_four_deep_and_loses_the_oldest`、`push_keeps_the_low_12_bits`、`call_and_ret`、`dmov_and_ltd_shift_the_delay_line` | 状態語の bit 配置（§4.1）。スタックは 4 段で、5 段目で最も古い値を失う | 合格 |
 | I/O と表 | `in_and_out_use_the_port_field`、`tblr_and_tblw_use_acc_low_12_bits_and_one_stack_level`、`tblr_with_a_full_stack_loses_the_oldest`、`bioz_branches_when_bio_is_low` | ポートは上位バイトの 3 bit（§2.2）。表の番地は ACC の下位 12 bit で、スタックを 1 段使う（§3.4） | 合格 |
 | 割込み | `interrupt_jumps_to_2_with_one_dummy_cycle`、`interrupt_waits_one_instruction_after_mpy`、`interrupt_waits_for_a_multi_cycle_instruction`、`int_edge_is_latched_while_disabled`、`int_held_low_requests_again` | 1 ダミーサイクルで 2 番地へ。MPY・EINT の次の命令と、複数サイクル命令の途中では受け付けない（§3.6、追補 A） | 合格 |
 | その他 | `undefined_opcode_runs_as_one_cycle_nop`、`snapshot_round_trip` | 未定義の命令は 1 サイクル。TBLR の途中で保存して戻すと、同じ動作を続ける | 合格 |
+| MAME との照合（V3） | `tms32010_matches_mame`（`tms32010_v3.rs`） | 1 命令ごとの状態、サイクル数、バスの出来事、データ RAM が、既知の差（[v3-mame.md](v3-mame.md) §03）のほかは一致。`FC85_V3_DIR` がないときは飛ばす | 96 万命令で一致 |
 
-期待値は TI の資料の記述と、そこからの手計算で、実チップの測定ではない。MAME との比較（V3）はまだしていない。比べるときは、条件分岐と割込みの受付のサイクル数、SUBC の OV、SAR・SST の間接で書く値が既知の差になる（§03）。
+期待値は TI の資料の記述と、そこからの手計算で、実チップの測定ではない。MAME との照合（V3）の結果と既知の差は [v3-mame.md](v3-mame.md)。照合で、SAR の間接で書く値の誤りが見つかり、直した（§03）。
 
 ### ES5503
 

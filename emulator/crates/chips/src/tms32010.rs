@@ -385,10 +385,11 @@ impl Tms32010 {
                 self.acc = ((d as i16 as i32) << (hi & 0x0F)) as u32;
                 1
             }
-            // SAR：増減する前の AR の値を書く [V]（MAME は増減の後の値）
+            // SAR：間接で同じ AR を増減したときは、増減の後の値を書く（台帳 §4.2。T3 3-56 の例：
+            // AR0＝10 で SAR AR0,*+ は 10 番地に 11 を書く）
             0x30 | 0x31 => {
-                let v = self.ar[usize::from(hi & 1)];
                 let a = self.operand(op);
+                let v = self.ar[usize::from(hi & 1)];
                 self.write(a, v);
                 1
             }
