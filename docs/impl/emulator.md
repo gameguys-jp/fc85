@@ -23,8 +23,8 @@
 |---|---|---|
 | core | `fc85-core`（`emulator/crates/core`） | 時刻の単位（1/15.12 GHz。4 つの発振源の周期がすべて整数）とクロックの立上りの列（`time`）。イベント、信号線、trace、snapshot はまだ。Data Fabric の trace は、スロットの記録（`SlotRecord`）で始めた |
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
-| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3） |
-| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
+| board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3）、音声のアナログの段（`analog`。段階 4） |
+| host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--audio-tap line|digital`（再生と `--wav` の音声。既定の `line` はアナログの段を通した LINE OUT、`digital` は DR-054 の混ぜた値）・`--doc-sig both|one`（DOC の SIG± の配線。DR-011 のジャンパ）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。外部クロックのジャンパ（DR-035）は `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`（Hz）。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす |
 
 ### 約束
 
@@ -64,6 +64,7 @@
 | Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件） |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ（port 3・4、プログラム RAM、メールボックス、BIO の選択）も実装した（試験 9 件）。ブリッジと Temporal RAM の CPU 側のレジスタの番地はまだ |
 | DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。68000 のコアとバスはまだなく、試験がバスサイクルを直接始める（試験 7 件。規則は OI-055） |
+| 音声のアナログの段（段階 4） | 仕様書 §10 の DAC から LINE OUT まで（DOC の I/V・S/H・LPF、本体 DAC と ADPCM の LPF、ミキサ、結合容量） | 部品の値を [P] で決めて組んだ（§03 の「音声のアナログの段」）。DOC 子基板の S/H と SIG± のジャンパ（DR-011）、MSM5205 の DA OUT の遅れも足した（試験 11 件）。DR-054 のデジタルの出力は、別の流れとしてビット列を変えずに残した |
 | 本体のバス（段階 3） | アドレスマップ（仕様書 §05）、待ち、バスの時間切れ、割込み、I/O レジスタ | 解読、メモリ（Boot ROM、文字 ROM、Main RAM、Staging RAM、カートリッジ）、各窓の待ち、バスの時間切れ、割込みのレベル（74LS148）、オートベクタ、ACIA、入力、DSP・ADPCM・本体 DAC・Temporal のレジスタ、RESET 命令、音声の出力（48 kHz）を実装した。68000 のコアはまだなく、試験がバスサイクルを直接出す（試験 16 件。DR-052〜DR-054） |
 | 映像の出力段（段階 3） | ACRTC の表示、パレット、映像の割込み | ACRTC の表示のタイミング（chips）と、画素、パレットの 2 面と写し、DIRECT、VBlank・HBlank の割込みと Fabric のトリガ 1・2 を実装した（DR-027、DR-053） |
 
@@ -283,10 +284,11 @@
 | 仕様の項目 | 実装での扱い | 理由 | 影響 |
 |---|---|---|---|
 | 音声クロック（DR-018） | 8 MHz を N で割る。N＝0 は 4096 として数える。N の書換えは次の拍から効く。拍の出力（TRIGGER 3）は入力の 2 クロック High | 分周器の作りは仕様にない [P]。N＝0 は [V] | N が 2 以下では High のままで、トリガの立上りが出ない [V] |
-| 本体 DAC（DR-019） | 拍ごとに port 2 の FIFO から 1 語を取り込む。空なら保ち、UNDERRUN を記録する。DOC 子基板があれば読まない。電源投入時のラッチは 0 | DR-019 (2)(3)。初期値は [V] | — |
+| 本体 DAC（DR-019） | 拍ごとに port 2 の FIFO から 1 語を取り込む。空なら保ち、UNDERRUN を記録する。DOC 子基板があれば読まない。電源投入時のラッチは 0 | DR-019 (2)(3)。初期値は [V] | LINE OUT では、BIOS が中央を書くまでの 2.8 ms が −1.0 V の段になる（OI-061） |
 | FIFO の受け渡しの時刻 | 本体 DAC と ADPCM のアダプタの取り出しは、スロットの頭（Fabric のアクセスの前）にまとめる | 簡単のため [P] | ずれは 1 スロット（250 ns）以内 |
 | ADPCM のニブル（DR-017 (2)(3)） | V̄C̄K̄ の立上りで次のニブルを D3〜D0 に置く（取込みは立下りの 6 クロック後）。byte の 1 つ目のニブルで FIFO から取り出す。既定は上位から。空なら 0x08（0000 と 1000 が交互）で UNDERRUN。置換しない Bend では、FIFO の出力に残った前の byte を使う | 立上りで置くのは [P]（台帳 §3.2 の取込みの時刻に間に合う） | — |
 | ADPCM の RESET | 電源投入時は CTRL の RESET＝1。RESET の間は FIFO から取り出さず、解除の後と PORT_RESET の bit 5 の後は、byte の 1 つ目のニブルから始める | [P] | 解除の直後の 1 回は、前に置いたニブル（電源投入時は 0）を取り込むことがある |
+| MSM5205 の DA OUT（台帳 §3.2） | V̄C̄K̄ の立下りの 2 クロック（384 kHz）後に、それまでに取り込んだ値の DAC の符号を出す（`da_out` と、変わった時刻 `da_at`）。8 kHz では取込みから 44 クロック（114.6 µs）後 | 台帳 §3.2 の 5.2 µs と「次の周期で出る」。段数は [V] | LINE OUT だけが使う。DR-054 のデジタルの出力は、遅れのない符号のまま |
 | 半分空きの割込み（DR-017 (4)） | FIFO の残りが 32 byte 以下の間のレベル | 「半分空いたら」をレベルと読んだ [P] | 書き足して 33 byte 以上になると下がる |
 | S1＝S2＝H | V̄C̄K̄ を駆動しないので、取込みは起きない | Bend のモード。外から V̄C̄K̄ を入れる回路は決めていない [V] | — |
 | ブリッジのレジスタ | CTRL を構造体の値（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）で持つ。CPU から見た番地とビット（0x230000〜）は段階 3 で決める | CPU をつないでいない | — |
@@ -326,7 +328,8 @@
 | 68000 のクロックの位相 | 68000 のクロックの立上りは `PERIOD_8M` の倍数の時刻（スロットの頭と同じ）[P] | 16 MHz の 2 分周の位相は資料にない | 待ちの数は E との位相で決まる |
 | バスの時間切れ | ブリッジは時間切れを数えない。上の層（本体のバス、試験）が数え、`host_abort` を呼ぶ。窓を取る前なら取り消し、E が上がった後なら、書込みは DOC に届き、読んだ値は捨てる（0xE0・0xE2 の読出しの副作用は起きる）[V] | 時間切れは DR-052（S0 から 65.5 クロックの立下りで BERR を認識） | DOC の CLK を 2 MHz に下げると、E の位相 64 通りのうち 3 通りで時間切れになる。1 MHz ではすべてで時間切れになり、128 通りのうち 66 通りで書込みが届く |
 | 読み書き一体の命令（DR-030） | ブリッジは見分けない。警告は本体のバス（下の節） | ブリッジは 1 回のアクセスしか見ない | — |
-| DOC の出力 | 最後のオシレータの読出しと SIG± を記録するだけ | サンプルホールドとミキサは段階 4 | — |
+| DOC の出力（S/H） | CSTRB ごとに、訪れたオシレータの CA のチャネルの S/H を、差の α だけ寄せる（RC の充電。α＝1−e^(−500 ns/(300 Ω×470 pF))＝0.9712、Q16 の整数で 63646）。変わる時刻は E の立下り [P]。S/H の偶数と奇数の和を時刻つきで積分し、LINE OUT に渡す（`take_line`）。DR-054 のデジタルの出力のためのチャネルごとの記録は前のまま | CSTRB の Low は CLK の 4 周期（台帳 §3.6、8 MHz で 500 ns）。DOC の CLK を変えると α も変わる。抵抗と容量は [P] | 32 オシレータ（29.4 kHz）で 10 kHz が −0.39 dB。保持中の垂下と 4051 の電荷の注入は作らない [V] |
+| SIG± の配線（DR-011 のジャンパ） | 公開の欄 `sig_wiring`（Bend で切り替える）。両側（既定）は S/H に 2×sig、片側（SIG+ だけ）は sig＋128×音量（訪れたオシレータの音量レジスタ） | SIG± を乗算型の DAC の相補の電流 I±＝I_FS×(音量/255)×(1/2 ± s/256) とみた [P][V] | 片側では振幅が半分（−6.0 dB）になり、音量に比例した直流が乗る。直流は出力の結合容量で切れるが、包絡の変化は 30 Hz 以下の音として残る |
 | 子基板の有無（DR-019） | `doc` が false の間、DOC は進めない。後から true にすると、E の位相を保って今のスロットから動く | 試験の設定のため | — |
 
 ### 本体のバス（段階 3）
@@ -342,8 +345,53 @@
 | バスの時間切れ（DR-052） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてがバスエラーになる |
 | 割込み（DR-028） | 要因をレベルにまとめ、いちばん高いレベルを IPL にする。応答はすべてオートベクタ。レベル 6：映像の割込みと ACRTC の IRQ、5：ACIA、4：DOC、3：Fabric と ADPCM の半分空き、2：DSP の応答（IRQ_EN）、1：入力 | DR-028 (4) | 割込みを受けるのは CPU の命令の境目。IPL の同期化の遅れは扱わない |
 | RESET 命令（DR-052） | `peripheral_reset`：ACRTC、DSP・ADPCM・本体 DAC の CTRL、映像と入力の割込みの許可、Temporal の CTRL、PAL_CTRL、DOC の RESET | DR-052 (3) | Fabric と ACIA は変えない [V] |
-| 音声の出力（DR-054） | 48 kHz の標本ごとに、DOC のチャネルの平均（偶数を L、奇数を R）、子基板がないときは本体 DAC、ADPCM を半分ずつ足す。`audio_out` にためてホストが取り出す | 仕様書 §10 の段はまだ設計していない | LPF・DC 除去・音量の比は仮 [V] |
+| 音声の出力（DR-054） | 48 kHz の標本ごとに、DOC のチャネルの平均（偶数を L、奇数を R）、子基板がないときは本体 DAC、ADPCM を半分ずつ足す。`audio_out` にためてホストが取り出す | ビット列の照合（`verify_wav.py` など）のために、アナログの段と別に残す | ホストの `--audio-tap digital` で聞く。LPF・DC 除去はなく、音量の比は仮 [V] |
+| LINE OUT（段階 4） | `step_slot` の後、刻み（192 kHz）があれば `line` で進め、48 kHz の標本を `line_out` にためる。標本の時刻の条件は `audio_out` と同じ | 下の節 | ホストの既定はこちら。`line_out` は `audio_out` と同じく保存しない |
 | 読み書き一体の命令（DR-030） | `Console` が 1 命令ごとに DOC の窓へのアクセスを見て、同じ番地を読んで書いたか、窓に 2 回以上触ったら `BusLog::doc_rule_warnings` を数える。動作は変えない（通常モードの警告）。TST・BTST・CMP で 0xE0・0xE2 を 1 回読む違反は見分けない [V] | 命令の種類はバスから見えないので、アクセスの並びで見る | ホストが警告を出す |
+
+### 音声のアナログの段（段階 4）
+
+コードは `emulator/crates/board/src/analog.rs`（フィルタ、ミキサ、LINE OUT）、`doc.rs`（S/H と SIG± のジャンパ）、`adpcm.rs`（DA OUT）、`console.rs` の `line`（刻みの進め方）。仕様書 §10 の回路は部品の値が決まっていないので、1985 年に手に入る部品で選んだ（`analog::parts`。すべて [P]）。フィルタは教科書の回路の式（Sallen-Key、多重帰還、RC）から f0 と Q を出し、192 kHz の双一次変換（各段の f0 で前置きゆがみの補正）の 1 段ずつにした。ほかのエミュレータのコードと手順は使っていない。
+
+```
+DOC 子基板
+  SIG+ ─ I/V（LM318、2.0 kΩ）─┐
+  SIG− ─ I/V（LM318、2.0 kΩ）─┴─ 差 ─ 4051×2（CA3–CA0、CSTRB）─ S/H×16（300 Ω・470 pF、TL082）
+         ジャンパ ONE：SIG− を切る（DR-011）
+  S/H 偶数 8 個 ─ 39 kΩ×8 ─ 反転加算（10 kΩ∥1 nF：15.9 kHz、×−0.256）─ SK（9.1 kΩ×2、2.2 nF・560 pF）─ L
+  S/H 奇数 8 個 ─ 同じ ──────────────────────────────────────────────────────────────── R
+本体
+  HA17408（L、R）─ I/V（2.0 kΩ、Iref 2 mA：1 段 15.6 mV）─ MFB（3.6 kΩ×3、4.7 nF・1 nF、×−1）─ 4066 ─ L、R
+     4066 は DOC 子基板があると切る
+  MSM5205 DA OUT（中央 2.5 V、±1.25 V）─ フォロワ ─ SK（11 kΩ×2、4.7 nF・3.9 nF）
+     ─ MFB（18 kΩ×3、10 nF・680 pF、×−1）─ 2.2 µF ─ 100 kΩ を L と R に 1 本ずつ
+ミキサ（L、R。反転、帰還 10 kΩ）：DOC 10 kΩ（×−1）、本体 DAC 20 kΩ（×−0.5）、ADPCM 100 kΩ（×−0.1）
+  ─ 100 Ω ─ 10 µF ─ LINE OUT（負荷 10 kΩ）
+```
+
+| 段 | f0 | Q | 利得 | 道の全体 |
+|---|---|---|---|---|
+| S/H の取込み | τ＝141 ns | — | α＝0.9712（CSTRB 1 回） | オシレータ 32 個（29.4 kHz）で 5 kHz −0.14 dB、10 kHz −0.39 dB |
+| DOC の反転加算 | 15.92 kHz（1 次） | — | −0.256 | DOC の道の −3 dB は 15.71 kHz（10 kHz で −0.29 dB） |
+| DOC の SK | 15.76 kHz | 0.991 | 1 | 同上 |
+| 本体 DAC の MFB | 20.39 kHz | 0.723 | −1 | −3 dB は 20.83 kHz（山は +0.008 dB） |
+| ADPCM の SK | 3.379 kHz | 0.549 | 1 | ADPCM の道の −3 dB は 3.372 kHz（4 kHz で −6.8 dB、8 kHz で −29.8 dB） |
+| ADPCM の MFB | 3.391 kHz | 1.278 | −1 | 同上 |
+| ADPCM の結合容量 | 1.45 Hz（2.2 µF と 50 kΩ） | — | 1 | — |
+| 出力の結合容量 | 1.58 Hz（10 µF と 10.1 kΩ） | — | 0.990 | — |
+
+| 仕様の項目 | 実装での扱い | 理由 | 影響 |
+|---|---|---|---|
+| 刻み | 192 kHz（48 kHz の 4 倍）。入力は、刻みの間の時間の平均（区分的に一定の値の積分 `Hold`）。48 kHz の 1 標本は 4 つの刻みの出力の平均 | 20 kHz の段まで双一次変換のゆがみを小さくし、48 kHz への間引きの折返しを減らす [P] | 部品の式との差は、通過域の正弦で 0.05 dB 以内（§04） |
+| 本体 DAC のラッチの変わる時刻 | 最後の拍の時刻。拍がなければ（DIRECT の書込み）刻みの時刻 | 拍の時刻は音声クロックが持つ。DIRECT の書込みの時刻は記録しない [P] | DIRECT のずれは 1 刻み（5.2 µs）以内 |
+| 子基板があるときの本体 DAC | 4066 でミキサから切る | DR-054 のデジタルの混ぜ方と合わせた [P]。子基板があると本体 DAC の窓はバスエラーで、ラッチは電源投入時の 0 のまま | ラッチの直流（−1.0 V）がミキサに入らない |
+| DA OUT の電圧 | 中央 2.5 V、10 bit の符号 ±512 が ±1.25 V | 台帳は「振幅は VDD に比例」だけ [V] | ADPCM の通過域の大きさは DR-054 のデジタルの比と −0.09 dB |
+| ミキサの比 | DOC 1、本体 DAC 0.5、ADPCM 0.1（抵抗の比） | DR-054 のデジタルの比と、通過域でそろうように選んだ [P] | 通過域の LINE/デジタルは DOC +0.17 dB、本体 DAC −0.09 dB、ADPCM −0.09 dB |
+| LINE OUT の標本 | ±2.0 V を ±32768 にする | DR-054 のデジタルの全振幅と同じ大きさ [P] | ホストの音量はデジタルの出力とほぼ同じ |
+| オペアンプの飽和 | 反転加算とミキサの出力を ±10.5 V で切り、刻みの数を `clips` に数える | ±12 V の電源 [P] | 試した 9 通りで 0 回 |
+| 電源投入 | 入力が中央で落ち着いた状態から始める | 電源の立上りのポップは作らない [P] | 子基板なしでは、ラッチの 0 から中央への段が LINE OUT に出る（OI-061） |
+| 作らないもの | S/H の垂下、4051 の電荷の注入、オペアンプのスルーレートと雑音、DAC のグリッチ、音量の非直線 | 1 µV 以下か、資料がない [V] | — |
+| 保存 | 状態の f64 はビット列で保存し、戻すと同じ値になる。新しい欄は `#[serde(default)]` | 保存して戻しても同じに進むため（§04 の保存の試験） | 古い保存を読むと、アナログの段は落ち着いた状態から始まる |
 
 ### HD63484 の表示と映像の出力段（段階 3）
 
@@ -576,6 +624,25 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | Boot ROM で起動 | `console_boot.rs` の `the_boot_rom_runs_with_the_doc_board`、`..._without_the_doc_board` | `firmware/` で組んだ Boot ROM と文字 ROM で 60 フレーム：CPU が止まらない、バスエラーはカートリッジを調べる $400000 の 1 回だけ、DR-030 の警告なし、表示が動いて 2 色以上、IACK 50 回以上、音が無音でない。ROM がなければ飛ばす | 合格（DOC あり・なし） |
 | カートリッジ | `the_sample_cartridge_starts_and_plays_adpcm` | `sdk/samples/game` を差して起動し、START と左を押して 100 フレーム：バスエラーなし（見出しを読めた）、DR-030 の警告なし、ADPCM の取込みが 2000 回より多い（Fabric から ADPCM へ送れた）。ROM がなければ飛ばす | 合格 |
 | 30 分の連続（仕様書 §12 の段階 4 の条件の一つ） | 手動：ホストの `--headless --cart sdk/samples/game/build/game.bin --frames 107856 --pad-script <台本>`。台本は乱数（種 1985）で方向とボタンを 5〜40 フレームごとに替え、600 フレームごとに START | 仮想機の 30 分（107,856 フレーム）でバスエラー・CPU の停止・DR-030 の警告がない。画面と音が最後まで出る | 合格（2026-11-26。CPU 14,399,356,728 クロック、開発機で 1,159 秒。最後の画面はゲームの途中で最高点 60。音は飽和なし、ピーク ±2,692） |
-| DSP の道（SAMPLE 2） | 手動：ホストの `--headless [--no-doc] --cart sdk/samples/dsp/build/dsp.bin --frames 600 --pad-script sdk/samples/dsp/pad-demo.txt --wav <WAV>` のあと `py sdk/samples/dsp/verify_wav.py <WAV> [--doc]` | DSP のプログラムを bridge で読み込み、Staging RAM→port 3→DSP→port 4→本体 DAC（子基板なし）か波形 RAM の輪→DOC（あり）。WAV の全標本が、DSP のプログラムの Python のモデル（`model.py`）と一致する。画面の COUNT・SUM もモデルと一致する | 合格（2026-11-26。子基板なし 158,187 標本、あり 474,138 標本で合わない標本 0。バスエラー 0。DOC の側の照合はエミュレータの混ぜ方に合わせた計算 [V]） |
-| 保存と復元 | `a_snapshot_of_the_running_bios_resumes_identically` | BIOS が動いている途中で Console を JSON に保存して戻し、同じ入力で 10 フレーム進めると、CPU・基板・音声の標本が元とすべて同じ | 合格 |
-| 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定） |
+| DSP の道（SAMPLE 2） | 手動：ホストの `--headless [--no-doc] --cart sdk/samples/dsp/build/dsp.bin --frames 600 --pad-script sdk/samples/dsp/pad-demo.txt --wav <WAV> --audio-tap digital` のあと `py sdk/samples/dsp/verify_wav.py <WAV> [--doc]`（照合は DR-054 のデジタルの出力。既定の LINE OUT では合わない） | DSP のプログラムを bridge で読み込み、Staging RAM→port 3→DSP→port 4→本体 DAC（子基板なし）か波形 RAM の輪→DOC（あり）。WAV の全標本が、DSP のプログラムの Python のモデル（`model.py`）と一致する。画面の COUNT・SUM もモデルと一致する | 合格（2026-11-26。子基板なし 158,187 標本、あり 474,138 標本で合わない標本 0。バスエラー 0。DOC の側の照合はエミュレータの混ぜ方に合わせた計算 [V]） |
+| 保存と復元 | `a_snapshot_of_the_running_bios_resumes_identically` | BIOS が動いている途中で Console を JSON に保存して戻し、同じ入力で 10 フレーム進めると、CPU・基板・音声の標本（デジタルと LINE OUT）が元とすべて同じ | 合格 |
+| 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.43 秒、CPU と DOC 子基板ありで約 0.62 秒（開発機の 1 回の測定）。LINE OUT を足す前と後を交互に 5 回ずつ測って、差は ±2% 以内（2026-11-26） |
+
+### 音声のアナログの段（段階 4）
+
+試験は `emulator/crates/board/tests/analog.rs`。期待値は、部品の値（§03 の「音声のアナログの段」）から教科書の回路の式で手計算した f0・Q と利得、台帳 ES5503.md §3.6（CSTRB の Low 500 ns）、MSM5205.md §3.2（DA OUT は V̄C̄K̄ の立下りの 2 クロック後）から取る。
+
+| 分野 | テスト | 判定基準 | 状況 |
+|---|---|---|---|
+| 部品の値 | `component_values_give_the_documented_corners` | f0・Q が手計算（§03 の表）と 1e-4 以内 | 合格 |
+| 各段 | `each_section_matches_the_analog_response` | 離散の段の利得が、アナログの式と f0 で 1e-6 dB、f0/4 で 0.02 dB 以内。2 次の段の f0 の利得は Q | 合格 |
+| 結合容量の階段 | `the_output_coupling_step_decays_with_rc` | 1 V の階段の τ（101 ms）後が 0.990×e⁻¹（0.2% 以内） | 合格 |
+| DOC の道 | `doc_line_follows_the_component_values` | S/H の和に入れた正弦の LINE OUT の振幅が、各段の式の積と 200 Hz〜15.7 kHz で 0.05 dB 以内（20 kHz は 48 kHz の平均の分で 0.5 dB） | 合格 |
+| 本体 DAC と ADPCM の道 | `main_dac_and_adpcm_lines_follow_the_component_values` | 同じく 0.05 dB 以内（ADPCM の 8 kHz は 0.25 dB）。子基板があるときは本体 DAC の道が 0 | 合格 |
+| S/H | `the_sample_hold_charges_through_rc_in_each_strobe` | α が Q16 で 63646。CSTRB ごとに v＋((x−v)α)>>16 で寄り、閉じた形 x(1−(1−α)^k) と一致。ほかのチャネルは 0 のまま | 合格 |
+| SIG± のジャンパ | `the_one_sided_jumper_halves_the_signal_and_adds_dc_by_volume` | 波形 0xC0・0x40、音量 255 で、ミキサが両側 ±0.256 V、片側 0.385 V・0.128 V（振幅が半分、直流 0.256 V）。動いている途中で `sig_wiring` を変えると効く。音量 96 では直流も 96/255 | 合格 |
+| 止めたオシレータ | `a_halted_oscillator_at_volume_zero_is_silent_in_both_wirings` | 音量 0 なら両側でも片側でも S/H は 0。音量 200 の片側は 128×200 の直流、両側は 0 | 合格 |
+| 標本の数 | `line_out_and_audio_out_have_the_same_number_of_samples` | どのスロット数で止めても、`line_out` と `audio_out` の数が同じ（子基板あり・なし） | 合格 |
+| 通過域 | `line_and_digital_agree_in_the_passband` | 本体 DAC の DIRECT の 375 Hz の矩形で、平らな所の LINE/デジタルが 0.990（1% 以内） | 合格 |
+| DA OUT | `da_out_shows_the_previous_capture_two_clocks_after_vck_falls` | DA OUT は V̄C̄K̄ の立下りの 2 クロック後だけ変わり、取込みから 44 クロック後に出る | 合格 |
+| 実際の音（手動） | BIOS、SAMPLE 1、SAMPLE 2 を、子基板なし・あり（両側）・あり（片側）の 9 通りで 600 フレーム、`--audio-tap line` と `digital` の両方で WAV に書く。Python（numpy、scipy）で、部品の値から組み直した模型にデジタルの WAV を通したものと LINE OUT を比べる | デジタルの WAV が変更の前とバイト単位で同じで、`verify_wav.py` の合わない標本が 0。LINE OUT に切れた標本がない。通過域の伝達が模型と合う。片側で振幅が半分になり低い音が増える | 合格（2026-11-26。デジタルの 6 個は同じ、照合は合わない 0。切れた標本 0。SAMPLE 2 の子基板なしで、LINE/デジタルの伝達の測定と模型の差は 100 Hz〜15 kHz で 0.1 dB 以内、端数の遅れ 2.6 µs を補うと 5 kHz 以下の残りは −74 dB。子基板ありの残りは 5 kHz 以下で −47 dB（上の帯域の差は、デジタルが S/H を 48 kHz の点で取る分）。片側は 100 Hz〜16 kHz で −6.0 dB、30 Hz 以下の最大が BIOS で 0.21 V、SAMPLE 2 で 0.23 V。子基板なしの最初の 2.8 ms は −1.02 V（OI-061）） |
