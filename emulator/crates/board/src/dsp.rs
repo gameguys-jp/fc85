@@ -24,11 +24,17 @@
 //!   `STATUS_*` の配置を仮に置く [P]（OI-053）。
 //! - スロットの中の DSP のサイクルは、そのスロットの Fabric のアクセスより前に済ませる（`audio` と
 //!   同じ）[P]。
+//! - プログラム RAM の読出しの間に合わなさ（仕様書 §11 のベンド点「DSPの速さ」、DR-066）：番地から
+//!   データまでに使える時間は tc − td1 − tsu＝tc − 100 ns（台帳 §2.1。20 MHz で 100 ns）。RAM
+//!   （HM6168H-55）と切替回路で 75 ns かかる（仕様書 §05。余裕 25 ns）。CLKIN を上げて使える時間が
+//!   足りなくなると、間に合わないデータの線は前の語の値のまま取り込まれる。線ごとの遅れの差を
+//!   0〜12 ns に散らし、約 22.9 MHz から 1 本ずつ崩れ、約 24.5 MHz で全部の線が前の語になる [P][V]。
+//!   命令のフェッチと TBLR の両方に効く。基板の発振器（20 MHz）では起きない。
 
 use crate::audio::AudioClock;
 use crate::fifo::Fifo;
 use fc85_chips::tms32010::{self, Tms32010};
-use fc85_core::time::{Clock, PERIOD_DSP, Time};
+use fc85_core::time::{Clock, PERIOD_DSP, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 /// プログラム RAM の語数（4K×16）。
@@ -130,6 +136,37 @@ pub struct DspPort {
     tick_seen: Option<Time>,
     /// DSP のサイクルの数（RESET の間も数える）。
     pub cycles: u64,
+    /// プログラム RAM のデータ線に残っている前の語（間に合わない線はこの値になる）。
+    #[serde(default)]
+    data_bus: u16,
+    /// 間に合わずに前の語の値で取り込んだ読出しの数。
+    #[serde(default)]
+    pub late_fetches: u64,
+}
+
+/// ナノ秒を時刻の単位（1/15.12 GHz）に。
+const fn ns(n: Time) -> Time {
+    n * UNITS_PER_SECOND / 1_000_000_000
+}
+/// 番地からデータまでに使えない時間：td1(max)＋tsu(D)＝50＋50 ns（台帳 TMS32010.md §2.1）。
+const FETCH_OVERHEAD: Time = ns(100);
+/// RAM と切替回路の番地からデータまでの時間（仕様書 §05、DR-029）[P]。
+const RAM_ACCESS: Time = ns(75);
+/// 線ごとの遅れの差の最大 [P]。
+const LINE_SKEW: Time = ns(12);
+
+/// 命令サイクル `tc` のとき、間に合わないデータの線（1 が間に合わない）。
+pub fn late_lines(tc: Time) -> u16 {
+    let avail = tc.saturating_sub(FETCH_OVERHEAD);
+    let mut mask = 0;
+    for k in 0..16u16 {
+        // 線 k の遅れ：RAM_ACCESS から最大 LINE_SKEW まで早い。並びは線の番号を 5 倍して散らす
+        let early = LINE_SKEW * Time::from((k * 5) % 16) / 15;
+        if avail < RAM_ACCESS - early {
+            mask |= 1 << k;
+        }
+    }
+    mask
 }
 
 impl Default for DspPort {
@@ -153,6 +190,8 @@ impl DspPort {
             bio_ff: false,
             tick_seen: None,
             cycles: 0,
+            data_bus: 0,
+            late_fetches: 0,
         }
     }
 
@@ -242,6 +281,9 @@ impl DspPort {
             };
             let mut bus = Bus {
                 prog: &mut self.prog,
+                late: late_lines(self.clk.period()),
+                data_bus: &mut self.data_bus,
+                late_fetches: &mut self.late_fetches,
                 input,
                 output,
                 io: &mut self.io,
@@ -275,6 +317,10 @@ impl DspPort {
 
 struct Bus<'a> {
     prog: &'a mut [u16],
+    /// 間に合わないデータの線。
+    late: u16,
+    data_bus: &'a mut u16,
+    late_fetches: &'a mut u64,
     input: &'a mut Fifo,
     output: &'a mut Fifo,
     io: &'a mut DspIo,
@@ -303,7 +349,14 @@ impl Bus<'_> {
 
 impl tms32010::Bus for Bus<'_> {
     fn read_program(&mut self, addr: u16) -> u16 {
-        self.prog[usize::from(addr) % PROG_WORDS]
+        let v = self.prog[usize::from(addr) % PROG_WORDS];
+        let got = (v & !self.late) | (*self.data_bus & self.late);
+        if got != v {
+            *self.late_fetches += 1;
+        }
+        // 取り込んだ後、線は RAM の値に落ち着く
+        *self.data_bus = v;
+        got
     }
 
     fn write_program(&mut self, addr: u16, data: u16) {

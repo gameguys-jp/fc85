@@ -4,6 +4,7 @@
 
 use fc85_board::dsp::{
     BioSel, DspStatus, STATUS_COMMAND, STATUS_INPUT_READY, STATUS_OUTPUT_SPACE, STATUS_TICK,
+    late_lines,
 };
 use fc85_board::fabric::{Fabric, HostReply};
 use fc85_board::ports::FabricPorts;
@@ -458,4 +459,46 @@ fn snapshot_round_trip_while_the_dsp_runs() {
     assert_eq!(r.p, b.p);
     let want: Vec<u8> = input.iter().map(|x| x * 2).collect();
     assert_eq!(&r.p.temporal.mem[0x200..0x228], &want[..]);
+}
+
+/// CLKIN の周波数から、命令サイクル（CLKIN の 4 周期）を時刻の単位で。
+fn tc(hz: f64) -> u64 {
+    4 * (fc85_core::time::UNITS_PER_SECOND as f64 / hz).round() as u64
+}
+
+#[test]
+fn an_overclocked_dsp_latches_late_program_lines_from_the_previous_word() {
+    // 使える時間 tc − 100 ns と、RAM と切替回路の 75 ns（台帳 §2.1、仕様書 §05。DR-066）
+    assert_eq!(late_lines(tc(20e6)), 0, "基板の 20 MHz：余裕 25 ns");
+    assert_eq!(late_lines(tc(20.5e6)), 0, "資料の上限 20.5 MHz");
+    assert_eq!(late_lines(tc(22.8e6)), 0, "tc 175.4 ns：ちょうど間に合う");
+    let n23 = late_lines(tc(23e6)).count_ones();
+    assert!(
+        (1..16).contains(&n23),
+        "23 MHz では一部の線だけ遅れる: {n23}"
+    );
+    assert_eq!(
+        late_lines(tc(24.6e6)),
+        0xFFFF,
+        "tc 162.6 ns：全部の線が前の語"
+    );
+    let mut last = 0;
+    for mhz in 20..=26 {
+        let n = late_lines(tc(f64::from(mhz) * 1e6)).count_ones();
+        assert!(n >= last, "速くするほど崩れる線は増える");
+        last = n;
+    }
+
+    // 同じプログラムを 20 MHz と 25 MHz で動かす：25 MHz では前の語の値で命令を取り込み、暴走する
+    let prog = [lack(0x5A), d(SACL, 0), d(OUT + 2, 0), B, 3];
+    let mut normal = Rig::new();
+    normal.boot(&prog, BioSel::InputReady);
+    normal.run(200);
+    assert_eq!(normal.p.dsp.late_fetches, 0);
+    assert_eq!(normal.p.dsp.read_response(), 0x5A);
+    let mut fast = Rig::new();
+    fast.p.dsp.set_input_period(tc(25e6));
+    fast.boot(&prog, BioSel::InputReady);
+    fast.run(200);
+    assert!(fast.p.dsp.late_fetches > 0);
 }
