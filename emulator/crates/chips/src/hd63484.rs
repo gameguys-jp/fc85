@@ -390,7 +390,7 @@ struct Display {
     #[serde(default)]
     plan: Plan,
     /// この 2CLK のピンの出力。
-    #[serde(skip)]
+    #[serde(default)]
     out: DisplayOut,
 }
 
@@ -433,7 +433,7 @@ struct Plan {
 }
 
 /// 2CLK ごとの表示のピンの出力（board 層が読む）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplayOut {
     /// この 2CLK に読んだ表示の語番地（20 bit）。表示のメモリサイクルの頭。
     pub fetch: Option<u32>,

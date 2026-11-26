@@ -3,7 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use fc85_chips::hd63484::{Hd63484, SR_ARD, SR_CED, SR_CER, SR_RFF, SR_RFR, SR_WFE, SR_WFR, Vram};
+use fc85_chips::hd63484::{
+    DisplayOut, Hd63484, SR_ARD, SR_CED, SR_CER, SR_RFF, SR_RFR, SR_WFE, SR_WFR, Vram,
+};
 
 // ---- コマンド（(9) の表、U85 p.173） ----
 
@@ -1573,4 +1575,470 @@ fn dma_state_survives_a_snapshot() {
     let b: Hd63484 = serde_json::from_str(&saved).unwrap();
     assert_eq!(b, r.a);
     assert_eq!(b.dma_progress(), (0, 2));
+}
+
+// ---- 表示（台帳 §3.4 の案B、U85 p.22・p.30・p.42・p.55・p.69–111） ----
+//
+// 案B：HSW 13、HDS 19、HDW 128、HC 171（342 ドット）、VSW 3、VDS 40、SP1 192、VC 262（台帳 §3.4）。
+// 表示の始まりは 2×(13＋19)＝64 ドット、ラスタ 3＋40＝43。インタリーブ（ACM＝10）の表示サイクルは
+// 2CLK×4 で、最初のメモリサイクルが表示の読出し（台帳 §3.2・§3.3）。
+
+const LINE: usize = 342;
+const RASTERS: usize = 262;
+
+/// 書込みを数える VRAM（1 M 語）。
+struct Counted {
+    m: Vec<u16>,
+    writes: u64,
+}
+
+impl Vram for Counted {
+    fn read(&mut self, addr: u32) -> u16 {
+        self.m[addr as usize]
+    }
+    fn write(&mut self, addr: u32, data: u16) {
+        self.writes += 1;
+        self.m[addr as usize] = data;
+    }
+}
+
+struct Screen {
+    a: Hd63484,
+    m: Counted,
+}
+
+impl Screen {
+    /// 案B の同期と、基本画面（SAR1＝0、MWR1＝$40）。DCR は電源投入時の値、OMR は $C008。
+    fn plan_b() -> Screen {
+        let mut s = Screen {
+            a: Hd63484::new(),
+            m: Counted {
+                m: vec![0; 1 << 20],
+                writes: 0,
+            },
+        };
+        s.reg(0x02, 0x0200);
+        for (ar, v) in [
+            (0x82, 0xAA0D),
+            (0x84, 0x127F),
+            (0x86, 0x0106),
+            (0x88, 0x2703),
+            (0x8A, 0x00C0),
+            (0xC2, 0x0040),
+            (0xCA, 0x0040),
+        ] {
+            s.reg(ar, v);
+        }
+        s.reg(0x04, 0xC008);
+        s
+    }
+
+    fn reg(&mut self, ar: u16, v: u16) {
+        self.a.write(false, ar);
+        self.a.write(true, v);
+    }
+
+    fn put(&mut self, words: &[u16]) {
+        self.a.write(false, 0);
+        for &w in words {
+            self.a.write(true, w);
+        }
+    }
+
+    fn tick(&mut self) -> DisplayOut {
+        self.a.tick(&mut self.m);
+        self.a.display_out()
+    }
+
+    /// ラスタ `raster` の 2CLK `dot` まで進める。
+    fn until(&mut self, raster: u16, dot: u16) {
+        for _ in 0..LINE * RASTERS + 1 {
+            if self.a.beam() == (dot, raster) {
+                return;
+            }
+            self.tick();
+        }
+        panic!("({raster}, {dot}) に来ない");
+    }
+
+    /// 次のフレームの頭（ラスタの段取りをレジスタから求め直す）からの 1 フレーム分のピンの出力（ラスタ×342＋ドット）。
+    fn frame(&mut self) -> Vec<DisplayOut> {
+        self.tick();
+        self.until(0, 0);
+        let mut v = vec![DisplayOut::default(); LINE * RASTERS];
+        for _ in 0..LINE * RASTERS {
+            let o = self.tick();
+            let (dot, raster) = self.a.beam();
+            v[usize::from(raster) * LINE + usize::from(dot)] = o;
+        }
+        v
+    }
+}
+
+/// ラスタ `raster` で読んだ語番地を、読んだ 2CLK の順に。
+fn fetches(f: &[DisplayOut], raster: usize) -> Vec<(usize, u32)> {
+    (0..LINE)
+        .filter_map(|d| f[raster * LINE + d].fetch.map(|a| (d, a)))
+        .collect()
+}
+
+fn span(f: &[DisplayOut], raster: usize, pin: fn(&DisplayOut) -> bool) -> Option<(usize, usize)> {
+    let on: Vec<usize> = (0..LINE).filter(|&d| pin(&f[raster * LINE + d])).collect();
+    Some((*on.first()?, *on.last()? + 1))
+}
+
+#[test]
+fn display_reads_one_cycle_ahead_of_disp1() {
+    let mut s = Screen::plan_b();
+    let f = s.frame();
+    // 前読み（U85 p.22 の図 2.1(d)、p.42 の図 3.11）：DISP1 の 1 表示サイクル前の 60 から 4 ドットごとに 65 語
+    let r43 = fetches(&f, 43);
+    assert_eq!(r43.len(), 65);
+    assert_eq!(r43[0], (60, 0));
+    assert_eq!(r43[64], (316, 64));
+    assert!(
+        r43.iter()
+            .enumerate()
+            .all(|(k, &(d, a))| d == 60 + 4 * k && a == k as u32)
+    );
+    assert_eq!(fetches(&f, 234)[0], (60, 191 * 0x40));
+    assert!(fetches(&f, 42).is_empty() && fetches(&f, 235).is_empty());
+    // DISP1 は 64〜319、ラスタ 43〜234（台帳 §3.4）。DISP2 は出ない
+    assert_eq!(span(&f, 43, |o| o.disp1), Some((64, 320)));
+    assert_eq!(span(&f, 234, |o| o.disp1), Some((64, 320)));
+    assert_eq!(span(&f, 42, |o| o.disp1), None);
+    assert!(f.iter().all(|o| !o.disp2 && !o.cud1 && !o.cud2 && !o.hole));
+    // 属性は HSYNC（26 ドット）の最後のメモリサイクルの終わり（U85 p.55）。どのラスタにも出る
+    assert!((0..RASTERS).all(|r| span(&f, r, |o| o.attr.is_some()) == Some((25, 26))));
+    assert_eq!(s.a.frame().v_end, 235);
+}
+
+#[test]
+fn dsk_delays_disp_by_memory_cycles() {
+    // DSK（OMR bit 9–8）：DISP をメモリサイクル単位に遅らせる（U85 p.71）。読出しは変わらない
+    let mut s = Screen::plan_b();
+    s.reg(0x04, 0xC208);
+    let f = s.frame();
+    assert_eq!(span(&f, 43, |o| o.disp1), Some((68, 324)));
+    assert_eq!(fetches(&f, 43)[0], (60, 0));
+}
+
+#[test]
+fn splits_stack_upper_base_and_lower() {
+    // 上画面（SP0＝16、SAR0＝$1000、MW $20）、基本画面（SP1＝32）、下画面（SP2＝8、SAR2＝$2000、MW $10）。
+    // DCR：SE1＝1、SE0＝11、SE2＝11（U85 p.75–78）。SSW は r8C が SP0、r8A が SP1、r8E が SP2（U85 p.91）
+    let mut s = Screen::plan_b();
+    for (ar, v) in [
+        (0x8C, 16),
+        (0x8A, 32),
+        (0x8E, 8),
+        (0xC2, 0x20),
+        (0xC4, 0x0000),
+        (0xC6, 0x1000),
+        (0xD2, 0x10),
+        (0xD6, 0x2000),
+        (0x06, 0x7C00),
+    ] {
+        s.reg(ar, v);
+    }
+    let f = s.frame();
+    let first = |r: usize| fetches(&f, r).first().map(|&(_, a)| a);
+    assert_eq!(first(43), Some(0x1000));
+    assert_eq!(first(58), Some(0x1000 + 15 * 0x20));
+    assert_eq!(first(59), Some(0));
+    assert_eq!(first(90), Some(31 * 0x40));
+    assert_eq!(first(91), Some(0x2000));
+    assert_eq!(first(98), Some(0x2000 + 7 * 0x10));
+    assert_eq!(first(99), None);
+    assert_eq!(s.a.frame().v_end, 99);
+    // 属性の SPL（MA17–16）は分割の番号 [V]
+    let spl = |r: usize| (f[r * LINE + 25].attr.unwrap() >> 16) & 3;
+    assert_eq!((spl(43), spl(59), spl(91)), (0, 1, 2));
+
+    // SE0＝10（ブランク）：上画面は場所を取るが、読まず DISP1 も出さない
+    s.reg(0x06, 0x6C00);
+    let f = s.frame();
+    assert!((43..59).all(|r| fetches(&f, r).is_empty() && span(&f, r, |o| o.disp1).is_none()));
+    assert_eq!(fetches(&f, 59)[0], (60, 0));
+    // SE0＝00（使わない）：基本画面が上へ詰まる
+    s.reg(0x06, 0x4C00);
+    let f = s.frame();
+    assert_eq!(fetches(&f, 43)[0], (60, 0));
+    assert_eq!(fetches(&f, 75)[0], (60, 0x2000));
+    // SE1＝0：基本画面もブランク
+    s.reg(0x06, 0x0000);
+    let f = s.frame();
+    assert!(f.iter().all(|o| o.fetch.is_none() && !o.disp1));
+}
+
+/// ウィンドウ：メモリサイクル 48 から 32 メモリサイクル（96〜159 ドット）、ラスタ 53 から 10 ラスタ、
+/// SAR3＝$3000、MW3＝$10。HWR の HWS は HSYNC の終わりから（48−13＝35、書く値は 34）、VWR の VWS は
+/// VSYNC の終わりから（53−3＝50、書く値は 49）（U85 p.89–91）。
+fn windowed(dcr: u16) -> Screen {
+    let mut s = Screen::plan_b();
+    for (ar, v) in [
+        (0x92, 0x221F),
+        (0x94, 49),
+        (0x96, 10),
+        (0xDA, 0x10),
+        (0xDE, 0x3000),
+        (0x06, dcr),
+    ] {
+        s.reg(ar, v);
+    }
+    s
+}
+
+#[test]
+fn window_takes_the_display_cycles_in_its_area() {
+    let mut s = windowed(0x4300);
+    let f = s.frame();
+    let r53 = fetches(&f, 53);
+    assert_eq!(r53.len(), 65);
+    // 96〜156 の 16 サイクルはウィンドウ。背景の番地は、その間も進む [V]
+    assert_eq!(r53[8], (92, 10 * 0x40 + 8));
+    assert_eq!(r53[9], (96, 0x3000));
+    assert_eq!(r53[24], (156, 0x300F));
+    assert_eq!(r53[25], (160, 10 * 0x40 + 25));
+    assert_eq!(fetches(&f, 62)[9], (96, 0x3000 + 9 * 0x10));
+    assert_eq!(fetches(&f, 63)[9], (96, 20 * 0x40 + 9));
+    assert_eq!(span(&f, 53, |o| o.disp2), Some((96, 160)));
+    assert_eq!(span(&f, 52, |o| o.disp2), None);
+    assert_eq!(span(&f, 63, |o| o.disp2), None);
+    assert_eq!(span(&f, 53, |o| o.disp1), Some((64, 320)));
+
+    // SE3＝10（ブランク）：ウィンドウの場所は穴になり、読まない（U85 p.78）
+    let mut s = windowed(0x4200);
+    let f = s.frame();
+    let holes: Vec<usize> = (0..LINE).filter(|&d| f[53 * LINE + d].hole).collect();
+    assert_eq!(holes, (96..160).step_by(4).collect::<Vec<_>>());
+    assert_eq!(fetches(&f, 53).len(), 65 - 16);
+    assert!(f.iter().all(|o| !o.disp2));
+}
+
+#[test]
+fn zoom_repeats_addresses_and_rasters() {
+    // ZFR（rEA）：HZF＝1（横 2 倍）、VZF＝2（縦 3 倍）。基本画面だけ（U85 p.110–111）
+    let mut s = Screen::plan_b();
+    s.reg(0xEA, 0x1200);
+    let f = s.frame();
+    let r43: Vec<u32> = fetches(&f, 43).iter().map(|&(_, a)| a).collect();
+    assert_eq!(r43.len(), 65);
+    assert!(r43.iter().enumerate().all(|(k, &a)| a == k as u32 / 2));
+    assert_eq!(fetches(&f, 45)[0].1, 0);
+    assert_eq!(fetches(&f, 46)[0].1, 0x40);
+    assert_eq!(fetches(&f, 234)[0].1, 63 * 0x40);
+    // 属性の HZ（MAD15–12）
+    assert_eq!((f[43 * LINE + 25].attr.unwrap() >> 12) & 15, 1);
+}
+
+#[test]
+fn attribute_carries_sda_hz_blink_and_atr() {
+    // U85 p.55：MA19 BLINK2、MA18 BLINK1、MA17–16 SPL、MAD15–12 HZ、MAD11–8 HSD（SAR の SDA）、MAD7–0 ATR
+    let mut s = Screen::plan_b();
+    s.reg(0xCC, 0x0200); // SDA＝2
+    s.reg(0xEA, 0x3000); // HZF＝3
+    s.reg(0x06, 0x405A); // ATR＝$5A
+    s.reg(0x90, 0x1000); // BON1＝1、BOFF1＝0：BLINK1 は常に High。BON2＝0：BLINK2 は常に Low（U85 p.92–93）
+    let f = s.frame();
+    assert_eq!(
+        f[50 * LINE + 25].attr,
+        Some(0x4_0000 | 0x1_0000 | 0x3000 | 0x0200 | 0x5A)
+    );
+    // 表示の外のラスタは分割がなく、SDA と HZ は 0 [V]
+    assert_eq!(f[10 * LINE + 25].attr, Some(0x4_0000 | 0x5A));
+}
+
+#[test]
+fn graphic_cursor_covers_cxs_to_cxe_and_cys_to_cye() {
+    // CDR（rE8）：CM＝10（グラフィック）、CON1＝1、COFF1＝0（常に表示）。GCR：CXS 40、CXE 43（HSYNC の
+    // 始まりからのメモリサイクル）、CYS 50、CYE 52（VSYNC の終わりからのラスタ）。両端を含む [V]（U85 p.94、p.107–109）
+    let mut s = Screen::plan_b();
+    for (ar, v) in [(0x98, 0x2B28), (0x9A, 50), (0x9C, 52), (0xE8, 0x8800)] {
+        s.reg(ar, v);
+    }
+    let f = s.frame();
+    for r in 53..=55 {
+        assert_eq!(span(&f, r, |o| o.cud1), Some((80, 88)), "ラスタ {r}");
+    }
+    assert_eq!(span(&f, 52, |o| o.cud1), None);
+    assert_eq!(span(&f, 56, |o| o.cud1), None);
+    assert!(f.iter().all(|o| !o.cud2));
+    // CSK＝01：1 メモリサイクル遅れる（U85 p.71）
+    s.reg(0x04, 0xC408);
+    let f = s.frame();
+    assert_eq!(span(&f, 53, |o| o.cud1), Some((82, 90)));
+    // 十字（CM＝11）：横の線が CUD1、縦の線が CUD2 [V]
+    s.reg(0xE8, 0xC800);
+    let f = s.frame();
+    assert_eq!(span(&f, 54, |o| o.cud1), Some((0, LINE)));
+    assert_eq!(span(&f, 100, |o| o.cud1), None);
+    assert_eq!(span(&f, 100, |o| o.cud2), Some((82, 90)));
+    // CSK＝00 では CUD2 は出ない
+    s.reg(0x04, 0xC008);
+    let f = s.frame();
+    assert!(f.iter().all(|o| !o.cud2));
+    // CON1＝0：出ない [V]
+    s.reg(0xE8, 0x8000);
+    let f = s.frame();
+    assert!(f.iter().all(|o| !o.cud1));
+}
+
+/// フィールドごとに、ラスタ 53 の CUD1 と属性の BLINK1 を集める。
+fn blink_pattern(s: &mut Screen, fields: usize) -> Vec<(bool, bool)> {
+    (0..fields)
+        .map(|_| {
+            s.until(53, 25);
+            let attr = s.a.display_out().attr.unwrap();
+            s.until(53, 80);
+            let cud = s.a.display_out().cud1;
+            (cud, attr & 0x4_0000 != 0)
+        })
+        .collect()
+}
+
+#[test]
+fn cursor_and_attribute_blink_in_units_of_four_fields() {
+    // CON1＝1（8 フィールド）、COFF1＝2（12 フィールド）。BON1＝2（12）、BOFF1＝1（8）（U85 p.92–93、p.109）
+    let mut s = Screen::plan_b();
+    for (ar, v) in [
+        (0x98, 0x2B28),
+        (0x9A, 50),
+        (0x9C, 52),
+        (0xE8, 0x8A00),
+        (0x90, 0x2100),
+    ] {
+        s.reg(ar, v);
+    }
+    let p = blink_pattern(&mut s, 40);
+    for (n, &(cud, b1)) in p.iter().enumerate() {
+        assert_eq!(cud, n % 20 < 8, "フィールド {n} の CUD1");
+        assert_eq!(b1, n % 20 < 12, "フィールド {n} の BLINK1");
+    }
+}
+
+/// ラスタ `from` の頭で `words` を書込み FIFO に入れ、終わるまでの書込みの位置（ラスタ、ドット）を集める。
+fn timed_writes(s: &mut Screen, from: u16, words: &[u16]) -> Vec<(usize, usize)> {
+    s.until(from, 0);
+    s.put(words);
+    let mut log = Vec::new();
+    while !s.a.idle() {
+        let n = s.m.writes;
+        s.tick();
+        if s.m.writes > n {
+            let (dot, raster) = s.a.beam();
+            log.push((usize::from(raster), usize::from(dot)));
+        }
+        assert!(log.len() < 1 << 20);
+    }
+    log
+}
+
+#[test]
+fn drawing_waits_for_display_refresh_and_attribute_cycles() {
+    // 4096 語の CLR（1 行）。式は (2×4096＋8)×1＋12＝8212 2CLK（U85 p.173）。メモリサイクルの前の内部の
+    // 2CLK（20）は均等に配る [P]
+    let mut s = Screen::plan_b();
+    s.reg(0x02, 0x0200);
+    let clr = [CLR, 0x1234, 4095, 0];
+    let start = s.a.cycles();
+    let log = timed_writes(&mut s, 100, &clr);
+    let took = s.a.cycles() - start;
+    assert_eq!(log.len(), 4096);
+    assert!(took > 8212);
+    // HSYNC の 26 ドットはリフレッシュ（OMR の RAM＝0、U85 p.72）で、描画のメモリサイクルは 26 から
+    assert!(log.iter().all(|&(_, d)| d >= 27));
+    // 表示の間は、表示サイクルの 2 つ目のメモリサイクル（60＋4k＋2、＋3）だけ（台帳 §3.2）
+    assert!(
+        log.iter()
+            .all(|&(_, d)| !(60..320).contains(&d) || (d - 60) % 4 == 3)
+    );
+    // 表示のラスタの 1 本に入る語：HSYNC の後の 26〜59 で 17、表示の 65 サイクルで 65、320〜341 で 11。
+    // 内部の 2CLK が 1 つ入ると、そのラスタは 1 語減る
+    let per = |r: usize| log.iter().filter(|&&(rr, _)| rr == r).count();
+    assert!(
+        (101..140).all(|r| (92..=93).contains(&per(r))),
+        "{}",
+        per(110)
+    );
+
+    // 表示の外（ラスタ 236 から）：リフレッシュのほかは毎メモリサイクル。171−13＝158 語
+    let log = timed_writes(&mut s, 236, &clr);
+    assert!((237..255).all(|r| (157..=158).contains(&per2(&log, r))));
+}
+
+fn per2(log: &[(usize, usize)], r: usize) -> usize {
+    log.iter().filter(|&&(rr, _)| rr == r).count()
+}
+
+#[test]
+fn words_land_in_vram_at_their_memory_cycles() {
+    // 描いている途中の VRAM は、済んだメモリサイクルの分だけ書き換わっている
+    let mut s = Screen::plan_b();
+    s.until(100, 0);
+    s.put(&[CLR, 0xFFFF, 4095, 0]);
+    s.until(110, 0);
+    let done = s.m.m[..4096].iter().filter(|&&w| w == 0xFFFF).count();
+    assert!(done > 0 && done < 4096);
+    assert_eq!(done as u64, s.m.writes);
+    assert_eq!(s.a.pending_writes(), 4096 - done);
+    // 書いた語は番地の順に続く
+    assert!(s.m.m[..done].iter().all(|&w| w == 0xFFFF));
+}
+
+#[test]
+fn single_access_display_priority_and_drawing_priority() {
+    // 単一アクセス（ACM＝00）：表示サイクルは 1 メモリサイクル。ACP＝0 では描画は帰線の間だけ、
+    // ACP＝1 では描画が表示サイクルを取る（U85 p.70）
+    let mut s = Screen::plan_b();
+    s.reg(0x04, 0xC000);
+    let clr = [CLR, 0x1234, 1023, 0];
+    let log = timed_writes(&mut s, 100, &clr);
+    assert!(log.iter().all(|&(_, d)| !(62..320).contains(&d)));
+    let mut s = Screen::plan_b();
+    s.reg(0x04, 0xE000);
+    s.until(100, 0);
+    s.put(&clr);
+    let mut holes = 0;
+    while !s.a.idle() {
+        holes += usize::from(s.tick().hole);
+    }
+    assert!(holes > 0);
+}
+
+#[test]
+fn str_off_resets_the_time_base() {
+    // STR＝0：表示と描画を止め、内部の時間の基準を戻す（U85 p.70）
+    let mut s = Screen::plan_b();
+    s.until(100, 50);
+    s.reg(0x04, 0x8008);
+    s.tick();
+    assert_eq!(s.a.beam(), (0, 0));
+    assert_eq!(s.tick(), DisplayOut::default());
+    s.reg(0x04, 0xC008);
+    s.tick();
+    assert_eq!(s.a.beam(), (1, 0));
+}
+
+#[test]
+fn display_and_pending_writes_survive_a_snapshot() {
+    let mut s = windowed(0x4300);
+    s.reg(0xEA, 0x1100);
+    s.until(100, 0);
+    s.put(&[CLR, 0x5A5A, 2047, 0]);
+    s.until(105, 123);
+    let saved = serde_json::to_string(&s.a).unwrap();
+    let mut b: Hd63484 = serde_json::from_str(&saved).unwrap();
+    assert_eq!(b, s.a);
+    let mut m = Counted {
+        m: s.m.m.clone(),
+        writes: s.m.writes,
+    };
+    for _ in 0..LINE * RASTERS {
+        s.tick();
+        b.tick(&mut m);
+        assert_eq!(b.display_out(), s.a.display_out());
+    }
+    assert_eq!(m.m, s.m.m);
+    assert!(b.idle());
 }
