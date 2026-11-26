@@ -341,6 +341,7 @@
 | VPA のサイクル（DR-028、台帳 HD68000.md §2.5） | E は 10 クロックの周期で回り、E↑ を 10k＋5.5 クロックの立下りに置く [P]。1 サイクル 7＋d クロック（d＝3〜12） | E の位相は資料で決まらない | ACIA と IACK は 10〜19 クロック |
 | バスの時間切れ（DR-052） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてがバスエラーになる |
 | 割込み（DR-028） | 要因をレベルにまとめ、いちばん高いレベルを IPL にする。応答はすべてオートベクタ。レベル 6：映像の割込みと ACRTC の IRQ、5：ACIA、4：DOC、3：Fabric と ADPCM の半分空き、2：DSP の応答（IRQ_EN）、1：入力 | DR-028 (4) | 割込みを受けるのは CPU の命令の境目。IPL の同期化の遅れは扱わない |
+| Temporal RAM（DR-053、DR-067） | 電源投入時の中身は決まった擬似乱数の模様（16 bit の LFSR）[P]。ポインタは止めず、一致したら OVERRUN・UNDERRUN の印だけを立てる。HOLD は /WE を止めてポインタを進める。RSYNC は VBlank の始まりで RPTR だけを 0 に | DR-067 | 書いていない番地の値に頼るソフトは実機で違う [V] |
 | RESET 命令（DR-052） | `peripheral_reset`：ACRTC、DSP・ADPCM・本体 DAC の CTRL、映像と入力の割込みの許可、Temporal の CTRL、PAL_CTRL、DOC の RESET | DR-052 (3) | Fabric と ACIA は変えない [V] |
 | 音声の出力（DR-054） | 48 kHz の標本ごとに、DOC のチャネルの平均（偶数を L、奇数を R）、子基板がないときは本体 DAC、ADPCM を半分ずつ足す。`audio_out` にためてホストが取り出す | 仕様書 §10 の段はまだ設計していない | LPF・DC 除去・音量の比は仮 [V] |
 | 読み書き一体の命令（DR-030） | `Console` が 1 命令ごとに DOC の窓へのアクセスを見て、同じ番地を読んで書いたか、窓に 2 回以上触ったら `BusLog::doc_rule_warnings` を数える。動作は変えない（通常モードの警告）。TST・BTST・CMP で 0xE0・0xE2 を 1 回読む違反は見分けない [V] | 命令の種類はバスから見えないので、アクセスの並びで見る | ホストが警告を出す |
@@ -581,6 +582,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | DSP bridge | `dsp_bridge_registers` | CTRL の初期値、RESET の後の PRGBUS とプログラム窓、BIOSEL と IRQ_EN、COMMAND | 合格 |
 | ADPCM・本体 DAC | `adpcm_and_dac_registers` | CTRL の初期値、半分空きの割込み（レベル 3）、本体 DAC の DIRECT、子基板があるときの窓 | 合格 |
 | Temporal | `temporal_pointers` | ポインタの読み書き、DIST、初期化。Capture RAM の窓はバスエラー | 合格 |
+| Temporal の細部（DR-067） | `temporal_ring_flags_hold_and_repeat` | 書いていない番地は電源投入時の中身、追越しの印（OVERRUN・UNDERRUN）と W1C、HOLD、64 KiB で回る、VBlank での読出しだけの同期と両方の同期 | 合格 |
 | 時間切れ | `doc_bus_timeout_counts_from_as` | DOC の CLK を 1 MHz にすると、DOC のアクセスはすべてバスエラー | 合格 |
 | 保存 | `snapshot_round_trip` | 表示と割込みが動いている途中で保存して戻すと、同じ時刻に同じ状態 | 合格 |
 | CPU で起動 | `the_cpu_boots_from_rom_and_counts_vblanks` | リセットで SSP と PC を読み、ACRTC の案B を設定し、VBlank ごとにレベル 6 のオートベクタで数える（数はフレームの数 ±1、IACK と同じ） | 合格 |

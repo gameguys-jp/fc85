@@ -451,6 +451,63 @@ fn temporal_pointers() {
 }
 
 #[test]
+fn temporal_ring_flags_hold_and_repeat() {
+    // 仕様書 §07「未書込読出し、同番地競合、オーバーラン…フィールド保持、繰返し」（DR-067）
+    let mut c = Cpu::new();
+    let fresh = c.sys.ports.temporal.mem.clone();
+    assert!(
+        fresh.iter().any(|&b| b != 0),
+        "電源投入時の中身は 0 ではない [P]"
+    );
+    // 書いていない番地を読むと、電源投入時の中身
+    c.ww(0x24_0002, 0x1234);
+    assert_eq!(c.sys.ports.temporal.read(), fresh[0x1234]);
+
+    // 3 byte 書いて 3 byte 読む。読む側が追いつくと UNDERRUN（bit 9）、ポインタが等しい間は bit 4
+    c.ww(0x24_0004, 1);
+    assert_eq!(c.rw(0x24_0004), 0x0010);
+    for v in [1, 2, 3] {
+        c.sys.ports.temporal.write(v);
+    }
+    assert_eq!(c.rw(0x24_0004), 0x0000);
+    let got: Vec<u8> = (0..3).map(|_| c.sys.ports.temporal.read()).collect();
+    assert_eq!(got, [1, 2, 3]);
+    assert_eq!(c.rw(0x24_0004), 0x0210);
+    // 読み続けると前の周の値（ここでは電源投入時の中身）
+    assert_eq!(c.sys.ports.temporal.read(), fresh[3]);
+    c.ww(0x24_0004, 0x0200);
+    assert_eq!(c.rw(0x24_0004), 0x0000, "W1C");
+
+    // HOLD（bit 3）：/WE を止めてもポインタは進む
+    c.ww(0x24_0004, 8);
+    c.sys.ports.temporal.write(0x55);
+    assert_eq!(c.sys.ports.temporal.mem[3], fresh[3]);
+    // 読み過ぎて 4 番地にある RPTR に追いつくので、OVERRUN も立つ
+    assert_eq!((c.rw(0x24_0000), c.rw(0x24_0004)), (4, 0x0118));
+
+    // 書く側が読む側に追いつくと OVERRUN（bit 8）。64 KiB で回る
+    c.ww(0x24_0004, 0x0100);
+    c.ww(0x24_0000, 0xFFFF);
+    c.ww(0x24_0002, 0);
+    assert_eq!(c.rw(0x24_0004), 0x0000);
+    c.sys.ports.temporal.write(0xAA);
+    assert_eq!(c.rw(0x24_0004), 0x0110);
+    assert_eq!(c.sys.ports.temporal.mem[0xFFFF], 0xAA);
+
+    // 繰返し（bit 2）：VBlank の始まりで読出しのポインタだけを 0 に。bit 1 は両方
+    c.acrtc_case_b();
+    c.ww(0x24_0004, 4 | 0x100);
+    c.ww(0x24_0000, 0x0100);
+    c.ww(0x24_0002, 0x0080);
+    c.idle(frame_clocks());
+    assert_eq!((c.rw(0x24_0000), c.rw(0x24_0002)), (0x0100, 0));
+    c.ww(0x24_0004, 2);
+    c.ww(0x24_0002, 0x0080);
+    c.idle(frame_clocks());
+    assert_eq!((c.rw(0x24_0000), c.rw(0x24_0002)), (0, 0));
+}
+
+#[test]
 fn doc_bus_timeout_counts_from_as() {
     // DR-052：DOC の CLK を 1 MHz に下げると、ブリッジは S0 から 65.5 クロックまでに DTACK を返せない
     let mut c = Cpu::new();

@@ -230,8 +230,15 @@ ADPCM_ST_HALF   EQU     $0200           ; 残りが 32 byte 以下
 
 TEMPORAL_WPTR   EQU     $240000
 TEMPORAL_RPTR   EQU     $240002
-TEMPORAL_CTRL   EQU     $240004         ; bit 0 ポインタを 0 に、bit 1 VBlank で 0 に
+TEMPORAL_CTRL   EQU     $240004         ; 下の TMP_*（DR-067）
 TEMPORAL_DIST   EQU     $240006
+TMP_CLEAR       EQU     $0001           ; 両方のポインタと印を 0 に
+TMP_SYNC        EQU     $0002           ; VBlank の始まりで両方のポインタを 0 に
+TMP_RSYNC       EQU     $0004           ; VBlank の始まりで読出しのポインタだけを 0 に（繰返し）
+TMP_HOLD        EQU     $0008           ; 書込みの /WE を止める。ポインタは進む（保持）
+TMP_EQUAL       EQU     $0010           ; 読出し専用：WPTR＝RPTR
+TMP_OVERRUN     EQU     $0100           ; 書く側が追いついた。W1C
+TMP_UNDERRUN    EQU     $0200           ; 読む側が追いついた。W1C
 
 ; ------------------------------------------------------------------ Data Fabric（§06、DR-046）
 

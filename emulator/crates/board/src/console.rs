@@ -101,6 +101,9 @@ pub struct System {
     pub dsp_irq_en: bool,
     /// Temporal の CTRL の bit 1：VBlank の始まりで両方のポインタを 0 にする（DR-053）。
     pub temporal_sync: bool,
+    /// Temporal の CTRL の bit 2：VBlank の始まりで読出しのポインタだけを 0 にする（繰返し。DR-067）。
+    #[serde(default)]
+    pub temporal_rsync: bool,
     vblank_prev: bool,
     pub log: BusLog,
     /// ベンド点の設定とモード（DR-065）。変えたら `apply_bends` で回路に入れる。
@@ -196,6 +199,7 @@ impl System {
             input: Input::default(),
             dsp_irq_en: false,
             temporal_sync: false,
+            temporal_rsync: false,
             vblank_prev: false,
             log: BusLog::default(),
             bends: Bends::default(),
@@ -215,9 +219,13 @@ impl System {
     pub fn step_slot(&mut self) {
         self.fabric.step_slot(&mut self.ports);
         let (vblank, _) = self.ports.acrtc.video.blank_levels();
-        if vblank && !self.vblank_prev && self.temporal_sync {
-            self.ports.temporal.wptr = 0;
-            self.ports.temporal.rptr = 0;
+        if vblank && !self.vblank_prev {
+            if self.temporal_sync {
+                self.ports.temporal.wptr = 0;
+            }
+            if self.temporal_sync || self.temporal_rsync {
+                self.ports.temporal.rptr = 0;
+            }
         }
         self.vblank_prev = vblank;
         while self.next_sample < self.ports.now() {
@@ -599,10 +607,29 @@ impl System {
                 if v & 1 != 0 {
                     t.wptr = 0;
                     t.rptr = 0;
+                    t.overrun = false;
+                    t.underrun = false;
                 }
                 self.temporal_sync = v & 2 != 0;
+                self.temporal_rsync = v & 4 != 0;
+                t.hold = v & 8 != 0;
+                // W1C（DR-067）
+                if v & 0x100 != 0 {
+                    t.overrun = false;
+                }
+                if v & 0x200 != 0 {
+                    t.underrun = false;
+                }
             }
-            (0x04, None) => return ok(u16::from(self.temporal_sync) << 1, 0),
+            (0x04, None) => {
+                let v = u16::from(self.temporal_sync) << 1
+                    | u16::from(self.temporal_rsync) << 2
+                    | u16::from(t.hold) << 3
+                    | u16::from(t.wptr == t.rptr) << 4
+                    | u16::from(t.overrun) << 8
+                    | u16::from(t.underrun) << 9;
+                return ok(v, 0);
+            }
             (0x06, None) => return ok(t.wptr.wrapping_sub(t.rptr), 0),
             (0x06, Some(_)) => {}
             _ => return None,
@@ -850,6 +877,8 @@ impl System {
         self.dsp_irq_en = false;
         self.input.enable = 0;
         self.temporal_sync = false;
+        self.temporal_rsync = false;
+        self.ports.temporal.hold = false;
     }
 }
 

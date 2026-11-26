@@ -106,7 +106,7 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 210000–2101FF | DOC registers | native reg n → base+2n、上位byte。子基板がないときはバスエラー [P]（DR-019） |
 | 220000–22001F | DSP bridge | mailbox / FIFO / control / status。+0 CTRL（RESET、BIOSEL、IRQ_EN）、+2 STATUS、+4 MAILBOX、+6 RESPONSE [P]（DR-053）。CTRLにRESET、BIOSEL[1:0] [P]（DR-029）。BIOSELの拍は、拍の立上りで立ちDSPが状態ポートを読むと消えるラッチ [P]（DR-049）。STATUSにUNDERRUN／OVERRUN（W1C）[P]（DR-017） |
 | 230000–23001F | ADPCM bridge | FIFO / clock / reset。+0 CTRL（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）、+2 STATUS（残量、UNDERRUN、半分空き）[P]（DR-053）。FIFOの残量、半分空きの割込み、UNDERRUN（W1C）[P]（DR-017）。230010–23001Fは本体DAC（子基板がないとき）のCTRL／STATUS／DATA [P]（DR-019）。CTRLのDIRECTでCPUがDATAを直接DACに出す [P]（DR-053） |
-| 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態。+0 WPTR、+2 RPTR、+4 CTRL（ポインタの初期化、VBlankでの同期の初期化）、+6 DIST。240020–はCapture [O] [P]（DR-053） |
+| 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態。+0 WPTR、+2 RPTR、+4 CTRL（ポインタの初期化、VBlankでの同期の初期化、読出しだけの同期、書込みの保持、ポインタの一致と追越しの印）、+6 DIST。240020–はCapture [O] [P]（DR-053、DR-067） |
 | 250000–250FFF | Data Fabric | DMA・IRQ・経路・bend |
 | 260000–2600FF | Controller / MIDI / matrix | 入力・ACIA・クロック・マトリクス |
 | 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）[P]（DR-027）。270022 VIDEO_IRQ（VBlank・HBlankの割込みの許可と保留、レベル6）、270024 LINE（ラスタ）、270026 LINE_CMP。残りは予約 [P]（DR-053） |

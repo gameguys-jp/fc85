@@ -29,7 +29,17 @@ use crate::fifo::Fifo;
 use fc85_core::time::{SLOT, Time};
 use serde::{Deserialize, Serialize};
 
-/// Temporal RAM（HM6264×8、8 bit。仕様書 §05、DR-031）。
+/// Temporal RAM（HM6264×8、8 bit。仕様書 §05・§07、DR-031、DR-067）。
+///
+/// - 書込み（port 6）と読出し（port 7）のポインタは独立の 16 bit のカウンタで、64 KiB で回る。
+/// - 書いていない番地を読むと、電源投入時の SRAM の中身が出る。HM6264 の電源投入時の中身は資料に
+///   ないので、決まった擬似乱数の模様にする [P][V]。前の周の値が残っていればそれが出る。
+/// - Data Fabric は 1 スロットに 1 回しかアクセスしないので、書込みと読出しが同時に同じ番地に
+///   来ることはない。同じ番地は、スロットの順に書いてから読めば新しい値、読んでから書けば古い値。
+/// - 2 つのポインタの一致を比べる回路（74LS688×2）と FF 2 個 [P]：書込みでポインタが一致したら
+///   OVERRUN（書く側が読む側に追いついた。この先は読んでいない値を上書きする）、読出しで一致したら
+///   UNDERRUN（読む側が書く側に追いついた。この先は前の周の値を読む）を立てる。
+/// - HOLD（CTRL bit 3）は書込みの /WE を止める。ポインタは進む（フィールドの保持）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemporalRam {
     pub mem: Vec<u8>,
@@ -37,25 +47,60 @@ pub struct TemporalRam {
     pub wptr: u16,
     /// 読出しのポインタ（port 7）。
     pub rptr: u16,
+    /// 書込みの /WE を止める（CTRL bit 3）。
+    #[serde(default)]
+    pub hold: bool,
+    /// 書込みでポインタが一致した（W1C）。
+    #[serde(default)]
+    pub overrun: bool,
+    /// 読出しでポインタが一致した（W1C）。
+    #[serde(default)]
+    pub underrun: bool,
+}
+
+/// 電源投入時の SRAM の中身の模様（16 bit の LFSR の下位 8 bit）[P]。
+fn power_on_pattern() -> Vec<u8> {
+    let mut x: u16 = 0x1985;
+    (0..0x10000)
+        .map(|_| {
+            let b = x & 1;
+            x >>= 1;
+            if b != 0 {
+                x ^= 0xB400;
+            }
+            x as u8
+        })
+        .collect()
 }
 
 impl TemporalRam {
     pub fn new() -> Self {
         Self {
-            mem: vec![0; 0x10000],
+            mem: power_on_pattern(),
             wptr: 0,
             rptr: 0,
+            hold: false,
+            overrun: false,
+            underrun: false,
         }
     }
 
     pub fn write(&mut self, v: u8) {
-        self.mem[self.wptr as usize] = v;
+        if !self.hold {
+            self.mem[self.wptr as usize] = v;
+        }
         self.wptr = self.wptr.wrapping_add(1);
+        if self.wptr == self.rptr {
+            self.overrun = true;
+        }
     }
 
     pub fn read(&mut self) -> u8 {
         let v = self.mem[self.rptr as usize];
         self.rptr = self.rptr.wrapping_add(1);
+        if self.rptr == self.wptr {
+            self.underrun = true;
+        }
         v
     }
 }
