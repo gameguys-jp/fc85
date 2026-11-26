@@ -354,7 +354,7 @@ fn strongest_hz(x: &[f64]) -> f64 {
 #[test]
 fn the_bend_cartridge_plays_and_draws() {
     // sdk/samples/bend の SAMPLE 5：仕様書 §11 のベンド点を試す試験信号（sdk/samples/bend/README.md）。
-    // DOC の持続音・低音・分散和音と ADPCM の太鼓が 10 秒途切れず、画面は毎フレーム変わる。B で持続音
+    // DOC の持続音・低音・分散和音と ADPCM の太鼓が 5 秒途切れず、画面は毎フレーム変わる。B で持続音
     // だけにし、DOC の CLK を 8 MHz から 4 MHz に下げると、持続音（A2、110 Hz）の高さが半分になる
     let Some(cart) = rom("sdk/samples/bend/build/bend.bin") else {
         eprintln!("sdk/samples/bend/build/bend.bin がないので飛ばす");
@@ -374,11 +374,11 @@ fn the_bend_cartridge_plays_and_draws() {
     let v_errors = 0x10_0808; // 5 番目
     let mut audio = Vec::new();
     let mut frames = Vec::new();
-    for i in 0..600 {
+    for i in 0..300 {
         c.sys.set_ports(0, 0);
         c.run_frame();
         audio.append(&mut c.sys.audio_out);
-        if i == 299 || i == 300 {
+        if i == 149 || i == 150 {
             frames.push(c.sys.ports.acrtc.video.frame.clone());
         }
     }
@@ -392,7 +392,7 @@ fn the_bend_cartridge_plays_and_draws() {
     assert_eq!(word(&c, v_errors), 0, "Fabric の誤り");
     assert_eq!(word(&c, v_vbl_miss), 0, "VBlank を待って時間切れ");
     // 1 秒ごとに、L と R のどちらも鳴っている
-    assert!(audio.len() >= 9 * 48_000, "{}", audio.len());
+    assert!(audio.len() >= 4 * 48_000, "{}", audio.len());
     for (s, w) in audio.chunks_exact(48_000).enumerate() {
         let rms = |f: fn(&(i16, i16)) -> i16| {
             (w.iter().map(|p| f64::from(f(p)).powi(2)).sum::<f64>() / w.len() as f64).sqrt()

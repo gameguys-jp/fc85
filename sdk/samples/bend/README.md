@@ -172,10 +172,10 @@ cargo run --release -p fc85-host -- --headless --frames 900 --cart ../sdk/sample
 
 ## 07　確かめたこと
 
-エミュレータの試験 `the_bend_cartridge_plays_and_draws`（`emulator/crates/board/tests/console_boot.rs`）が、DOC の子基板ありで 10 秒動かし、次を確かめる [V]。
+エミュレータの試験 `the_bend_cartridge_plays_and_draws`（`emulator/crates/board/tests/console_boot.rs`）が、DOC の子基板ありで 5 秒動かし、次を確かめる [V]。
 
 - バスエラー 0、DOC の窓の規約違反（DR-030）0、`ER` 0、`NV` 0。
-- 10 秒の 1 秒ごとに、L と R のどちらも RMS が 300 より大きい（無音の区間がない）。
+- 5 秒の 1 秒ごとに、L と R のどちらも RMS が 300 より大きい（無音の区間がない）。
 - 続く 2 つのフレームの画面が違う（箱と状態の行が動く）。
 - B で持続音だけにし、L の一番強い周波数（30〜300 Hz）が約 110.2 Hz。`clock doc 4e6` で、その比が 0.5±0.03（測った値は 110.25 Hz → 55.00 Hz）。
 
