@@ -12,27 +12,56 @@
 //! - 出力は、サイクルごとの SIG±（符号付きの波形値×音量）、CA3–CA0、CSTRB。チャンネルごとのサンプルホールドと
 //!   加算は board 層の仕事（仕様書 §10）。リフレッシュの 2 サイクルは、最後のオシレータの SIG± を保つ [V]。
 //! - 音量は単純な乗算（E1 p.6）。IIGS で測った非線形の特性（台帳 §4.5）はアナログの層で足す。
+//! - オシレータのレジスタはダイナミックで、走査で訪れたときに書き戻される（E2 p.15。台帳 §3.1・§4.7）。
+//!   訪れない間が保持時間を超えたビットは 1 になる。保持時間はビットごとに分布から決める [P][V]
+//!   （`REG_T_MIN_S` ほか）。時刻は core 層の単位で、`tick` ごとに E の周期（`set_cycle_time`）だけ進む。
+//!   全体のレジスタ（0xE0〜0xE2）と割込みのテーブルは崩れない [P]。
+//! - 走査の最後の 2 サイクルで、波形 RAM の行を 1 つずつリフレッシュする（`WaveBus::refresh`。E2 p.1）。
+//!   行のカウンタは 8 bit で、リフレッシュのサイクルごとに 1 進む [P][V]。
 //! - 資料で決まらない動作は、`docs/impl/emulator.md` §03 にどう扱ったかを書く。
 
 use std::collections::VecDeque;
 
+use fc85_core::time::{PERIOD_DOC_E, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 /// オシレータの数。
 pub const OSCILLATORS: usize = 32;
 /// A/D の変換にかかるサイクル数。E2 の 30 µs を 8 MHz 入力のサイクルで数えた値（E1 は 26 サイクル）[V]。
 pub const ADC_CYCLES: u32 = 30;
-/// 走査で訪れないオシレータのレジスタが消えるまでのサイクル数。約 1.5 秒（MAME の解釈）[V]。
-pub const DECAY_CYCLES: u64 = 1_500_000;
+
+/// レジスタのビットの保持時間（25 °C）[P][V]。チップの中のダイナミックな節点は DRAM のセル（中央 1 s、
+/// 最短 50 ms。DR-072）より容量が小さいので短くした。選別で保証する最短は 2 ms で、70 °C では 88 µs。
+/// 資料の範囲（CLK 8 MHz 以上）では、32 個を走査しても 34 µs ごとに訪れるので崩れない。
+pub const REG_T_MIN_S: f64 = 0.002;
+/// 保持時間の中央（25 °C、秒）[P][V]。
+pub const REG_MEDIAN_S: f64 = 0.02;
+/// 分布の形：対数ロジスティック F(t)＝1/(1＋(t/中央)^−β) の β [P]。対数正規の σ 0.5 に当たる。
+pub const REG_SHAPE: f64 = 3.6;
 
 const MODE_ONESHOT: u8 = 1;
 const MODE_SYNC_AM: u8 = 2;
 const MODE_SWAP: u8 = 3;
 
-/// 波形 RAM。board 層（またはテスト）が実装する。
+/// オシレータごとのレジスタ（保持の時刻とビットの番号に使う）。
+const R_FL: usize = 0;
+const R_FH: usize = 1;
+const R_VOL: usize = 2;
+const R_DATA: usize = 3;
+const R_PTR: usize = 4;
+const R_CTRL: usize = 5;
+const R_SIZE: usize = 6;
+const R_ACC: usize = 7;
+const REGS: usize = 8;
+/// レジスタのビットの数（SIZE の bit 7 はない。アキュムレータは 24 bit）。
+const REG_BITS: [u32; REGS] = [8, 8, 8, 8, 8, 8, 7, 24];
+
+/// 波形 RAM（64K×1 の DRAM）。board 層（またはテスト）が実装する。
 pub trait WaveBus {
     /// 1 byte を読む。番地は BS を bit 16 に含めた 17 bit。
     fn read_wave(&mut self, addr: u32) -> u8;
+    /// リフレッシュのサイクル：行の番地 `row`（A8–A15 に出す）で行を活性化する。既定は何もしない。
+    fn refresh(&mut self, _row: u8) {}
 }
 
 /// サイクルの種類。
@@ -71,8 +100,6 @@ struct Osc {
     size: u8,
     /// 24 bit のアキュムレータ。
     acc: u32,
-    /// 最後にリフレッシュしたサイクル。
-    refreshed: u64,
 }
 
 impl Osc {
@@ -85,8 +112,22 @@ impl Osc {
         control: 0xFF,
         size: 0x7F,
         acc: 0x00FF_FFFF,
-        refreshed: 0,
     };
+
+    /// レジスタ `r` のビット `mask` を 1 にする（崩れたビット）。
+    fn set_bits(&mut self, r: usize, mask: u32) {
+        match r {
+            R_FL => self.freq |= mask as u16,
+            R_FH => self.freq |= (mask as u16) << 8,
+            R_VOL => self.vol |= mask as u8,
+            R_DATA => self.data |= mask as u8,
+            R_PTR => self.ptr |= mask as u8,
+            R_CTRL => self.control |= mask as u8,
+            R_SIZE => self.size |= mask as u8 & 0x7F,
+            R_ACC => self.acc |= mask & 0x00FF_FFFF,
+            _ => {}
+        }
+    }
 
     fn halted(&self) -> bool {
         self.control & 1 != 0
@@ -130,7 +171,6 @@ pub struct Es5503 {
     /// 有効なオシレータの数 N（1〜32）。
     enabled: u8,
     next: Next,
-    cycle: u64,
     /// 割込みテーブル：IE＝0 で完了したオシレータ（E1 p.7）。
     table: u32,
     /// OIR に渡った要求。先頭が OIR に見えている（先入れ先出し、E1 p.7）。
@@ -141,7 +181,62 @@ pub struct Es5503 {
     adc: u8,
     adc_input: u8,
     adc_busy: u32,
-    decay: Option<u64>,
+    /// 今の時刻（core 層の単位）。最後の `tick` の時刻。
+    #[serde(default)]
+    now: Time,
+    /// DOC サイクル（E の 1 周期）の長さ。
+    #[serde(default = "default_cycle_time")]
+    cycle_time: Time,
+    /// オシレータを最後に訪れた（全部のレジスタを書き戻した）時刻。
+    #[serde(default)]
+    visited: [Time; OSCILLATORS],
+    /// レジスタごとに、ホストが最後に書いた時刻。
+    #[serde(default)]
+    written: [[Time; REGS]; OSCILLATORS],
+    /// レジスタが崩れるか（比較用に止められる）。
+    #[serde(default = "default_true")]
+    decays: bool,
+    /// チップの個体（どのビットが先に崩れるか）と温度（°C）。
+    #[serde(default)]
+    unit: u32,
+    #[serde(default = "default_temp")]
+    temp_c: i32,
+    /// これより短い経過では、どのビットも崩れない（`temp_c` での選別の最短）。
+    #[serde(default = "default_safe")]
+    safe: Time,
+    /// リフレッシュの行のカウンタ。
+    #[serde(default)]
+    refresh_row: u8,
+}
+
+fn default_cycle_time() -> Time {
+    PERIOD_DOC_E
+}
+fn default_true() -> bool {
+    true
+}
+fn default_temp() -> i32 {
+    25
+}
+fn default_safe() -> Time {
+    safe_time(25)
+}
+
+/// 経過を 25 °C の経過に直す倍率（保持時間は 10 °C ごとに半分。DR-072 と同じ）[P]。
+fn temp_scale(temp_c: i32) -> f64 {
+    2f64.powf(f64::from(temp_c - 25) / 10.0)
+}
+
+/// 温度 `temp_c` での選別の最短の保持時間（core 層の単位）。
+fn safe_time(temp_c: i32) -> Time {
+    (REG_T_MIN_S / temp_scale(temp_c) * UNITS_PER_SECOND as f64) as Time
+}
+
+fn splitmix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 impl Default for Es5503 {
@@ -157,7 +252,6 @@ impl Es5503 {
             osc: [Osc::DECAYED; OSCILLATORS],
             enabled: 1,
             next: Next::Off,
-            cycle: 0,
             table: 0,
             stack: VecDeque::new(),
             last_irq: 0,
@@ -166,7 +260,15 @@ impl Es5503 {
             adc: 0,
             adc_input: 0,
             adc_busy: 0,
-            decay: Some(DECAY_CYCLES),
+            now: 0,
+            cycle_time: PERIOD_DOC_E,
+            visited: [0; OSCILLATORS],
+            written: [[0; REGS]; OSCILLATORS],
+            decays: true,
+            unit: 0,
+            temp_c: 25,
+            safe: safe_time(25),
+            refresh_row: 0,
         }
     }
 
@@ -191,9 +293,30 @@ impl Es5503 {
         self.adc_input = value;
     }
 
-    /// レジスタが消えるまでのサイクル数。`None` で消えない（比較と Bend 用）。
-    pub fn set_decay(&mut self, cycles: Option<u64>) {
-        self.decay = cycles;
+    /// レジスタが崩れるか（既定は true。false は比較用）。
+    pub fn set_decay(&mut self, on: bool) {
+        self.decays = on;
+    }
+
+    /// DOC サイクル（E の 1 周期＝CLK の 8 周期）の長さ（core 層の単位。既定は 8 MHz の 1 µs）。
+    pub fn set_cycle_time(&mut self, units: Time) {
+        self.cycle_time = units;
+    }
+
+    /// レジスタの保持の個体と温度（°C）。既定は個体 0、25 °C。
+    pub fn set_retention(&mut self, unit: u32, temp_c: i32) {
+        self.unit = unit;
+        self.temp_c = temp_c;
+        self.safe = safe_time(temp_c);
+    }
+
+    /// 経過 `dt` で崩れるビットの割合（0〜1）。
+    pub fn decay_fraction(&self, dt: Time) -> f64 {
+        let t = dt as f64 / UNITS_PER_SECOND as f64 * temp_scale(self.temp_c);
+        if t < REG_T_MIN_S {
+            return 0.0;
+        }
+        1.0 / (1.0 + (t / REG_MEDIAN_S).powf(-REG_SHAPE))
     }
 
     // ---- ホストのアクセス（E High の窓） ----
@@ -203,7 +326,7 @@ impl Es5503 {
         match reg {
             0x00..=0xDF => {
                 let i = usize::from(reg & 0x1F);
-                self.check_decay(i);
+                self.decay_reg(i, Self::reg_index(reg));
                 let o = &self.osc[i];
                 match reg & 0xE0 {
                     0x00 => o.freq as u8,
@@ -238,13 +361,14 @@ impl Es5503 {
         match reg {
             0x00..=0xDF => {
                 let i = usize::from(reg & 0x1F);
-                self.check_decay(i);
+                let r = Self::reg_index(reg);
                 let o = &mut self.osc[i];
                 match reg & 0xE0 {
                     0x00 => o.freq = (o.freq & 0xFF00) | u16::from(value),
                     0x20 => o.freq = (o.freq & 0x00FF) | (u16::from(value) << 8),
                     0x40 => o.vol = value,
-                    0x60 => {}
+                    // 波形データは読出し専用。書いても新しくならない
+                    0x60 => return,
                     0x80 => o.ptr = value,
                     0xA0 => {
                         o.control = value;
@@ -256,8 +380,8 @@ impl Es5503 {
                     }
                     _ => o.size = value & 0x7F,
                 }
-                // 書いたレジスタは新しい。同じオシレータのほかのレジスタもまとめて新しいとみなす（近似）[V]
-                self.osc[i].refreshed = self.cycle;
+                // 書いたレジスタだけが新しくなる。ほかのレジスタは前に書き戻した時刻のまま [P]
+                self.written[i][r] = self.now;
             }
             0xE1 => {
                 self.enabled = ((value >> 1) & 0x1F) + 1;
@@ -288,12 +412,20 @@ impl Es5503 {
     pub fn volume(&self, n: usize) -> u8 {
         self.osc[n].vol
     }
+    /// 次のリフレッシュの行。
+    pub fn refresh_row(&self) -> u8 {
+        self.refresh_row
+    }
+    /// 今の時刻（最後の `tick` の時刻。core 層の単位）。
+    pub fn now(&self) -> Time {
+        self.now
+    }
 
     // ---- 時間 ----
 
     /// 1 DOC サイクル進める。
     pub fn tick(&mut self, bus: &mut impl WaveBus) -> Tick {
-        self.cycle += 1;
+        self.now += self.cycle_time;
         if self.adc_busy > 0 {
             self.adc_busy -= 1;
             if self.adc_busy == 0 {
@@ -315,6 +447,8 @@ impl Es5503 {
                 } else {
                     Next::Osc(0)
                 };
+                bus.refresh(self.refresh_row);
+                self.refresh_row = self.refresh_row.wrapping_add(1);
                 (Slot::Refresh, 0x0F, false)
             }
             Next::Osc(n) => {
@@ -340,21 +474,55 @@ impl Es5503 {
 
     // ---- 内部 ----
 
-    fn check_decay(&mut self, i: usize) {
-        if let Some(limit) = self.decay
-            && self.cycle.saturating_sub(self.osc[i].refreshed) > limit
-        {
-            self.osc[i] = Osc {
-                refreshed: self.cycle,
-                ..Osc::DECAYED
-            };
+    /// レジスタの番地（0x00〜0xDF）から、オシレータの中のレジスタの番号。
+    fn reg_index(reg: u8) -> usize {
+        match reg & 0xE0 {
+            0x00 => R_FL,
+            0x20 => R_FH,
+            0x40 => R_VOL,
+            0x60 => R_DATA,
+            0x80 => R_PTR,
+            0xA0 => R_CTRL,
+            _ => R_SIZE,
         }
+    }
+
+    /// オシレータ `i` のレジスタ `r` を、前に書き戻してからの経過で崩す。崩れたビットは 1 [P][V]。
+    /// どのビットが先に崩れるかは、個体・オシレータ・レジスタ・ビットの hash で決まり、経過が長いほど
+    /// 前に崩れたビットを含んで増える（保持時間の順）。
+    fn decay_reg(&mut self, i: usize, r: usize) {
+        if !self.decays {
+            return;
+        }
+        let last = self.visited[i].max(self.written[i][r]);
+        let dt = self.now.saturating_sub(last);
+        if dt < self.safe {
+            return;
+        }
+        let p = self.decay_fraction(dt);
+        let mut mask = 0;
+        for b in 0..REG_BITS[r] {
+            let key = (u64::from(self.unit) << 40)
+                ^ ((i as u64) << 16)
+                ^ ((r as u64) << 8)
+                ^ u64::from(b);
+            let u = (splitmix64(key) >> 11) as f64 / (1u64 << 53) as f64;
+            if u < p {
+                mask |= 1 << b;
+            }
+        }
+        self.osc[i].set_bits(r, mask);
     }
 
     /// オシレータを 1 つ訪れる（台帳 §4.2〜§4.4）。読んだ番地と値を返し、SIG± を決める。
     fn visit(&mut self, i: usize, bus: &mut impl WaveBus) -> (u32, u8) {
-        self.check_decay(i);
-        self.osc[i].refreshed = self.cycle;
+        // 前に訪れてから選別の最短を過ぎていれば、レジスタを崩してから使う。訪れると全部を書き戻す
+        if self.now.saturating_sub(self.visited[i]) >= self.safe {
+            for r in 0..REGS {
+                self.decay_reg(i, r);
+            }
+        }
+        self.visited[i] = self.now;
         let before = self.osc[i];
         let even = i & 1 == 0;
         let partner = i ^ 1;

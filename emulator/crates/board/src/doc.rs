@@ -37,16 +37,181 @@
 //!   （`sig_wiring`、DR-011 のジャンパ）で電流を決め、RC の充電で `sh_alpha` だけ近づく。偶数・奇数の和の
 //!   時間の積分を LINE OUT（`console` の `line`）が刻みごとに取り出す（`take_line`）。片側の配線の電流は、
 //!   訪れたオシレータの音量のレジスタを使う [V]。
+//! - 子基板のバス [P]：DOC の A0–A7（ピン 38–31）の線を「A のバス」、A8/D0–A15/D7（ピン 30–23）の線を
+//!   「AD のバス」とする。E Low では DOC が A のバスに列の番地を、AD のバスに行の番地を出し（行のラッチが
+//!   RAS̄ の前に取る）、続いて波形 RAM が AD のバスにデータを出す。E High では、68000 のブリッジが A の
+//!   バスにレジスタの番号を出し（74LS244）、データは AD のバスを通る（74LS245）。P2A の窓では、U48 が
+//!   A のバスに列の番地を出し、U50（書込み）・U58（読出し）のデータは AD のバスを通る。P2A の行の番地
+//!   （U49）は AD のバスを通らず、波形 RAM の番地のマルチプレクサに直接入る。リフレッシュの行も AD の
+//!   バスに出る。68000 は波形 RAM を直接読み書きしない（Fabric の port 2 だけ）。
+//! - ベンド点「DOC波形RAMの線」（仕様書 §11、DR-034 (1)）：テストピンは A と AD のバスの 16 本にあり、
+//!   GND・+5 V への固定、ほかの線との入替え、浮かせを、そのバスを通るすべての転送の受け手に効かせる
+//!   （`DocLines`。文字 ROM の線 DR-063 と同じ数え方）[P]。
+//! - 波形 RAM（4164×8）の保持（DR-072）：行は A8–A15、列は A0–A7。リフレッシュの 1 回で活性化される
+//!   まとまりは、行の下位 7 bit（RA0–RA6）が同じ 2 行（512 byte）。DOC の読出し、リフレッシュのサイクル、
+//!   P2A の読み書きが行を活性化する。追跡は Bend モードのときだけ（`set_bends`）。放電した値は、行の
+//!   RA0（A8）が 0 の行で 0、1 の行で 1（真のセルと補のセル）[P][V]。
 
 use crate::acrtc::{T_OUT, T_SETUP};
 use crate::analog::{Hold, SigWiring, sh_alpha_q16};
+use crate::bend::Wire;
+use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
 use fc85_chips::es5503::{Es5503, Slot, WaveBus};
-use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time};
+use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
 /// 波形 RAM の大きさ（HM4864A×8。DR-031 (4)）。
 pub const WAVE_BYTES: usize = 0x10000;
+
+/// 4164 のリフレッシュの単位の数（RA0–RA6）。
+pub const WAVE_REFRESH_GROUPS: usize = 128;
+
+/// DOC の CLK の最長の周期（外部クロックのジャンパ。1000 秒＝0.001 Hz）。これより遅い値は切り詰める。
+/// 時刻の桁あふれを防ぐためで、回路の値ではない。
+pub const DOC_CLK_MAX: Time = 1000 * UNITS_PER_SECOND;
+
+/// 子基板のバスのテストピン（仕様書 §11 のベンド点「DOC波形RAMの線」、DR-034 (1)）。
+///
+/// A のバス（A0–A7）と AD のバス（A8/D0–A15/D7）の線 k ごとに、そのまま、GND・+5 V への固定、同じバスの
+/// ほかの線との入替え、浮かせを選ぶ。どれも、その線を通る転送の受け手の側で数える：受け手の線 k に
+/// `Wire::Line(n)` なら送り手の線 n の値が来る（DR-063 と同じ）[P]。浮かせた線は、通るたびに 16 bit の
+/// LFSR で値を決める [P]。実機の値は不定 [V]。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocLines {
+    /// A のバスの線 k（DOC のピン A k）に来るもの。
+    pub a: [Wire; 8],
+    /// AD のバスの線 k（DOC のピン A(8＋k)/D k）に来るもの。
+    pub ad: [Wire; 8],
+    /// 浮かせた線の値（16 bit の LFSR）。
+    noise: u16,
+}
+
+impl Default for DocLines {
+    fn default() -> Self {
+        let line = |k: u8| Wire::Line(k);
+        Self {
+            a: std::array::from_fn(|k| line(k as u8)),
+            ad: std::array::from_fn(|k| line(k as u8)),
+            noise: 0xACE1,
+        }
+    }
+}
+
+impl DocLines {
+    /// 手を加えていないか。
+    pub fn is_normal(&self) -> bool {
+        let same = |v: &[Wire; 8]| v.iter().enumerate().all(|(k, w)| *w == Wire::Line(k as u8));
+        same(&self.a) && same(&self.ad)
+    }
+
+    fn noise_bit(&mut self) -> u8 {
+        let b = (self.noise & 1) as u8;
+        self.noise >>= 1;
+        if b != 0 {
+            self.noise ^= 0xB400;
+        }
+        b
+    }
+
+    fn route(&mut self, ad: bool, v: u8) -> u8 {
+        let mut out = 0;
+        for k in 0..8 {
+            let w = if ad { self.ad[k] } else { self.a[k] };
+            let b = match w {
+                Wire::Line(n) => (v >> n) & 1,
+                Wire::Low => 0,
+                Wire::High => 1,
+                Wire::Float => self.noise_bit(),
+            };
+            out |= b << k;
+        }
+        out
+    }
+
+    /// A のバスを通った値（受け手が見る値）。
+    pub fn a(&mut self, v: u8) -> u8 {
+        self.route(false, v)
+    }
+
+    /// AD のバスを通った値（受け手が見る値）。
+    pub fn ad(&mut self, v: u8) -> u8 {
+        self.route(true, v)
+    }
+
+    /// `A3=0,A4=A5,A5=A4,D7=1,A9=Z` の形を読む。左がピン、右が `0`（GND）・`1`（+5 V）・`Z`（浮かせ）か、
+    /// 同じバスの線の名前。A0〜A7 が A のバス、A8〜A15 と D0〜D7 が AD のバス（A8 と D0 は同じピン）。
+    /// `normal` は手を加えていない形に戻す。
+    pub fn parse(&mut self, spec: &str) -> Result<(), String> {
+        for item in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if item.eq_ignore_ascii_case("normal") {
+                *self = Self {
+                    noise: self.noise,
+                    ..Self::default()
+                };
+                continue;
+            }
+            let (pin, src) = item
+                .split_once('=')
+                .ok_or_else(|| format!("「ピン=つなぎ先」の形でない: {item}"))?;
+            let (ad, k) = Self::pin(pin)?;
+            let w = match src.trim().to_ascii_uppercase().as_str() {
+                "0" => Wire::Low,
+                "1" => Wire::High,
+                "Z" => Wire::Float,
+                s => {
+                    let (ad2, m) = Self::pin(s)?;
+                    if ad2 != ad {
+                        return Err(format!("ほかのバスの線にはつなげない: {item}"));
+                    }
+                    Wire::Line(m)
+                }
+            };
+            if ad {
+                self.ad[usize::from(k)] = w;
+            } else {
+                self.a[usize::from(k)] = w;
+            }
+        }
+        Ok(())
+    }
+
+    /// ピンの名前から（AD のバスか、線の番号）。
+    fn pin(s: &str) -> Result<(bool, u8), String> {
+        let s = s.trim().to_ascii_uppercase();
+        let mut c = s.chars();
+        let kind = c.next();
+        let num = c.as_str().parse::<u8>().ok();
+        match (kind, num) {
+            (Some('A'), Some(n)) if n < 8 => Ok((false, n)),
+            (Some('A'), Some(n)) if n < 16 => Ok((true, n - 8)),
+            (Some('D'), Some(n)) if n < 8 => Ok((true, n)),
+            _ => Err(format!("DOC のピンの名前でない（A0〜A15・D0〜D7）: {s}")),
+        }
+    }
+}
+
+/// P2A の番地の行（U49）と、A のバスを通った列から、波形 RAM の添字。
+fn wave_index(addr: u16, col: u8) -> usize {
+    usize::from(addr & 0xFF00) | usize::from(col)
+}
+
+/// 波形 RAM の行 `row` を活性化する（4164 の RAS̄）。崩れるセルがあれば、同じまとまり（RA0–RA6 が同じ
+/// 2 行）の 512 byte を放電した値にする（DR-072）。
+fn activate_row(wave: &mut [u8], dram: &mut Dram, row: u8, now: Time) {
+    let g = usize::from(row & 0x7F);
+    if let Some(p) = dram.activate(g, now) {
+        let env = dram.env();
+        for r in [g, g | 0x80] {
+            // RA0 で真のセルと補のセル [P][V]
+            let discharged = if r & 1 == 0 { 0x00 } else { 0xFF };
+            let base = r << 8;
+            for (i, w) in wave[base..base + 0x100].iter_mut().enumerate() {
+                *w = env.decay_byte(*w, 0, (base + i) as u32, p, discharged);
+            }
+        }
+    }
+}
 
 /// 時刻つきの線のレベル。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,10 +400,20 @@ pub struct DocBoard {
     /// S/H の偶数（L）・奇数（R）の和の、時間の積分（LINE OUT の入力）。
     #[serde(default)]
     sh_sum: [Hold; 2],
+    /// 子基板のバスのテストピン（Bend モードで手を加えているときだけ。`set_bends`）。
+    #[serde(default)]
+    lines: Option<DocLines>,
+    /// 波形 RAM の保持の追跡（Bend モードのときだけ。DR-072）。
+    #[serde(default = "wave_dram")]
+    dram: Dram,
 }
 
 fn default_sh_alpha() -> u32 {
     sh_alpha_q16(PERIOD_8M)
+}
+
+fn wave_dram() -> Dram {
+    Dram::new(WAVE_REFRESH_GROUPS)
 }
 
 impl Default for DocBoard {
@@ -247,11 +422,43 @@ impl Default for DocBoard {
     }
 }
 
-struct WaveRam<'a>(&'a [u8]);
+/// DOC が E Low に見る波形 RAM：A のバスの列の番地、AD のバスの行の番地とデータ、4164 の行の活性化。
+struct WaveRam<'a> {
+    wave: &'a mut [u8],
+    lines: Option<&'a mut DocLines>,
+    dram: &'a mut Dram,
+    now: Time,
+}
 
 impl WaveBus for WaveRam<'_> {
+    #[inline]
     fn read_wave(&mut self, addr: u32) -> u8 {
-        self.0[(addr as usize) % WAVE_BYTES]
+        // BS（bit 16）はつながない
+        let addr = addr as u16;
+        if self.lines.is_none() && !self.dram.tracking() {
+            return self.wave[usize::from(addr)];
+        }
+        let (row, col) = match self.lines.as_mut() {
+            Some(l) => (l.ad((addr >> 8) as u8), l.a(addr as u8)),
+            None => ((addr >> 8) as u8, addr as u8),
+        };
+        activate_row(self.wave, self.dram, row, self.now);
+        let v = self.wave[(usize::from(row) << 8) | usize::from(col)];
+        match self.lines.as_mut() {
+            Some(l) => l.ad(v),
+            None => v,
+        }
+    }
+
+    fn refresh(&mut self, row: u8) {
+        if !self.dram.tracking() {
+            return;
+        }
+        let row = match self.lines.as_mut() {
+            Some(l) => l.ad(row),
+            None => row,
+        };
+        activate_row(self.wave, self.dram, row, self.now);
     }
 }
 
@@ -286,7 +493,35 @@ impl DocBoard {
             sh_alpha: default_sh_alpha(),
             sh: [0; 16],
             sh_sum: [Hold::default(); 2],
+            lines: None,
+            dram: wave_dram(),
         }
+    }
+
+    /// Bend モードの設定を入れる（`System::apply_bends`）。`bend` が `None` なら工場出荷：テストピンに
+    /// 何もつながず、波形 RAM の追跡をやめ、DOC のレジスタの保持は個体 0・25 °C。`Some` なら、テストピン
+    /// （`DocLines`）と、DRAM の個体と温度（`dram`。DOC のレジスタの保持にも同じ値を使う [P]）を入れ、
+    /// 波形 RAM の追跡を始める（`now` にどの行もリフレッシュしたとみなす）。
+    pub fn set_bends(&mut self, bend: Option<(&DocLines, DramEnv)>, now: Time) {
+        let env = bend.map_or(DramEnv::default(), |b| b.1);
+        self.lines = bend.and_then(|(l, _)| (!l.is_normal()).then(|| l.clone()));
+        self.dram.set_env(env);
+        if bend.is_some() {
+            self.dram.start(now);
+        } else {
+            self.dram.stop();
+        }
+        self.doc.set_retention(env.unit, env.temp_c);
+    }
+
+    /// 子基板のバスのテストピン（手を加えていなければ `None`）。
+    pub fn lines(&self) -> Option<&DocLines> {
+        self.lines.as_ref()
+    }
+
+    /// 波形 RAM の保持を追跡しているか（Bend モード）。
+    pub fn tracking(&self) -> bool {
+        self.dram.tracking()
     }
 
     /// 68000 のバスサイクルを始める（`host_register` で番号を出した後）。`s0` は S0 の立上りで、次に
@@ -347,9 +582,11 @@ impl DocBoard {
     }
 
     /// DOC の CLK の周期（既定は 8 MHz。外部クロックのジャンパ。DR-035）。E の周期はその 8 倍。
-    /// 次の E の立下りは変えない。
+    /// 次の E の立下りは変えない。`DOC_CLK_MAX` より長い周期は切り詰める。
     pub fn set_clock_period(&mut self, clk: Time) {
+        let clk = clk.clamp(1, DOC_CLK_MAX);
         self.fall.set_period(8 * clk);
+        self.doc.set_cycle_time(8 * clk);
         self.sh_alpha = sh_alpha_q16(clk);
     }
 
@@ -437,8 +674,14 @@ impl DocBoard {
             }
             if self.stage == Stage::Claimed {
                 self.owned = true;
-                if let Some(r) = self.req.as_mut().filter(|r| r.write) {
-                    self.wave[usize::from(r.addr)] = r.data;
+                if let Some(r) = self.req.filter(|r| r.write) {
+                    // 列の番地（U48）は A のバス、データ（U50）は AD のバスを通る。行（U49）は通らない
+                    let (i, v) = match self.lines.as_mut() {
+                        Some(l) => (wave_index(r.addr, l.a(r.addr as u8)), l.ad(r.data)),
+                        None => (usize::from(r.addr), r.data),
+                    };
+                    activate_row(&mut self.wave, &mut self.dram, (r.addr >> 8) as u8, t);
+                    self.wave[i] = v;
                 }
             }
             return;
@@ -448,8 +691,22 @@ impl DocBoard {
         if self.owned {
             self.owned = false;
             if let Some(r) = self.req {
-                let v = self.wave[usize::from(r.addr)];
-                self.op_done = Some(if r.write { 0 } else { v });
+                let v = if r.write {
+                    0
+                } else {
+                    // 列の番地は A のバス、読んだ値（U58 へ）は AD のバスを通る
+                    let col = match self.lines.as_mut() {
+                        Some(l) => l.a(r.addr as u8),
+                        None => r.addr as u8,
+                    };
+                    activate_row(&mut self.wave, &mut self.dram, (r.addr >> 8) as u8, t);
+                    let v = self.wave[wave_index(r.addr, col)];
+                    match self.lines.as_mut() {
+                        Some(l) => l.ad(v),
+                        None => v,
+                    }
+                };
+                self.op_done = Some(v);
                 self.last_window = Some(Window {
                     latched: r.at,
                     rise: t - self.fall.period() / 2,
@@ -465,12 +722,27 @@ impl DocBoard {
         if self.bridge.owned {
             self.bridge.owned = false;
             if let Some(r) = self.bridge.req {
+                // レジスタの番号（74LS244 から）は A のバス、データ（74LS245 と）は AD のバスを通る
+                let reg = match self.lines.as_mut() {
+                    Some(l) => l.a(r.reg),
+                    None => r.reg,
+                };
                 let read = match r.write {
                     Some(v) => {
-                        self.doc.write(r.reg, v);
+                        let v = match self.lines.as_mut() {
+                            Some(l) => l.ad(v),
+                            None => v,
+                        };
+                        self.doc.write(reg, v);
                         None
                     }
-                    None => Some(self.doc.read(r.reg)),
+                    None => {
+                        let v = self.doc.read(reg);
+                        Some(match self.lines.as_mut() {
+                            Some(l) => l.ad(v),
+                            None => v,
+                        })
+                    }
                 };
                 self.bridge.op = Some((read, t));
                 self.host_windows += 1;
@@ -480,7 +752,12 @@ impl DocBoard {
         self.rise_pending = true;
         // DOC のサイクル：E Low で波形 RAM を読む
         self.cycles += 1;
-        let tick = self.doc.tick(&mut WaveRam(&self.wave));
+        let tick = self.doc.tick(&mut WaveRam {
+            wave: &mut self.wave,
+            lines: self.lines.as_mut(),
+            dram: &mut self.dram,
+            now: t,
+        });
         if let Slot::Osc { n, addr, wave } = tick.slot {
             self.last_osc = Some(OscRead { n, addr, wave });
         }

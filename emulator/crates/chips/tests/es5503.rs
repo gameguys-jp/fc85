@@ -417,21 +417,174 @@ fn adc_converts_after_the_conversion_time() {
     assert_eq!(doc.read(0xE2), 0x22);
 }
 
+/// オシレータ `from..32` の FL・FH・VOL・PTR・SIZE を 0 にし（制御は HALT）、`ticks` サイクル進めてから
+/// 読んで、1 になったビットの割合を返す（SIZE は 7 bit。台帳 §4.1）。
+fn decayed_share(doc: &mut Es5503, ram: &mut Ram, from: u8, ticks: u32) -> f64 {
+    for n in from..32 {
+        set_osc(doc, n, 0, 0, 0, 0);
+    }
+    for _ in 0..ticks {
+        doc.tick(ram);
+    }
+    let mut ones = 0;
+    let mut bits = 0;
+    for n in from..32 {
+        for base in [0x00u8, 0x20, 0x40, 0x80] {
+            ones += doc.read(base + n).count_ones();
+            bits += 8;
+        }
+        ones += (doc.read(0xC0 + n) & 0x7F).count_ones();
+        bits += 7;
+    }
+    f64::from(ones) / f64::from(bits)
+}
+
+/// 対数ロジスティックの分布の割合（手計算の式。es5503.rs の REG_* の値）。
+fn share(t_s: f64) -> f64 {
+    if t_s < 0.002 {
+        0.0
+    } else {
+        1.0 / (1.0 + (t_s / 0.02).powf(-3.6))
+    }
+}
+
 #[test]
-fn registers_of_unscanned_oscillators_decay() {
+fn registers_of_disabled_oscillators_decay() {
+    // 有効でないオシレータはリフレッシュされず、値を保たない（E2 p.15。台帳 §4.7）。保持時間は
+    // 25 °C で最短 2 ms、中央 20 ms [P]。8 MHz 入力で 1 サイクル 1 µs
+    for (ticks, lo, hi) in [
+        (1_900, 0.0, 0.0),
+        // 20 ms（中央）で約半分。31 個×39 ビット＝1,209 ビットの標本で ±5%（3.5σ）
+        (20_000, 0.45, 0.55),
+        // 200 ms で 1−1/(1＋10^3.6)＝0.99975
+        (200_000, 0.995, 1.0),
+    ] {
+        let (mut doc, mut ram) = boot(1);
+        let s = decayed_share(&mut doc, &mut ram, 1, ticks);
+        let want = share(f64::from(ticks) * 1e-6);
+        assert!(s >= lo && s <= hi, "{ticks} サイクル：{s}（式は {want}）");
+    }
+    // 走査されるオシレータ 0 は保つ
     let (mut doc, mut ram) = boot(1);
-    doc.set_decay(Some(100));
-    doc.write(0x45, 0x12);
     doc.write(0x40, 0x34);
-    for _ in 0..101 {
+    for _ in 0..1_000_000 {
         doc.tick(&mut ram);
     }
-    assert_eq!(
-        doc.read(0x45),
-        0xFF,
-        "有効でないオシレータは保たない（E2 p.15）"
-    );
-    assert_eq!(doc.read(0x40), 0x34, "走査されるオシレータは保つ");
+    assert_eq!(doc.read(0x40), 0x34);
+    // 比較用に止められる
+    let (mut doc, mut ram) = boot(1);
+    doc.set_decay(false);
+    assert_eq!(decayed_share(&mut doc, &mut ram, 1, 200_000), 0.0);
+}
+
+#[test]
+fn only_the_written_register_is_renewed() {
+    // ホストの書込みは、書いたレジスタだけを新しくする [P]。FL を 1.5 ms ごとに書き直しても、
+    // 書かない FH は前に書いた時刻から数えて崩れる
+    let (mut doc, mut ram) = boot(1);
+    for n in 1..32 {
+        set_osc(&mut doc, n, 0, 0, 0, 0);
+    }
+    for _ in 0..40 {
+        for _ in 0..1_500 {
+            doc.tick(&mut ram);
+        }
+        for n in 1..32 {
+            doc.write(n, 0);
+        }
+    }
+    // 60 ms：書き直した FL は 1.5 ms 以内なので 0 のまま。FH は 60 ms で 1−1/(1＋3^3.6)＝0.98
+    let fl: u32 = (1..32).map(|n| doc.read(n).count_ones()).sum();
+    let fh: u32 = (1..32).map(|n| doc.read(0x20 + n).count_ones()).sum();
+    assert_eq!(fl, 0);
+    assert!(f64::from(fh) / 248.0 > 0.95, "{fh}");
+}
+
+#[test]
+fn heat_shortens_the_retention() {
+    // 保持時間は 10 °C ごとに半分（DR-072 と同じ）[P]。70 °C では 2^4.5＝22.6 倍速く崩れ、
+    // 最短は 88 µs。1 ms の経過は 25 °C の 22.6 ms に当たり、割合は 1/(1＋1.13^−3.6)＝0.61
+    let (mut doc, mut ram) = boot(1);
+    assert_eq!(decayed_share(&mut doc, &mut ram, 1, 1_000), 0.0);
+    let (mut doc, mut ram) = boot(1);
+    doc.set_retention(0, 70);
+    let s = decayed_share(&mut doc, &mut ram, 1, 1_000);
+    assert!((s - 0.61).abs() < 0.05, "{s}");
+    // 個体が違えば、崩れるビットの並びが違う
+    let (mut a, mut ram_a) = boot(1);
+    let (mut b, mut ram_b) = boot(1);
+    a.set_retention(0, 25);
+    b.set_retention(7, 25);
+    for d in [&mut a, &mut b] {
+        set_osc(d, 9, 0, 0, 0, 0);
+    }
+    for _ in 0..20_000 {
+        a.tick(&mut ram_a);
+        b.tick(&mut ram_b);
+    }
+    let va: Vec<u8> = [0x09u8, 0x29, 0x49, 0x89]
+        .iter()
+        .map(|&r| a.read(r))
+        .collect();
+    let vb: Vec<u8> = [0x09u8, 0x29, 0x49, 0x89]
+        .iter()
+        .map(|&r| b.read(r))
+        .collect();
+    assert_ne!(va, vb);
+}
+
+#[test]
+fn a_slow_clock_lets_scanned_registers_decay() {
+    // DR-035 のジャンパで CLK を下げると、訪れる間が延びる（台帳 §3.2）。32 個の走査は 34 サイクル。
+    // CLK 8 MHz（1 µs）なら 34 µs で崩れない。CLK 50 kHz（E 160 µs）なら 5.44 ms で、割合は
+    // 1/(1＋0.272^−3.6)＝0.0091。訪れるたびに同じビットが崩れる（保持時間の短い順）
+    let (mut doc, mut ram) = boot(32);
+    assert_eq!(decayed_share(&mut doc, &mut ram, 0, 34 * 200), 0.0);
+    let (mut doc, mut ram) = boot(32);
+    doc.set_cycle_time(160 * 15_120);
+    let s = decayed_share(&mut doc, &mut ram, 0, 34 * 20);
+    assert!(s > 0.002 && s < 0.02, "{s}");
+    // CLK 1 Hz（E 8 秒）：訪れるたびに全部が 1 になる。制御は 0xFF で、CA は 15、M0＝1・H＝1 なので
+    // アキュムレータは 0 に戻る（台帳 §4.2）。T＝7（32 KiB）、ポインタ 0xFF、BS＝1 なので番地は 0x18000（§4.3）
+    let (mut doc, mut ram) = boot(32);
+    doc.set_cycle_time(8 * 15_120_000_000);
+    for _ in 0..34 {
+        doc.tick(&mut ram);
+    }
+    assert_eq!(doc.read(0xA0), 0xFF);
+    assert_eq!(doc.read(0x40), 0xFF);
+    let t = visit(&mut doc, &mut ram, 3);
+    assert_eq!(t.channel, 0x0F);
+    assert_eq!(addr_of(&t), 0x1_8000);
+}
+
+/// リフレッシュの行を記録する波形 RAM。
+struct Rows(Ram, Vec<u8>);
+
+impl WaveBus for Rows {
+    fn read_wave(&mut self, addr: u32) -> u8 {
+        self.0.read_wave(addr)
+    }
+    fn refresh(&mut self, row: u8) {
+        self.1.push(row);
+    }
+}
+
+#[test]
+fn refresh_cycles_count_the_rows() {
+    // 走査の最後の 2 サイクルで、行の番地を 1 つずつ出す（E2 p.1、台帳 §3.2）。カウンタは 8 bit [P][V]
+    let (mut doc, _) = boot(4);
+    let start = doc.refresh_row();
+    let mut bus = Rows(Ram::new(), Vec::new());
+    for _ in 0..6 * 200 {
+        doc.tick(&mut bus);
+    }
+    assert_eq!(bus.1.len(), 400);
+    for (k, &r) in bus.1.iter().enumerate() {
+        assert_eq!(r, start.wrapping_add(k as u8));
+    }
+    // 400 回で 8 bit のカウンタは 144 進む
+    assert_eq!(doc.refresh_row(), start.wrapping_add(144));
 }
 
 #[test]
