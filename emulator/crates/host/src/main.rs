@@ -5,8 +5,9 @@
 //! 切り替える（DR-065）。ホストの安全層（音量の制限、表示の保持）は仮想機の挙動を変えない。
 //!
 //! クロックのつまみ（外部の発振器・VCO を回す操作）：F3 で回すクロック（DOC、映像、DSP、ADPCM、音声）を
-//! 選び、PageUp・PageDown で半音ずつ、Shift を押しながらなら 1/8 半音ずつ上げ下げする。押し続けると
-//! 回り続ける。Home で基板の発振器に戻す。回すと Bend モードに入る。
+//! 選び、PageUp・PageDown（PageUp・PageDown のないキーボードでは `]`・`[`）で半音ずつ、Shift を押しながら
+//! なら 1/8 半音ずつ上げ下げする。押し続けると回り続ける。Home（か `\`）で基板の発振器に戻す。回すと
+//! Bend モードに入る。窓を開けたときと F3 を押したときに、キーの案内を標準エラーに出す。
 //!
 //! 使い方：`fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] [--scale N]
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
@@ -238,6 +239,13 @@ fn fmt_hz(f: f64) -> String {
         format!("{f:.2} Hz")
     }
 }
+
+/// 窓を開けたときに出すキーの案内。
+const KEY_HELP: &str = "キー：矢印、Z（A）、X（B）、C（C）、Enter（START）が釦、F2 で Bend モード、F3 でつまみ（クロック）を選ぶ、\
+PageUp・PageDown（か ]・[）で回す（Shift で細かく）、Home（か \\）で戻す、F5 で保存、F9 で戻す、Esc で終わる";
+/// F3 で出す回し方の案内。
+const KNOB_HELP: &str =
+    "PageUp・PageDown（か ]・[）で半音ずつ、Shift で 1/8 半音、Home（か \\）で戻す";
 
 /// つまみ `i` を `semitones` 回す（`None` は基板の発振器に戻す）。止まっていれば基板の周波数から回す。
 fn turn_knob(c: &mut Console, i: usize, semitones: Option<f64>) {
@@ -765,6 +773,7 @@ fn main() {
     let mut midi = midi::Midi::open(a.midi_in, a.midi_out);
     let mut frames = 0u64;
     let mut knob = 0usize;
+    eprintln!("{KEY_HELP}");
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
         if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
             save_state(&c);
@@ -778,20 +787,30 @@ fn main() {
         if w.is_key_pressed(minifb::Key::F3, minifb::KeyRepeat::No) {
             knob = (knob + 1) % KNOBS.len();
             eprintln!(
-                "つまみ：{}（今 {}）",
+                "つまみ：{}（今 {}）。{KNOB_HELP}",
                 KNOBS[knob].1,
                 fmt_hz(knob_hz(&c, knob))
             );
         }
         let fine = w.is_key_down(minifb::Key::LeftShift) || w.is_key_down(minifb::Key::RightShift);
         let step = if fine { 0.125 } else { 1.0 };
-        if w.is_key_pressed(minifb::Key::PageUp, minifb::KeyRepeat::Yes) {
+        let pressed = |k: &[minifb::Key], r| k.iter().any(|&k| w.is_key_pressed(k, r));
+        if pressed(
+            &[minifb::Key::PageUp, minifb::Key::RightBracket],
+            minifb::KeyRepeat::Yes,
+        ) {
             turn_knob(&mut c, knob, Some(step));
         }
-        if w.is_key_pressed(minifb::Key::PageDown, minifb::KeyRepeat::Yes) {
+        if pressed(
+            &[minifb::Key::PageDown, minifb::Key::LeftBracket],
+            minifb::KeyRepeat::Yes,
+        ) {
             turn_knob(&mut c, knob, Some(-step));
         }
-        if w.is_key_pressed(minifb::Key::Home, minifb::KeyRepeat::No) {
+        if pressed(
+            &[minifb::Key::Home, minifb::Key::Backslash],
+            minifb::KeyRepeat::No,
+        ) {
             turn_knob(&mut c, knob, None);
         }
         run_bend_script(&mut c, &a, frames);
