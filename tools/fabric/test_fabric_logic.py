@@ -1,6 +1,7 @@
 """Data Fabric の PAL の式の試験。`py -m unittest discover -s tools/fabric`。
 
-- 式（pal/*.pal）がピンと項に収まり、仕様の定義と同じ値を出す。
+- 式（pal/*.pal）がピンと項に収まり、仕様の定義と同じ値を出す。順序と状態の式（seq.pal）は、
+  チャネルの段階とトリガの状態と AOP をここで確かめ、全体はエミュレータの試験 fabric_lockstep で確かめる。
 - 生成した Rust（emulator/crates/board/src/fabric_pal.rs）が、今の式から作り直したものと同じ。
 - docs/spec/fabric.md の式のコードブロックが pal/*.pal と同じ。
 """

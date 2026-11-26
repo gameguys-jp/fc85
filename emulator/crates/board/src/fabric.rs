@@ -749,6 +749,8 @@ impl Fabric {
                 lines,
                 lines,
                 lines & 1 << 11 != 0,
+                self.rdy_s,
+                self.rdy_d,
             );
             self.rdy_s = r.srdy;
             self.rdy_d = r.drdy;
@@ -924,7 +926,9 @@ impl Fabric {
                         .is_some_and(|a| a.acc.dir == Dir::Read && a.acc.ch == e.ch);
                 if r_ends && can_decide {
                     let regs = &self.ch[e.ch as usize].regs;
-                    let (sa, da) = (has_addr(regs.src), has_addr(regs.dst));
+                    // 読出し元が番地を持つ要素は、始めたときに COUNT を更新していない。始めたときの
+                    // 読出し元で決める（ELS の EPC。動作中に SRC を書き換えても、1 要素に 1 回。DR-085）。
+                    let (sa, da) = (!e.count_done, has_addr(regs.dst));
                     // 書込み先が番地を持てば歩進、逐次で読出し元が番地を持てば COUNT の更新（fabric.md §05）。
                     let need = if da {
                         Some(Aop::DstStep(e.ch))

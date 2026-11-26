@@ -197,7 +197,10 @@ fn rdy_pal_selects_the_ready_line_of_each_port() {
             .fold(0, |a, (i, &b)| a | (v >> i & 1) << b);
         let line = |b: u32| lines & 1 << b != 0;
         for p in 0..16u32 {
-            let o = rdy(p, p, lines, lines, lines, line(11));
+            // READY は取り込んである 2 つの準備（レジスタの今の値）の AND。
+            let (rs, rd) = (v & 1 != 0, p & 1 != 0);
+            let o = rdy(p, p, lines, lines, lines, line(11), rs, rd);
+            assert_eq!(o.ready, rs && rd);
             let src = match p {
                 1 | 2 | 4 | 10 => line(p),
                 11..=15 => line(11),

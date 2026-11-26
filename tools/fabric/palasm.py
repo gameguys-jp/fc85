@@ -484,6 +484,15 @@ def rust_fn(pal):
         extra = ' & '.join(v if pos else '!' + v for v, pos in rest)
         return ' & '.join(x for x in (code, extra) if x) or 'true'
 
+    def paren(s):
+        """括弧で包む。外側がもう 1 組の括弧なら、そのまま（clippy の double_parens）。"""
+        depth = 0
+        for i, ch in enumerate(s):
+            depth += (ch == '(') - (ch == ')')
+            if depth == 0 and (i < len(s) - 1 or ch != ')'):
+                return f'({s})'
+        return s
+
     in_vec = {n for i, _, mem in out_groups if i in vec for n, _ in mem}
     consts = []
 
@@ -492,7 +501,9 @@ def rust_fn(pal):
         support = [n for n in pal.pins if any(n == m for t in e.terms for m, _ in t)]
         n_lits = sum(len(t) for t in e.terms)
         if not (len(support) <= TABLE_MAX and len(e.terms) >= 3 and n_lits >= 2 * len(support)):
-            sop = ' | '.join(f'({term_code(t)})' for t in e.terms) or 'false'
+            if len(e.terms) == 1:
+                return f'!{paren(term_code(e.terms[0]))}'
+            sop = ' | '.join(paren(term_code(t)) for t in e.terms) or 'false'
             return f'!({sop})'
         bits = 0
         for i in range(1 << len(support)):
@@ -565,7 +576,7 @@ def rust_fn(pal):
             expr = ' | '.join(f'({val(n)} as u32) << {bit}' for n, bit in mem)
         else:
             expr = val(mem[0][0])
-        lines.append(f'        {i}: {expr},')
+        lines.append(f'        {i},' if expr == i else f'        {i}: {expr},')
     lines.append('    }')
     lines.append('}')
     return '\n\n'.join(consts + ['\n'.join(lines)])

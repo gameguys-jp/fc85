@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PAL_DIR = HERE / 'pal'
 # fabric.md の式のコードブロックの順。
-PAL_FILES = ['transform.pal', 'rdy.pal']
+PAL_FILES = ['transform.pal', 'afc.pal', 'rdy.pal', 'seq.pal']
 RUST_OUT = ROOT / 'emulator' / 'crates' / 'board' / 'src' / 'fabric_pal.rs'
 FABRIC_MD = ROOT / 'docs' / 'spec' / 'fabric.md'
 REGEN = 'py tools/fabric/fabric_logic.py --rust'
@@ -243,11 +243,193 @@ def check_rdy(pals):
             env = dict(lines)
             env.update({f'S{b}': bool(port >> b & 1) for b in range(4)})
             env.update({f'D{b}': bool(port >> b & 1) for b in range(4)})
-            _, _, nxt = p.eval(env)
+            # READY は取り込んだ 2 つの準備の AND（レジスタの今の値）。
+            env.update(SRDY=bool(v & 1), DRDY=bool(port & 1))
+            comb, _, nxt = p.eval(env)
+            assert comb['READY'] == (env['SRDY'] and env['DRDY'])
             if PORTS.get(port, PORT2_DOC)[0] or port == 2:
                 assert nxt['SRDY'] == ready_ref(port, False, lines), ('S', port, lines)
             if PORTS.get(port, PORT2_DOC)[1] or port == 2:
                 assert nxt['DRDY'] == ready_ref(port, True, lines), ('D', port, lines)
+
+
+# ---------------------------------------------------------------- A ファイルの操作（AFC0・AFC1）
+
+# AOP の番号（SEQ の AOP2–AOP0）。
+AOPS = {'NONE': 0, 'HOST': 1, 'SST': 2, 'DST': 3, 'CNT': 4, 'R0': 5, 'R1': 6, 'R2': 7}
+# CPU の窓の語（HA3、HA2）→ A ファイルの語の番号（設定値。作業値は +1）。fabric.md §05。
+HOST_WORDS = {(0, 1): 0, (1, 0): 2, (1, 1): 4}
+
+
+def afc_expect(aop, ch, hch, word, hrw):
+    """fabric.md §05 の表：（読む語、書く語か None、B の番地か None、Cin、取込み）。語は ch×8 + 番号。"""
+    if aop == AOPS['HOST']:
+        if hrw:
+            return hch * 8 + word + 1, None, None, None, 'HRC'
+        return None, hch * 8 + word, None, None, None
+    table = {'SST': (1, 1, 0, 0, 'PSC'), 'DST': (3, 3, 1, 0, 'PDC'), 'CNT': (5, 5, None, 0, None),
+             'R0': (0, 1, None, 1, None), 'R1': (2, 3, None, 1, None), 'R2': (4, 5, None, 0, None)}
+    name = [k for k, v in AOPS.items() if v == aop][0]
+    if name == 'NONE':
+        return None, None, None, None, None
+    r, w, b, cin, cap = table[name]
+    return ch * 8 + r, ch * 8 + w, (None if b is None else ch * 2 + b), cin, cap
+
+
+def check_afc(pals):
+    """AFC0・AFC1 の式が、AOP ごとに §05 の表の語を読み書きし、B と Cin と取込みを選ぶか。
+    A ファイルの番地は負の論理のまま 74S189 へ行くので、語の番号は番地のピンの反転。"""
+    a0, a1 = pals['AFC0'], pals['AFC1']
+    for aop in range(8):
+        for ch in (0, 1):
+            for hch in (0, 1):
+                for (ha3, ha2), word in HOST_WORDS.items():
+                    for hrw in (0, 1):
+                        env = {'AOP2N': not aop >> 2 & 1, 'AOP1N': not aop >> 1 & 1, 'AOP0N': not aop & 1,
+                               'ACHN': not ch, 'HCH': bool(hch), 'HA3': bool(ha3), 'HA2': bool(ha2),
+                               'HRW': bool(hrw)}
+                        pins = []
+                        for wph in (False, True):
+                            c0, _, _ = a0.eval(dict(env, WPH=wph))
+                            c1, _, _ = a1.eval(dict(env, WPH=wph))
+                            pins.append((c0, c1))
+                        (r0, r1), (w0, w1) = pins
+                        word_of = (lambda c: (~(c['AA3N'] << 3 | c['AA2N'] << 2 | c['AA1N'] << 1 | c['AA0N'])) & 15)
+                        rd, wr, b, cin, cap = afc_expect(aop, ch, hch, word, hrw)
+                        what = (aop, ch, hch, word, hrw)
+                        if rd is not None:
+                            assert word_of(r0) == rd, ('読む語', what)
+                        assert r0['AWEN'], ('読みの相で書いた', what)
+                        assert (not w0['AWEN']) == (wr is not None), ('書込み', what)
+                        if wr is not None:
+                            assert word_of(w0) == wr, ('書く語', what)
+                            assert (not w1['SLOEN']) == (aop != AOPS['HOST']), ('和のラッチ', what)
+                            assert (not w1['HWOEN']) == (aop == AOPS['HOST']), ('CPU の書込み', what)
+                        assert (not r1['BENN']) == (b is not None), ('B', what)
+                        if b is not None:
+                            assert (r1['BA1'] << 1 | r1['BA0']) == b, ('B の番地', what)
+                        if cin is not None:
+                            assert r0['CIN'] == bool(cin), ('Cin', what)
+                        for k in ('PSC', 'PDC', 'HRC'):
+                            assert (not r1[k + 'N']) == (cap == k), (k, what)
+
+
+# ---------------------------------------------------------------- 順序と状態（seq.pal）
+#
+# 式の全体は、エミュレータの動作の模型（fabric.rs）と門の模型（board の試験の fabric_gate）を並べて動かす試験
+# （emulator/crates/board/tests/fabric_lockstep.rs）で突き合わせる。ここでは、チャネルの段階とトリガの
+# 状態の機械と、AOP の番号を、届きうる入力の全部で確かめる。
+
+# 段階（P2、P1、P0）。
+PHASES = {'I': (0, 0, 0), 'R0': (1, 0, 0), 'R1': (1, 0, 1), 'R2': (1, 1, 0), 'RUN': (1, 1, 1), 'NM': (0, 1, 1)}
+
+
+def spec_chs(ph, ok, done, err, rl, cnt, cy, oks, blk, kil, er, st, lp, wd, we):
+    """チャネルの段階の次（fabric.rs の ctrl・exec_aop の再設定と COUNT・block_end・kill）。
+    返す値は（段階、OK（再設定の途中だけ意味がある）、DONE、ERROR）。"""
+    set_done = set_err = False
+    nok = None
+    if kil:
+        nxt = 'I'
+    elif rl and (ph == 'R0' or st):
+        nxt, nok = 'R1', oks
+    elif rl and ph == 'R1':
+        nxt, nok = 'R2', ok and oks
+    elif rl and ph == 'R2':
+        if not ok:
+            nxt, set_err = 'I', True
+        elif not cy:
+            nxt, set_done = ('R0' if lp else 'I'), True
+        else:
+            nxt = 'RUN'
+    elif st:
+        nxt = 'R0'
+    elif blk:
+        nxt, set_done = ('R0' if lp else 'I'), True
+    elif cnt and not cy and ph == 'RUN':
+        nxt = 'NM'
+    else:
+        nxt = ph
+    return nxt, nok, (done and not wd) or set_done, (err and not we) or set_err or er
+
+
+def check_chs(pals):
+    p = pals['CHS']
+    names = ['ok', 'done', 'err', 'rl', 'cnt', 'cy', 'oks', 'blk', 'kil', 'er', 'st', 'lp', 'wd', 'we']
+    n = 0
+    for ph, (p2, p1, p0) in PHASES.items():
+        for v in range(1 << len(names)):
+            x = {k: bool(v >> i & 1) for i, k in enumerate(names)}
+            # 届かない組：START の要求は止まっているときだけ。再設定は再設定の段か START のとき、COUNT と
+            # ブロックの終わりは動作中だけ（再設定とは同じスロットにない）。ERROR の出来事は止める出来事。
+            # 止める出来事は、再設定のスロットとブロックの終わりには重ならない。
+            if (x['st'] and ph != 'I') or (x['rl'] and ph not in ('R0', 'R1', 'R2') and not x['st']):
+                continue
+            if (x['cnt'] or x['blk']) and (ph not in ('RUN', 'NM') or x['rl']):
+                continue
+            if (x['er'] and not x['kil']) or (x['kil'] and (x['rl'] or x['blk'])):
+                continue
+            env = {'P2N': not p2, 'P1N': not p1, 'P0N': not p0, 'OKN': not x['ok'], 'DONEN': not x['done'],
+                   'ERRN': not x['err'], 'RLDN': not x['rl'], 'CNTN': not x['cnt'], 'CY': x['cy'], 'OKS': x['oks'],
+                   'BLKN': not x['blk'], 'KILN': not x['kil'], 'ERN': not x['er'], 'STRQ': x['st'],
+                   'LOOP': x['lp'], 'WDQ': x['wd'], 'WEQ': x['we']}
+            comb, _, nxt = p.eval(env)
+            want, nok, done, err = spec_chs(ph, **x)
+            got = (not nxt['P2N'], not nxt['P1N'], not nxt['P0N'])
+            what = (ph, x)
+            assert got == PHASES[want], ('段階', what, got, want)
+            if nok is not None:
+                assert (not nxt['OKN']) == nok, ('OK', what)
+            assert (not nxt['DONEN'], not nxt['ERRN']) == (done, err), ('DONE・ERROR', what)
+            assert (not comb['NBSYN']) == (want != 'I'), ('NBSY', what)
+            assert (not comb['NRUNN']) == (want in ('RUN', 'NM')), ('NRUN', what)
+            n += 1
+    return n
+
+
+def check_sts(pals):
+    """トリガの同期化と立上り、保留、許可、MISS、STALL（fabric.rs の sync_trigger と decide の STALL）。"""
+    p = pals['STS']
+    names = ['s1', 'syn2', 'rise', 'arm', 'pend', 'miss', 'stall', 'nbusy', 'nrun', 'st', 'ste', 'wm', 'imm', 'sv',
+             'stl', 'p1', 'p0']
+    for v in range(1 << len(names)):
+        x = {k: bool(v >> i & 1) for i, k in enumerate(names)}
+        # 次が動作なら次は止まっていない。START の要求は、止まっているときだけで、次は再設定。
+        if (x['nrun'] and not x['nbusy']) or (x['st'] and (x['nrun'] or not x['nbusy'] or x['p1'] or x['p0'])):
+            continue
+        env = {'S1Q': x['s1'], 'SYN2N': not x['syn2'], 'RISEN': not x['rise'], 'ARMN': not x['arm'],
+               'PENDN': not x['pend'], 'MISSN': not x['miss'], 'STALN': not x['stall'], 'NBSYN': not x['nbusy'],
+               'NRUNN': not x['nrun'], 'STRQ': x['st'], 'STEN': not x['ste'], 'WMQ': x['wm'], 'IMM': x['imm'],
+               'SVN': not x['sv'], 'STLN': not x['stl'], 'P1N': not x['p1'], 'P0N': not x['p0']}
+        comb, _, nxt = p.eval(env)
+        pend = x['pend'] and not x['st']
+        rising = x['rise'] and x['nbusy']
+        miss = (x['miss'] and not x['wm']) or (rising and pend)
+        pend = pend or rising
+        armed = x['arm'] and not x['ste']
+        arm = x['nrun'] and (armed or pend)
+        if arm and not armed:
+            pend = False
+        stall = x['nrun'] and (x['stl'] if x['sv'] else x['stall'])
+        want = {'SYN2N': not x['s1'], 'RISEN': not (x['s1'] and not x['syn2']), 'ARMN': not arm, 'PENDN': not pend,
+                'MISSN': not miss, 'STALN': not stall}
+        for k, w in want.items():
+            assert nxt[k] == w, (k, x)
+        assert (not comb['ARMXN']) == (x['imm'] or x['arm']), ('ARMX', x)
+        assert (not comb['WAITN']) == (x['p1'] and x['p0'] and not x['imm'] and not x['arm']), ('WAIT', x)
+
+
+def check_aop(pals):
+    """SEQ の AOP：ELG の操作の種類（再設定は 101）と、候補の段階（CK1・CK0）から。"""
+    p = pals['SEQ']
+    stages = {(0, 0): AOPS['R0'], (0, 1): AOPS['R1'], (1, 0): AOPS['R2']}
+    for cls in (0, 1, 2, 3, 4, 5):
+        for (k1, k0), r in stages.items():
+            env = {n: True for n in p.inputs() + p.feedback()}
+            env.update(AC2N=not cls >> 2 & 1, AC1N=not cls >> 1 & 1, AC0N=not cls & 1, CK1N=not k1, CK0N=not k0)
+            _, _, nxt = p.eval(env)
+            aop = (not nxt['AOP2N']) << 2 | (not nxt['AOP1N']) << 1 | (not nxt['AOP0N'])
+            assert aop == (r if cls == 5 else cls), (cls, k1, k0, aop)
 
 
 def check_all(pals=None):
@@ -256,6 +438,10 @@ def check_all(pals=None):
     check_rot_equations(pals)
     check_anx_equations(pals)
     check_rdy(pals)
+    check_afc(pals)
+    check_chs(pals)
+    check_sts(pals)
+    check_aop(pals)
     return n
 
 
@@ -331,7 +517,7 @@ def fit_table(pals):
 def main(argv):
     pals = load_pals()
     n = check_all(pals)
-    print(f'ok: 変換 {n} 通り、ROT・ANX・RDY の式', file=sys.stderr)
+    print(f'ok: 変換 {n} 通り、ROT・ANX・RDY・AFC の式、CHS・STS の状態、SEQ の AOP', file=sys.stderr)
     if '--check' in argv:
         msgs = stale()
         for m in msgs:

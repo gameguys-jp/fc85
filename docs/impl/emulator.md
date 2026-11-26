@@ -61,7 +61,7 @@
 
 | 回路 | 段階 2 の範囲（仕様書 §12） | 状況 |
 |---|---|---|
-| Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件）。子基板のバスのテストピン（ベンド点「DOC波形RAMの線」）と波形 RAM の保持（DR-072）も足した（試験 10 件） |
+| Data Fabric | 2 DMA チャネル、待機、IRQ、変換、FIFO、競合、周期トリガ。trace で順序と所要時間を確認 | スロットの模型を実装した：2 チャネル、再設定と START の検査、変換、トリガ（EACH、LOOP、保留、MISS）、STALL・WAIT・ERROR・IRQ、CPU の A ファイルのアクセス、延びるアクセスの時間切れ。試験 26 件。port 1 は、ACRTC のつなぎ（ブリッジの同期化の FF と P1A）と、DONE と COUNT の照合を足した（試験 8 件）。DOC 子基板の port 2 は、P2A（E の同期化と窓の待ち、アクセスの預かり。DR-050）と波形 RAM、ES5503 の走査を足した（試験 11 件）。子基板のバスのテストピン（ベンド点「DOC波形RAMの線」）と波形 RAM の保持（DR-072）も足した（試験 10 件）。判断と状態の PAL の式をつないだ門の模型（試験の側の `tests/fabric_gate/`。DR-085）を足し、スロットの模型と突き合わせた（試験 3 件） |
 | ポートの側 | 同上 | Staging RAM（port 0）、本体 DAC・DSP・ADPCM・音声入力の FIFO（port 2・3・4・5・10）、Temporal RAM（port 6・7）、文字 ROM（port 9）。本体 DAC（port 2）と ADPCM（port 5）のアダプタ、音声クロック（TRIGGER 3）と V̄C̄K̄（TRIGGER 5）は実装した（試験 12 件）。DSP のアダプタ（port 3・4、プログラム RAM、メールボックス、BIO の選択）も実装した（試験 9 件）。ブリッジと Temporal RAM の CPU 側のレジスタの番地はまだ |
 | DOC のブリッジ（段階 3） | 68000 から DOC のレジスタ（仕様書 §05 の 0x210000〜0x2101FF） | 番地のデコード、CS の登録、E の同期化、P2A との窓の取り合い、DTACK を実装した。試験 7 件はバスサイクルを直接始め、68000 から通す試験は「本体のバス」（規則は OI-055） |
 | 音声のアナログの段（段階 4） | 仕様書 §10 の DAC から LINE OUT まで（DOC の I/V・S/H・LPF、本体 DAC と ADPCM の LPF、ミキサ、結合容量） | 部品の値を [P] で決めて組んだ（§03 の「音声のアナログの段」）。DOC 子基板の S/H と SIG± のジャンパ（DR-011）、MSM5205 の DA OUT の遅れも足した（試験 11 件）。DR-054 のデジタルの出力は、別の流れとしてビット列を変えずに残した |
@@ -244,7 +244,7 @@
 
 ### Data Fabric
 
-コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fabric_pal.rs`（PAL の式と PROM の中身から生成した関数。DR-084）、`fifo.rs`（67401）、`ports.rs`（ポートの側）、`acrtc.rs`（port 1 のつなぎ）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。
+コードは `emulator/crates/board/src/fabric.rs`（Fabric）、`fabric_pal.rs`（PAL の式と PROM の中身から生成した関数。DR-084）、`fifo.rs`（67401）、`ports.rs`（ポートの側）、`acrtc.rs`（port 1 のつなぎ）。試験の側の `tests/fabric_gate/mod.rs`（GateFabric）は、生成した関数をつないだ門の模型（DR-085）。動作は仕様書 §06 と DR-046、回路は [fabric.md](../spec/fabric.md) に従った。fabric.md の順序と状態の PAL の式（OI-050）は、この模型のスロットの列に合わせて書く。判断と状態の式（DR-085）は、門の模型をこの模型と並べて動かし、スロットの列が同じことを確かめた（§04）。
 
 ポートの外側（ポート、モジュールの /PRES、PORT_RESET と AUDIO_N の書込みの信号）は `Ports` トレイトの向こう側に置き、board 層（または試験）が実装する。
 
@@ -252,13 +252,15 @@
 |---|---|---|---|
 | 変換部・RDY・ATR（DR-084、fabric.md §04・§06） | `tools/fabric/pal/*.pal` の式（PAL に焼くもの）と、fabric_logic.py の PROM の中身（MSK0・MSK1、ATR）から生成した `fabric_pal.rs` を通す。変換は IL → ROT0–3 → ANX0–3（MSK、MASK、XOR）。準備の信号は、ポートの側の線（`Ports::ready_lines`：RDY1、RDY2、IR3、OR4、IR5、OR10、XRDY）を RDY の式に通す。番地を持つか、満杯・空の信号、S のスロットだけか、2 スロットの読出し、W16、F4、START の検査（OKD・OKN）は ATR を引く。式は、同じ形の bus の出力を 16 bit まとめた bit 演算に、入力が少なく積が多い出力を式から作った真理値表にする（値は式と同じ） | 回路の式を 1 つの元にする。実装の速さは、それまでの式とほぼ同じ（変換 1 回 約 14 ns、前は約 12 ns。DR-084） | それまでの模型と違うのは、使えない向きのポートと準備の線のないポート（port 8 など）を、RDY の式どおり「準備ができている」とすることと、port 9 への書込みも ATR の TWO で 2 スロットにすること。どちらも START の検査で ERROR になる設定か、動作中の書換え（Bend）でだけ起きる |
 | 準備の信号の取込みを省く | 次の頭の判断で準備の信号を見ないスロット（要素が動いているか、候補が Run でなく、このスロットで再設定の 3 段目も行わない）では、RDY の式を計算せず、前に取り込んだ値のままにする | 判断の列は、毎スロット取り込むのと同じ。Fabric が止まっているときの手間を DR-084 の前と同じにする | 保存した状態の `rdy_s`・`rdy_d` は、見ないスロットで古い値のまま |
+| 門の模型（DR-085、fabric.md §06） | `GateFabric` は `Fabric` と同じ入口（`step_slot`、`host_read`・`host_write`・`host_poll`、`status`、`irq` など）を持ち、判断と状態を、生成した PAL の関数（CST、ELG、SEQ、ELS、EVT、ADC、CHS、STS、AFC0・AFC1、RDY）とつなぎのゲートで計算する。PAL のレジスタはピンの値（負の論理）で持つ。アクセスの制御（NX・OP、2 スロットと延びるアクセス、時間切れ、port 1 の DONE の照合）、B ファイルと加算器、トリガの選択は、`Fabric` と同じ振る舞いの書き方 | 式が `Fabric` と同じスロットの列を作るかを試験で確かめる。本番（`console`、ホスト）は `Fabric` のまま：`step_slot` が 2〜3 倍遅く（1 スロットに 約 130〜200 ns 増える）、仮想機の全体で 3% を大きく超える。門の模型は試験の側（`tests/fabric_gate/`）に置き、lib には入れない。lib に入れるだけで、使わなくてもコードの配置が変わり、DOC 子基板のある基板の速さが 5〜9% 落ちた（DR-085） | 実機の回路との差は OI-084 |
+| 要素の COUNT の更新（DR-085） | W のときに COUNT を更新するかは、要素を始めたときに COUNT を更新したか（ELS の EPC）で決める | 前は W のときの SRC で決めていたので、動作中に SRC を書き換えると、1 要素で COUNT を 2 回更新するか、1 回も更新しなかった。門の模型と並べて見つけた | 動作中の SRC の書換え（Bend）でだけ前と違う |
 | 時間の単位（DR-046 (1)） | `step_slot` の 1 回を 1 スロット（8 MHz の 2 クロック、250 ns）にする。スロット 0 を S にする | スロットの中の時刻（q0〜q3）は、順序（頭の判断、中ほどの準備の取込み、アクセス、4 分の 3 の A ファイルの操作、終わり）としてだけ扱う（fabric.md §03） | CPU やほかの IC との時刻の合わせ方は core を作るときに決める |
 | 判断と A ファイル（DR-046 (2)、fabric.md §05） | 各スロットの頭で、このスロットの A ファイルの操作と、次のスロットのアクセスを決める。COUNT の更新は、逐次の読出し元なら R の判断、番地を持つ読出し元と逐次の書込み先なら W の判断、両方が番地を持てば W のスロットに置く | fabric.md §05 [P] | `SlotRecord` の列が、PAL の式を書くときの基準になる |
 | 2 スロット以上のアクセス | port 9 の読出しは、2 スロット目の頭で次のアクセスを決める。port 1 と DOC の port 2 は、答えたスロットの次の頭で決める（答えが早くても 2 スロット） | port 9 は終わりが分かっている。fabric.md §06 の「長いアクセスの間は決めない」を、この形に詳しくした（fabric.md v0.2）[P] | port 9 から読む要素は 3 スロットに 1 つ |
 | 満杯・空の信号を持つポート（DR-046 (2)） | アクセスのスロットと、その次のスロットの頭では、新しい要素を始めない。port 2 は DOC 子基板があっても対象 | ATR の FLAG は port 2 の両方の中身で 1 | DOC への書込みの後も 1 スロット空く |
 | 候補の入れ替えと S のスロット（DR-046 (2)、DR-048） | 要素がなく 2 チャネルとも動いていれば候補をスロットごとに入れ替える。ただし、候補の読出し元が port 0 で今が S のスロットなら入れ替えない | 仕様どおり | port 0 から読むチャネルは、相手が待っていても 1 チャネルのときと同じ速さで進む。2 チャネルとも port 0 から読むと、S と X の 2 スロットずつ候補になる。DR-048 の前は、相手がトリガや空の FIFO を待つだけで止まった（OI-052） |
 | 動作中の書換え（DR-046 (4)） | 設定のレジスタは、使うスロットの値を使う。R と W の間に SHIFT・MASK・XOR・FORMAT・DST を書き換えると、その要素の W から効く | 回路では、設定のレジスタが変換部と判断バスに直接つながる（fabric.md §02）。仕様書の「次の要素から効く」はおおよその言い方 [P] | 動作中の書換えは Bend の操作 |
-| トリガ（DR-046 (8)） | 2 段の同期化と立上りの検出はスロット単位で、入力の立上りから 2〜3 スロットで保留になる。チャネルが止まっている間の立上りは数えない。保留は START で消す | 同期化の FF のクロックは fabric.md で決めていない [V]。止まっている間に MISS が立つのを避けた [P] | — |
+| トリガ（DR-046 (8)） | 2 段の同期化と立上りの検出はスロット単位で、入力の立上りから 2〜3 スロットで保留になる。チャネルが止まっている間の立上りは数えない。保留は START で消す | 同期化の FF（U36、STS）は LCLK で取り込む（DR-085、fabric.md §03）。止まっている間に MISS が立つのを避けた [P] | — |
 | START と状態のビット | START は DONE・ERROR・MISS を変えない（W1C でだけ消える） | 仕様書に書いてない [P] | ソフトは START の前に消す |
 | LOOP で COUNT の設定値が 0 | 再設定のたびに DONE にし、また再設定する（3 スロットごと） | 回路の動きをそのまま [V] | 動作中に COUNT を 0 に書き換える Bend |
 | 時間切れ（DR-046 (9)） | 延びたアクセスが 16 スロット（32 クロック）で終わらなければ、そのスロットの終わりに ERROR にし、アクセスを打ち切る | DR-046 (9) | — |
@@ -617,7 +619,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 
 ### Data Fabric
 
-試験は `emulator/crates/board/tests/fabric.rs`、生成した PAL の関数は `tests/fabric_pal.rs`、port 1 は `tests/acrtc_port.rs`。期待値は仕様書 §06、DR-022、DR-046、fabric.md の記述と、そこからの手計算で取る。PAL の式そのもの（`tools/fabric/pal/*.pal`）がピンと項に収まり仕様と同じ値を出すこと、生成した `fabric_pal.rs` と fabric.md の式が今の式と同じことは、`py -m unittest discover -s tools/fabric` で確かめる（DR-084）。
+試験は `emulator/crates/board/tests/fabric.rs`、生成した PAL の関数は `tests/fabric_pal.rs`、門の模型との突合せは `tests/fabric_lockstep.rs`、port 1 は `tests/acrtc_port.rs`。期待値は仕様書 §06、DR-022、DR-046、fabric.md の記述と、そこからの手計算で取る。PAL の式そのもの（`tools/fabric/pal/*.pal`）がピンと項に収まり仕様と同じ値を出すこと、生成した `fabric_pal.rs` と fabric.md の式が今の式と同じことは、`py -m unittest discover -s tools/fabric` で確かめる（DR-084）。
 
 | 分野 | テスト | 判定基準 | 状況 |
 |---|---|---|---|
@@ -632,8 +634,9 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 保存 | `snapshot_round_trip_mid_transfer` | 2 チャネルの転送の途中で保存して戻すと、同じスロットの列と状態になる | 合格 |
 | 候補の入れ替え | `candidate_alternates_while_both_channels_run`、`a_staging_channel_keeps_its_rate_while_the_other_channel_waits` | port 0 を読まない 2 チャネルは 1 スロットごと、port 0 を読む 2 チャネルは S と X の 2 スロットずつ候補になる。Staging RAM → Temporal RAM の 100 要素が、ch1 がトリガを待っていても 2 スロットに 1 要素で終わる（DR-048。前は 2 要素で止まった） | 合格 |
 | port 1 | `dwt_from_staging_ram_fills_the_rectangle`、`drd_to_staging_ram_reads_the_rectangle`、`one_word_takes_six_or_seven_slots_from_temporal_ram`、`count_larger_than_the_rectangle_is_an_error`、`count_smaller_than_the_rectangle_is_an_error_and_abt_clears_the_acrtc`、`the_channel_stalls_until_the_acrtc_requests`、`stop_in_the_middle_of_a_port1_access_releases_dack`、`snapshot_round_trip_mid_port1_transfer` | DWT・DRD の矩形を COUNT＝x·y で運ぶ（DR-022）。1 回のアクセスは 3 スロット、1 語は Staging RAM から 6 か 8、Temporal RAM から 6〜7 スロット（§03 の時刻からの計算。2CLK の位相を 7 通りに変える）。COUNT が大きくても小さくても ERROR、ABT で ACRTC が止まる。DREQ まで STALL。STOP で DACK を戻す。途中で保存して戻せる | 合格 |
+| 門の模型との突合せ（DR-085） | `scenarios_of_the_fabric_tests_match`、`doc_board_long_accesses_match`、`random_programs_match` | `Fabric` と `GateFabric` を同じ入力で動かし、毎スロットの `SlotRecord`、STATUS、段階、IRQ、CPU への応答と、ポートへの働きかけが同じ。筋書きは、fabric.rs の試験と同じ転送、DOC 子基板の延びるアクセス、擬似乱数の CPU の手順（設定、START・STOP、STATUS の読出しと W1C、A ファイル、動作中の書換え、PORT_RESET、不正な番地）とポートの模型（FIFO の量、準備の線、トリガ、延びるアクセスと時間切れ、port 1 の DONE）の 64 通り × 8,000 スロット。出来事の 20 種（判断と A ファイルの操作の種類、2 スロットと延びるアクセス、DONE・STALL・ERROR・MISS の立上り、WAIT、動作中の STOP、2 チャネルの同時の動作、割込みなど）がどれも起きたことも確かめる | 合格 |
 
-期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。fabric.md の順序と状態の PAL の式ができたら、この試験のスロットの列と突き合わせる（OI-050 (1)）。
+期待値は仕様の記述と手計算で、回路のシミュレーションでも実機の測定でもない。判断と状態の PAL の式（DR-085）は、この試験の筋書きを門の模型でも動かして突き合わせた。残りの式（アクセスの制御、STB ほか。OI-050 (1)）も、できたら同じように突き合わせる。
 
 ### 音声クロック・本体 DAC・ADPCM
 
