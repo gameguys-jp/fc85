@@ -25,6 +25,8 @@ acrtc_init:
         MOVE.W  #ACRTC_B_MW,ACRTC_DATA
         MOVE.W  #0,ACRTC_DATA
         MOVE.W  #0,ACRTC_DATA
+        MOVE.W  #ACRTC_DCR,ACRTC_AR     ; 基本画面だけを出す。電源投入時の DCR は不定（DR-071）
+        MOVE.W  #ACRTC_DCR_BASE,ACRTC_DATA
         MOVE.W  #ACRTC_CCR,ACRTC_AR
         MOVE.W  #ACRTC_CCR_GBM4,ACRTC_DATA
         MOVE.W  #ACRTC_OMR,ACRTC_AR

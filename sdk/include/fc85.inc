@@ -98,7 +98,7 @@ ACRTC_OMR_DSK1  EQU     $0100           ; DISP のスキュー（×1〜3 メモ�
 ACRTC_OMR_RAM   EQU     $0080           ; 1：HSYNC の間に DRAM をリフレッシュしない
 ; DCR のビット（U85 p.75–78）。SE は 0x 使わない、10 ブランク、11 表示（基本画面の SE1 は 1 bit）
 ACRTC_DCR_DSP   EQU     $8000
-ACRTC_DCR_BASE  EQU     $4000           ; 基本画面を表示（電源投入時の値とする [V]）
+ACRTC_DCR_BASE  EQU     $4000           ; 基本画面を表示（BIOS が書く値。DR-071）
 ACRTC_DCR_UPPER EQU     $3000           ; 上画面を表示（ブランクは $2000）
 ACRTC_DCR_LOWER EQU     $0C00           ; 下画面を表示（ブランクは $0800）
 ACRTC_DCR_WIN   EQU     $0300           ; ウィンドウを表示（ブランクは $0200）
