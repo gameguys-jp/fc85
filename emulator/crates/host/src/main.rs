@@ -8,14 +8,17 @@
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD]
-//! [--bend-script FILE]`
+//! [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one]`
 //!
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
-//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`factory`。ベンド点を 1 つでも
-//! 設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
+//! `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`、`sig both|one`、`factory`。ベンド点を
+//! 1 つでも設定すると Bend モードで始まる（`--bend "mode normal"` で通常モードから始め、F2 で入れる）。
 //! `--bend-script` は「フレーム 命令」の行の台本で、そのフレームの頭で実行する。
-//! `--*-clock HZ` は `--bend "clock … HZ"`、`--char-bend SPEC` は `--bend "char SPEC"` の短い形。
+//! `--*-clock HZ` は `--bend "clock … HZ"`、`--char-bend SPEC` は `--bend "char SPEC"`、`--doc-sig one`
+//! は `--bend "sig one"`（DOC の SIG± の配線のジャンパ。DR-011）の短い形。
+//! `--audio-tap` は鳴らす音と WAV に書く音：`line`（既定）はアナログの段の LINE OUT（analog.rs）、`digital` は
+//! チップの出力のデジタルの和（DR-054。`sdk/samples/dsp/verify_wav.py` が標本ごとに照合するのはこちら）。
 
 mod midi;
 
@@ -65,6 +68,8 @@ struct Args {
     /// MIDI の装置の番号（`--midi-list`）。
     midi_in: Option<usize>,
     midi_out: Option<usize>,
+    /// 鳴らして WAV に書く音：true は LINE OUT、false はデジタルの和。
+    line: bool,
 }
 
 fn parse_args() -> Args {
@@ -85,6 +90,7 @@ fn parse_args() -> Args {
         bend_script: Vec::new(),
         midi_in: None,
         midi_out: None,
+        line: true,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -124,12 +130,24 @@ fn parse_args() -> Args {
                 a.bends
                     .extend(it.next().map(|v| format!("clock {which} {v}")));
             }
+            "--doc-sig" => a.bends.extend(it.next().map(|v| format!("sig {v}"))),
+            "--audio-tap" => {
+                a.line = match it.next().as_deref() {
+                    Some("line") => true,
+                    Some("digital") => false,
+                    v => {
+                        eprintln!("--audio-tap は digital か line（{v:?}）");
+                        std::process::exit(2);
+                    }
+                }
+            }
             "-h" | "--help" => {
                 println!(
                     "fc85 [--boot boot.bin] [--char char.bin] [--cart cart.bin] [--no-doc] \
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
-                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE]"
+                     [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
+                     [--audio-tap digital|line] [--doc-sig both|one]"
                 );
                 std::process::exit(0);
             }
@@ -411,10 +429,21 @@ fn pace(audio: bool, ring: &Ring, next: &mut std::time::Instant) {
     }
 }
 
+/// 鳴らす音（`--audio-tap`）を取り出し、もう一方は捨てる。
+fn take_audio(c: &mut Console, line: bool) -> Vec<(i16, i16)> {
+    let (keep, drop) = if line {
+        (&mut c.sys.line_out, &mut c.sys.audio_out)
+    } else {
+        (&mut c.sys.audio_out, &mut c.sys.line_out)
+    };
+    drop.clear();
+    std::mem::take(keep)
+}
+
 /// 仮想機の音声をリングに入れる。遅れすぎたら古いものを捨てる（ホストの安全層。仮想機は変えない）。
-fn push_audio(c: &mut Console, ring: &Ring) {
+fn push_audio(c: &mut Console, ring: &Ring, line: bool) {
     let mut q = ring.lock().unwrap();
-    q.extend(c.sys.audio_out.drain(..));
+    q.extend(take_audio(c, line));
     let max = AUDIO_RATE as usize / 5;
     while q.len() > max {
         q.pop_front();
@@ -556,10 +585,9 @@ fn main() {
                 view(&c, &mut buf);
                 dump_ppm(&numbered(p, i + 1), &buf);
             }
+            let mut s = take_audio(&mut c, a.line);
             if a.wav.is_some() {
-                pcm.append(&mut c.sys.audio_out);
-            } else {
-                c.sys.audio_out.clear();
+                pcm.append(&mut s);
             }
         }
         view(&c, &mut buf);
@@ -622,7 +650,7 @@ fn main() {
         while let Some(b) = c.sys.acia.take_sent() {
             midi.send(b);
         }
-        push_audio(&mut c, &ring);
+        push_audio(&mut c, &ring, a.line);
         pace(audio.is_some(), &ring, &mut next);
         view(&c, &mut buf);
         if w.update_with_buffer(&buf, VIEW_W, VIEW_H).is_err() {

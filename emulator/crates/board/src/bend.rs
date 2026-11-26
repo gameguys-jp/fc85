@@ -8,6 +8,7 @@
 //! port 9 から読んでも、同じソケットの線を通る。番号は ROM のピンの番号で、68000 の番地では
 //! ROM の A0 が 68000 の A1 に当たる（仕様書 §08）。
 
+use crate::analog::SigWiring;
 use fc85_core::time::{PERIOD_8M, PERIOD_20M, PERIOD_384K, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +80,9 @@ pub struct Bends {
     pub clocks: Clocks,
     /// FIFO のテストピン（`FIFO_NAMES` の順）。
     pub fifos: [FifoPins; 4],
+    /// DOC の SIG± の配線のジャンパ（DR-011。仕様書 §11 のベンド点「DOC 出力の片側」）。
+    #[serde(default)]
+    pub sig: SigWiring,
 }
 
 impl Bends {
@@ -87,6 +91,7 @@ impl Bends {
         self.char_lines.is_normal()
             && self.clocks == Clocks::default()
             && self.fifos == [FifoPins::default(); 4]
+            && self.sig == SigWiring::Both
     }
 
     /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
@@ -95,6 +100,7 @@ impl Bends {
     /// - `char A1=A2,A2=A1,D6=0,D2=Z`（`char normal` で戻す。`RomLines::parse`）
     /// - `clock doc|dsp|adpcm|audio <Hz>`（`off` で基板の発振器に戻す。`6e6` の形も読む）
     /// - `fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open`（`open` だけで両方を外す）
+    /// - `sig both|one`：DOC の SIG± の配線（`one` は SIG+ だけの初期の片側の配線。DR-011）
     /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
     pub fn command(&mut self, line: &str) -> Result<(), String> {
         let line = line.trim();
@@ -165,6 +171,13 @@ impl Bends {
                     }
                 }
             }
+            "sig" => {
+                self.sig = match rest.trim().to_ascii_lowercase().as_str() {
+                    "both" => SigWiring::Both,
+                    "one" => SigWiring::One,
+                    _ => return Err(format!("sig は both・one: {line}")),
+                }
+            }
             "factory" => {
                 *self = Self {
                     mode: self.mode,
@@ -173,7 +186,7 @@ impl Bends {
             }
             _ => {
                 return Err(format!(
-                    "知らない命令（mode・char・clock・fifo・factory）: {line}"
+                    "知らない命令（mode・char・clock・fifo・sig・factory）: {line}"
                 ));
             }
         }
@@ -200,6 +213,9 @@ impl Bends {
             if p != FifoPins::default() {
                 v.push(format!("FIFO {n}"));
             }
+        }
+        if self.sig == SigWiring::One {
+            v.push("DOC の SIG＋だけ".into());
         }
         v.join("、")
     }
@@ -418,6 +434,12 @@ mod tests {
         b.command("fifo adpcm open").unwrap();
         b.command("clock dsp off").unwrap();
         assert!(b.is_factory());
+        b.command("SIG one").unwrap();
+        assert_eq!(b.sig, SigWiring::One);
+        assert!(!b.is_factory());
+        assert!(b.summary().contains("SIG"));
+        b.command("sig both").unwrap();
+        assert!(b.is_factory());
         assert_eq!(b.mode, Mode::Bend);
         // 基板の発振器の周期（DR-003）
         assert_eq!(
@@ -431,6 +453,7 @@ mod tests {
             "clock doc -5",
             "fifo port9 open",
             "fifo dac empty=2",
+            "sig half",
             "wobble",
         ] {
             assert!(b.command(bad).is_err(), "{bad}");

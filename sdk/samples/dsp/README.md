@@ -67,7 +67,7 @@ cargo run --release -p fc85-host -- --no-doc --cart ../sdk/samples/dsp/build/dsp
 ```
 cargo run --release -p fc85-host -- --headless --no-doc --cart ../sdk/samples/dsp/build/dsp.bin \
     --frames 600 --pad-script ../sdk/samples/dsp/pad-demo.txt \
-    --dump <scratchpad>/d.ppm --dump-at 60,200,300,400,600 --wav <scratchpad>/d.wav
+    --dump <scratchpad>/d.ppm --dump-at 60,200,300,400,600 --wav <scratchpad>/d.wav --audio-tap digital
 ```
 
 WAV と画面の数をモデルと比べるには、`verify_wav.py` に画面の SW・COUNT・SUM を写して渡す（§08）。

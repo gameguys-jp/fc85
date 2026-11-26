@@ -82,6 +82,7 @@ fn a_snapshot_of_the_running_bios_resumes_identically() {
         a.run_frame();
     }
     a.sys.audio_out.clear();
+    a.sys.line_out.clear();
     let json = serde_json::to_string(&a).unwrap();
     let mut b: Console = serde_json::from_str(&json).unwrap();
     for i in 0..10 {
@@ -93,6 +94,9 @@ fn a_snapshot_of_the_running_bios_resumes_identically() {
     }
     assert_eq!(a.cpu, b.cpu);
     assert_eq!(a.sys.audio_out, b.sys.audio_out);
+    // LINE OUT（アナログの段の f64 の状態もビット列で保存する）も同じ標本の列になる
+    assert_eq!(a.sys.line_out, b.sys.line_out);
+    assert!(!a.sys.line_out.is_empty());
     assert!(a == b, "保存して戻した後の状態が違う");
 }
 

@@ -15,6 +15,10 @@
 //! - S1＝S2＝H（V̄C̄K̄ が入力になる Bend のモード）では V̄C̄K̄ を駆動しないので、取込みは起きない [V]。
 //! - CPU から見たレジスタ（0x230000〜）の番地とビットは段階 3 で決める。ここでは CTRL を構造体の値で持つ。
 //! - FIFO の受け渡しは、スロットの頭（Fabric のアクセスの前）にまとめる（`audio` と同じ）[P]。
+//! - DA OUT（段階 4、analog.rs の入力）：V̄C̄K̄ の立下りから 2 クロック（5.2 µs）後に、そのときの DAC の符号
+//!   （前の周期に取り込んだニブルを復号した値）に変わる（台帳 MSM5205.md §3.2 の図。段数は [V]）。取込みは
+//!   立下りの 6 クロック後なので、取り込んだ値が DA OUT に出るのは、次の周期の立下りの 2 クロック後
+//!   （8 kHz で 44 クロック、114.6 µs 後）。デジタルの出力（DR-054）は遅れのない `dac_code` のまま。
 
 use crate::fifo::Fifo;
 use fc85_chips::msm5205::{Edge, Msm5205};
@@ -23,6 +27,9 @@ use serde::{Deserialize, Serialize};
 
 /// FIFO が空のときに使う byte（DR-017 (2)）。
 pub const UNDERRUN_BYTE: u8 = 0x08;
+
+/// V̄C̄K̄ の立下りから DA OUT が変わるまでの発振のクロック数（台帳 MSM5205.md §3.2）。
+pub const DA_OUT_DELAY: u8 = 2;
 
 /// ADPCM ブリッジの CTRL（台帳 MSM5205.md §4.6 の案）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +76,14 @@ pub struct AdpcmPort {
     /// 取込みの数と、最後に取り込んだニブル。
     pub captures: u64,
     pub last_nibble: u8,
+    /// DA OUT の 10 bit の符号と、それに変わった時刻（analog.rs の入力）。電源投入時は 0（中央）[V]。
+    #[serde(default)]
+    pub da_out: i16,
+    #[serde(default)]
+    pub da_at: Time,
+    /// DA OUT が変わるまでの残りのクロック数（0 は待っていない）。
+    #[serde(default)]
+    da_wait: u8,
 }
 
 impl Default for AdpcmPort {
@@ -89,6 +104,9 @@ impl AdpcmPort {
             underruns: 0,
             captures: 0,
             last_nibble: 0,
+            da_out: 0,
+            da_at: 0,
+            da_wait: 0,
         };
         a.set_ctrl(AdpcmCtrl::default());
         a
@@ -130,14 +148,23 @@ impl AdpcmPort {
 
     /// `end` より前の発振の立上りを進める。
     pub fn run(&mut self, end: Time, fifo: &mut Fifo) {
-        while self.clk.take_before(end).is_some() {
+        while let Some(at) = self.clk.take_before(end) {
             let t = self.msm.tick();
             if let Some(c) = t.capture {
                 self.captures += 1;
                 self.last_nibble = c.nibble;
             }
-            if t.edge == Some(Edge::Rise) {
-                self.feed(fifo);
+            if self.da_wait > 0 {
+                self.da_wait -= 1;
+                if self.da_wait == 0 {
+                    self.da_out = self.msm.dac_code();
+                    self.da_at = at;
+                }
+            }
+            match t.edge {
+                Some(Edge::Rise) => self.feed(fifo),
+                Some(Edge::Fall) => self.da_wait = DA_OUT_DELAY,
+                None => {}
             }
         }
     }

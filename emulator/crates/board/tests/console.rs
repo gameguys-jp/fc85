@@ -2,6 +2,7 @@
 //! 期待値は仕様書 §05・§09、DR-016、DR-024、DR-026、DR-027、DR-028、DR-052、DR-053 と、
 //! 台帳 HD68000.md §2.5、host-acrtc-interface.md §5、HD63484.md §3.4・§4.5 からの手計算で取る。
 
+use fc85_board::analog::SigWiring;
 use fc85_board::console::{BERR_CYCLE_CLOCKS, System, acrtc_timing};
 use fc85_board::video::{RASTER_W, VIRQ_VBL, VIRQ_VBL_EN};
 use fc85_chips::hd68000::{Bus, BusReply, IackReply, Size, fc};
@@ -580,8 +581,10 @@ fn bend_points_are_wired_in_only_in_bend_mode() {
     c.sys.ports.dsp_in.shift_in(0x1234);
     c.sys.bend("char A0=0").unwrap();
     c.sys.bend("fifo dsp_in empty=1").unwrap();
+    c.sys.bend("sig one").unwrap();
     // 通常モード：工場出荷のまま
     assert!(!c.sys.ports.dsp_in.is_empty());
+    assert_eq!(c.sys.ports.doc_board.sig_wiring, SigWiring::Both);
     assert_eq!(
         c.rd(0x01_0002, Size::Byte),
         BusReply::Ok {
@@ -593,6 +596,8 @@ fn bend_points_are_wired_in_only_in_bend_mode() {
     c.sys.bend("mode bend").unwrap();
     assert!(c.sys.ports.dsp_in.is_empty());
     assert_eq!(c.sys.ports.dsp_in.len(), 1);
+    // DOC の SIG± は SIG+ だけの配線（DR-011）
+    assert_eq!(c.sys.ports.doc_board.sig_wiring, SigWiring::One);
     assert_eq!(
         c.rd(0x01_0002, Size::Byte),
         BusReply::Ok {
@@ -603,6 +608,7 @@ fn bend_points_are_wired_in_only_in_bend_mode() {
     // 通常モードに戻すと外れ、設定は残る
     c.sys.bend("mode toggle").unwrap();
     assert!(!c.sys.ports.dsp_in.is_empty());
+    assert_eq!(c.sys.ports.doc_board.sig_wiring, SigWiring::Both);
     assert!(!c.sys.bends.is_factory());
     c.sys.bend("factory").unwrap();
     assert!(c.sys.bends.is_factory());
