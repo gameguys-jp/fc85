@@ -751,7 +751,10 @@ impl System {
                         waits = (end - t).div_ceil(PERIOD_8M) as u32;
                     }
                 }
-                v.write_palette((off >> 1) as usize, x);
+                // 書込みのストローブは S4〜S7（DIRECT の点状のノイズ）[P]
+                let from = (at + 2) * PERIOD_8M;
+                let to = (at + 4 + u64::from(waits)) * PERIOD_8M;
+                v.write_palette_at((off >> 1) as usize, x, from, to);
                 ok(0, waits)
             }
             // パレットは書込み専用で、読むと 0 [P]
