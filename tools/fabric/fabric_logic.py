@@ -277,41 +277,49 @@ def afc_expect(aop, ch, hch, word, hrw):
 
 
 def check_afc(pals):
-    """AFC0・AFC1 の式が、AOP ごとに §05 の表の語を読み書きし、B と Cin と取込みを選ぶか。
-    A ファイルの番地は負の論理のまま 74S189 へ行くので、語の番号は番地のピンの反転。"""
-    a0, a1 = pals['AFC0'], pals['AFC1']
-    for aop in range(8):
-        for ch in (0, 1):
-            for hch in (0, 1):
-                for (ha3, ha2), word in HOST_WORDS.items():
-                    for hrw in (0, 1):
-                        env = {'AOP2N': not aop >> 2 & 1, 'AOP1N': not aop >> 1 & 1, 'AOP0N': not aop & 1,
-                               'ACHN': not ch, 'HCH': bool(hch), 'HA3': bool(ha3), 'HA2': bool(ha2),
-                               'HRW': bool(hrw)}
-                        pins = []
-                        for wph in (False, True):
-                            c0, _, _ = a0.eval(dict(env, WPH=wph))
-                            c1, _, _ = a1.eval(dict(env, WPH=wph))
-                            pins.append((c0, c1))
-                        (r0, r1), (w0, w1) = pins
-                        word_of = (lambda c: (~(c['AA3N'] << 3 | c['AA2N'] << 2 | c['AA1N'] << 1 | c['AA0N'])) & 15)
-                        rd, wr, b, cin, cap = afc_expect(aop, ch, hch, word, hrw)
-                        what = (aop, ch, hch, word, hrw)
-                        if rd is not None:
-                            assert word_of(r0) == rd, ('読む語', what)
-                        assert r0['AWEN'], ('読みの相で書いた', what)
-                        assert (not w0['AWEN']) == (wr is not None), ('書込み', what)
-                        if wr is not None:
-                            assert word_of(w0) == wr, ('書く語', what)
-                            assert (not w1['SLOEN']) == (aop != AOPS['HOST']), ('和のラッチ', what)
-                            assert (not w1['HWOEN']) == (aop == AOPS['HOST']), ('CPU の書込み', what)
-                        assert (not r1['BENN']) == (b is not None), ('B', what)
-                        if b is not None:
-                            assert (r1['BA1'] << 1 | r1['BA0']) == b, ('B の番地', what)
-                        if cin is not None:
-                            assert r0['CIN'] == bool(cin), ('Cin', what)
-                        for k in ('PSC', 'PDC', 'HRC'):
-                            assert (not r1[k + 'N']) == (cap == k), (k, what)
+    """AFC0・AFC1 は、SCLK で SEQ と同じ入力（ELG の AC、CST の CK、次の ACH ＝ DBCH）から登録する。届く AC
+    （000〜101。再設定 101 の候補の段階は 00・01・10）とチャネル、CPU の窓の語と向きのすべてで、SEQ が登録する
+    AOP・ACH の §05 の表の語を読み（q0〜q1）書き（q2〜q3）、B と Cin と取込みを選ぶか。A ファイルの番地は負の
+    論理のまま 74S189 へ行くので、語の番号は番地のピンの反転。"""
+    a0, a1, seq = pals['AFC0'], pals['AFC1'], pals['SEQ']
+    seq_env = {n: True for n in seq.inputs() + seq.feedback()}
+    for ac in range(6):
+        for k1, k0 in ((0, 0), (0, 1), (1, 0)) if ac == 5 else ((0, 0), (0, 1), (1, 0), (1, 1)):
+            for ch in (0, 1):
+                for hch in (0, 1):
+                    for (ha3, ha2), word in HOST_WORDS.items():
+                        for hrw in (0, 1):
+                            env = {'AC2N': not ac >> 2 & 1, 'AC1N': not ac >> 1 & 1, 'AC0N': not ac & 1,
+                                   'CK1N': not k1, 'CK0N': not k0, 'DBCHN': not ch, 'HCH': bool(hch),
+                                   'HA3': bool(ha3), 'HA2': bool(ha2), 'HRW': bool(hrw)}
+                            _, _, s = seq.eval(dict(seq_env, **{k: v for k, v in env.items() if k in seq_env}))
+                            aop = (not s['AOP2N']) << 2 | (not s['AOP1N']) << 1 | (not s['AOP0N'])
+                            assert (not s['ACHN']) == bool(ch), ('ACH', ac, ch)
+                            _, _, n0 = a0.eval(dict(env, **{n: True for n in a0.feedback()}))
+                            _, _, n1 = a1.eval(env)
+                            # SCLK の後の組合せの出力（CIN）。語の bit 0 は U64（74S157）が、q0〜q1 は AR0N（読み）、
+                            # q2〜q3 は AW0N（書き）を選ぶ
+                            c0 = a0.eval(dict(env, **n0))[0]
+                            word_of = (lambda b0: (~(n0['AA3N'] << 3 | n0['AA2N'] << 2 | n0['AA1N'] << 1
+                                                     | b0)) & 15)
+                            r0, w0 = n0['AR0N'], n0['AW0N']
+                            rd, wr, b, cin, cap = afc_expect(aop, ch, hch, word, hrw)
+                            what = (ac, k1, k0, ch, hch, word, hrw)
+                            if rd is not None:
+                                assert word_of(r0) == rd, ('読む語', what)
+                            assert (not n0['AWN']) == (wr is not None), ('書込み', what)
+                            if wr is not None:
+                                assert word_of(w0) == wr, ('書く語', what)
+                            # A ファイルのデータの入力を出すのは、多くて 1 つ（和のラッチか CPU の書込み）
+                            assert (not n1['SLOEN']) == (aop >= AOPS['SST']), ('和のラッチ', what)
+                            assert (not n1['HWOEN']) == (aop == AOPS['HOST'] and not hrw), ('CPU の書込み', what)
+                            assert (not n1['BENN']) == (b is not None), ('B', what)
+                            if b is not None:
+                                assert (n1['BA1'] << 1 | n1['BA0']) == b, ('B の番地', what)
+                            if cin is not None:
+                                assert c0['CIN'] == bool(cin), ('Cin', what)
+                            for k in ('PSC', 'PDC', 'HRC'):
+                                assert (not n1[k + 'N']) == (cap == k), (k, what)
 
 
 # ---------------------------------------------------------------- 順序と状態（seq.pal）
@@ -381,26 +389,35 @@ def check_chs(pals):
             if nok is not None:
                 assert (not nxt['OKN']) == nok, ('OK', what)
             assert (not nxt['DONEN'], not nxt['ERRN']) == (done, err), ('DONE・ERROR', what)
-            assert (not comb['NBSYN']) == (want != 'I'), ('NBSY', what)
-            assert (not comb['NRUNN']) == (want in ('RUN', 'NM')), ('NRUN', what)
+            # 次が動作 ＝ NRUN0 ∧ ¬BLK、次が止まっていない ＝ NBSYX ∨ 次が動作（STS で合わせる）
+            nrun = not comb['NRUN0N'] and not x['blk']
+            assert ((not comb['NBSYXN']) or nrun) == (want != 'I'), ('NBSY', what)
+            assert nrun == (want in ('RUN', 'NM')), ('NRUN', what)
             n += 1
     return n
 
 
 def check_sts(pals):
-    """トリガの同期化と立上り、保留、許可、MISS、STALL（fabric.rs の sync_trigger と decide の STALL）。"""
+    """トリガの同期化と立上り、保留、許可、MISS、STALL（fabric.rs の sync_trigger と decide の STALL）。次が動作か
+    （NRUN0 ∧ ¬BLK）と次が止まっていないか（NBSYX ∨ 次が動作）は、CHS の NBSYX・NRUN0 と EVT の BLK から。"""
     p = pals['STS']
-    names = ['s1', 'syn2', 'rise', 'arm', 'pend', 'miss', 'stall', 'nbusy', 'nrun', 'st', 'ste', 'wm', 'imm', 'sv',
-             'stl', 'p1', 'p0']
+    names = ['s1', 'syn2', 'rise', 'arm', 'pend', 'miss', 'stall', 'nbsyx', 'nrun0', 'blk', 'st', 'ste', 'wm', 'imm',
+             'sv', 'stl', 'p1', 'p0']
     for v in range(1 << len(names)):
         x = {k: bool(v >> i & 1) for i, k in enumerate(names)}
-        # 次が動作なら次は止まっていない。START の要求は、止まっているときだけで、次は再設定。
-        if (x['nrun'] and not x['nbusy']) or (x['st'] and (x['nrun'] or not x['nbusy'] or x['p1'] or x['p0'])):
+        # ブロックの終わりは動作中（再設定でなく、止める出来事もない）だけなので NRUN0 も 1。START の要求は、止まって
+        # いるときだけで、次は再設定。
+        if x['blk'] and not x['nrun0']:
+            continue
+        x['nrun'] = x['nrun0'] and not x['blk']
+        x['nbusy'] = x['nbsyx'] or x['nrun']
+        if x['st'] and (x['nrun'] or not x['nbusy'] or x['p1'] or x['p0']):
             continue
         env = {'S1Q': x['s1'], 'SYN2N': not x['syn2'], 'RISEN': not x['rise'], 'ARMN': not x['arm'],
-               'PENDN': not x['pend'], 'MISSN': not x['miss'], 'STALN': not x['stall'], 'NBSYN': not x['nbusy'],
-               'NRUNN': not x['nrun'], 'STRQ': x['st'], 'STEN': not x['ste'], 'WMQ': x['wm'], 'IMM': x['imm'],
-               'SVN': not x['sv'], 'STLN': not x['stl'], 'P1N': not x['p1'], 'P0N': not x['p0']}
+               'PENDN': not x['pend'], 'MISSN': not x['miss'], 'STALN': not x['stall'], 'NBSYXN': not x['nbsyx'],
+               'NRUN0N': not x['nrun0'], 'BLKN': not x['blk'], 'STRQ': x['st'], 'STEN': not x['ste'],
+               'WMQ': x['wm'], 'IMM': x['imm'], 'SVN': not x['sv'], 'STLN': not x['stl'], 'P1N': not x['p1'],
+               'P0N': not x['p0']}
         comb, _, nxt = p.eval(env)
         pend = x['pend'] and not x['st']
         rising = x['rise'] and x['nbusy']
@@ -444,21 +461,24 @@ def bits_env(names, v):
 
 
 def check_tim(pals):
-    """電源投入（RESN）の後、q3・X から始まり、q0 の縁で S と X が入れ替わる。SCLK・MCLK・LCLK は q0・q2・q3。"""
+    """電源投入（RESN）の後、q3・X から始まり、q0 の縁で S と X が入れ替わる。SCLK は q0、MCLK・LCLK は q2 の縁で
+    立つ。WPH（WPHN の Low）は q3 の間（次の縁が q0）。AWQN は、書込みのある操作（AWN が Low）の q3 の間だけ Low。"""
     p = pals['TIM']
     st = {n: True for n in p.feedback()}
-    _, _, st = p.eval(dict(st, RESN=False))
-    assert (st['PH1'], st['PH0'], st['SX'], st['LCLK']) == (True, True, False, True), st
+    _, _, st = p.eval(dict(st, RESN=False, AWN=False))
+    assert (st['PH1'], st['PH0'], st['SX'], not st['WPHN'], st['AWQN']) == (True, True, False, True, True), st
     sx = st['SX']
-    for k in range(16):
-        _, _, st = p.eval(dict(st, RESN=True))
+    for k in range(24):
+        aw = k % 3 != 1
+        _, _, st = p.eval(dict(st, RESN=True, AWN=not aw))
         ph = st['PH1'] << 1 | st['PH0']
         assert ph == k % 4, (k, st)
         if ph == 0:
             assert st['SX'] != sx, k
             sx = st['SX']
         assert st['SX'] == sx, k
-        assert (st['SCLK'], st['MCLK'], st['LCLK']) == (ph == 0, ph == 2, ph == 3), (k, st)
+        assert (st['SCLK'], st['MCLK'], st['LCLK'], not st['WPHN']) == (ph == 0, ph == 2, ph == 2, ph == 3), (k, st)
+        assert (not st['AWQN']) == (ph == 3 and aw), (k, st)
 
 
 def port_attr(p, name):
@@ -555,6 +575,7 @@ def check_opb(pals):
         assert c['DNW'] == (done and x['OPW'] and not mm), x
         assert (not c['ERRKN']) == (mm or to), x
         assert (nxt['ODN'], nxt['TOR']) == (done or to, to), x
+        assert (not nxt['DNRQN']) == c['DNR'], x
 
 
 def check_stb(pals):
@@ -563,9 +584,9 @@ def check_stb(pals):
     for port in range(16):
         for v in range(1 << 6):
             opv, opw, w16, pa0, doc, ph1 = (bool(v >> k & 1) for k in range(6))
-            for lclk in ((False, True) if ph1 else (False,)):
+            for wph in ((False, True) if ph1 else (False,)):
                 env = {f'OPP{b}': bool(port >> b & 1) for b in range(4)}
-                env.update(OPV=opv, OPW=opw, OPWORD=w16, PA0=pa0, DOC=doc, PH1=ph1, LCLK=lclk)
+                env.update(OPV=opv, OPW=opw, OPWORD=w16, PA0=pa0, DOC=doc, PH1=ph1, WPHN=not wph)
                 c0, _, _ = s0.eval(env)
                 c1, _, _ = s1.eval(env)
                 on = lambda *ps: opv and port in ps
@@ -574,95 +595,127 @@ def check_stb(pals):
                          'ABSN': on(0) and not w16 and not pa0 or on(9) and not w16,
                          'T67N': on(6, 7), 'XSN': on(8, 10, 11, 12, 13, 14, 15)}
                 for k, w in want0.items():
-                    assert (not c0[k]) == w, (k, port, v, lclk)
+                    assert (not c0[k]) == w, (k, port, v, wph)
                 assert c0['WEN'] == (opv and opw), (port, v)
                 want1 = {'SIDN': on(2) and not doc and ph1, 'SI3N': on(3) and ph1, 'SI5N': on(5) and ph1,
-                         'SO4N': on(4) and lclk, 'OE4N': on(4), 'T6WN': on(6) and ph1, 'T7RN': on(7)}
+                         'SO4N': on(4) and wph, 'OE4N': on(4), 'T6WN': on(6) and ph1, 'T7RN': on(7)}
                 for k, w in want1.items():
-                    assert (not c1[k]) == w, (k, port, v, lclk)
+                    assert (not c1[k]) == w, (k, port, v, wph)
 
 
-P1A_IN = ['LCLK', 'FREE', 'OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF', 'ABT', 'ACT', 'RPLD', 'DNM']
+def spec_answer(x, ans, abt):
+    """P1A・P2A の答えの数え方（fabric.md §03）：q0 の縁（WPH：次の縁が q0）の答えはそのスロットの答え（P1R・P2R）。
+    q1〜q3 の縁の答えは預かり（PND）にして、次の q0 の縁で P1R・P2R にする。打切り（q0 の縁だけ）は預かりを捨てる。
+    返す値は（預かり、そのスロットの答え）の次の値。"""
+    if x['WPH']:
+        return False, not abt and (ans or x['PND'])
+    return ans or x['PND'], x['PR']
+
+
+P1A_IN = ['WPH', 'FREE', 'OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF', 'ABT', 'ACT', 'PND', 'DNM', 'PR', 'PM']
 
 
 def spec_p1a(x):
-    """acrtc.rs の 1 回の 16 MHz の縁：NX の port 1 のアクセスが OP に入る縁（SCLK）で DACK を出す。動いていて
-    同期化した DTACK があれば答え、DONE を印にする。打切りは答えより先。答えはスロットの頭の縁で消える。"""
-    start = x['LCLK'] and x['FREE'] and x['OPVD'] and x['NXLG'] and x['NXP0']
-    rep = x['ACT'] and x['DTS'] and not x['ABT']
-    return dict(act=start or x['ACT'] and not x['DTS'] and not x['ABT'], rpld=rep or x['RPLD'] and not x['LCLK'],
-                dnm=x['DNF'] if rep else x['DNM'], p1r=x['RPLD'] or rep,
-                p1m=x['RPLD'] and x['DNM'] or rep and x['DNF'])
+    """acrtc.rs の 1 回の 16 MHz の縁：NX の port 1 のアクセスが OP に入る q0 の縁で DACK を出す。動いていて
+    同期化した DTACK があれば答え、DONE を印にする。打切り（ABT ∧ WPH）は答えより先。"""
+    abt = x['ABT'] and x['WPH']
+    start = x['WPH'] and x['FREE'] and x['OPVD'] and x['NXLG'] and x['NXP0']
+    ans = x['ACT'] and x['DTS'] and not abt
+    pnd, p1r = spec_answer(x, ans, abt)
+    if x['WPH']:
+        p1m = not abt and (ans and x['DNF'] or x['PND'] and x['DNM'])
+    else:
+        p1m = x['PM']
+    return dict(act=start or x['ACT'] and not x['DTS'] and not abt, pnd=pnd, dnm=x['DNF'] if ans else x['DNM'],
+                p1r=p1r, p1m=p1m)
 
 
 def check_p1a(pals):
     p = pals['P1A']
     for v in range(1 << len(P1A_IN)):
         x = bits_env(P1A_IN, v)
-        start = x['LCLK'] and x['FREE'] and x['OPVD'] and x['NXLG'] and x['NXP0']
-        # 届く組：始めるのは、port 1 のアクセスがなく、打ち切るアクセスもない頭だけ
-        if start and (x['ACT'] or x['ABT']):
+        start = x['WPH'] and x['FREE'] and x['OPVD'] and x['NXLG'] and x['NXP0']
+        # 届く組：始めるのは、port 1 のアクセスがなく、打ち切るアクセスもない頭だけ。答えを預かっているときは、
+        # DACK を戻している
+        if start and (x['ACT'] or x['ABT']) or x['PND'] and x['ACT']:
             continue
-        env = {k: x[k] for k in ('LCLK', 'OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF')}
-        env.update(OPLDN=not x['FREE'], ABTN=not x['ABT'], DACKN=not x['ACT'], RPLDN=not x['RPLD'],
-                   DNMN=not x['DNM'])
-        c, _, nxt = p.eval(env)
+        env = {k: x[k] for k in ('OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF')}
+        env.update(WPHN=not x['WPH'], OPLDN=not x['FREE'], ABQN=not (x['ABT'] and x['WPH']), DACKN=not x['ACT'],
+                   PNDN=not x['PND'], DNMN=not x['DNM'], P1RN=not x['PR'], P1MN=not x['PM'])
+        _, _, nxt = p.eval(env)
         w = spec_p1a(x)
-        assert (not nxt['DACKN'], not nxt['RPLDN'], not nxt['DNMN']) == (w['act'], w['rpld'], w['dnm']), x
-        assert (not c['P1RN'], not c['P1MN']) == (w['p1r'], w['p1m']), x
+        got = dict(act=not nxt['DACKN'], pnd=not nxt['PNDN'], dnm=not nxt['DNMN'], p1r=not nxt['P1RN'],
+                   p1m=not nxt['P1MN'])
+        assert got == w, (x, got, w)
 
 
-P2A_IN = ['SYN1', 'LA', 'OPP0', 'OPW', 'ABT', 'LCLK', 'MCLK', 'BW', 'SYN2', 'S1', 'S0', 'RDH', 'RPL']
+P2A_IN = ['SYN1', 'LA', 'OPP0', 'OPW', 'ABT', 'WPH', 'BW', 'SYN2', 'S1', 'S0', 'RDH', 'PND', 'PR']
 
 
 def spec_p2a(x):
     """doc.rs の ff_edge と abort の 1 回の 16 MHz の縁。段（S1・S0）は 空き 00、窓を待つ 01、窓を取った 11、
-    取った読出しを捨てる 10。打切り（abort）が先、次に窓の終わり（E の立下り）で預かりを空け、空いていれば
-    Fabric のアクセスをラッチし（書込みはすぐ答える）、E の立下りで窓を取る（ブリッジが先）。
+    取った読出しを捨てる 10。打切り（abort。ABT ∧ WPH）が先、次に窓の終わり（E の立下り）で預かりを空け、空いて
+    いて、答えを預かっても数えてもいなければ Fabric のアクセスをラッチし（LDQ。書込みはすぐ答える）、E の立下りで
+    窓を取る（ブリッジが先）。答えは spec_answer。
     doc.rs と違う点：取った後の読出しの打切りは、E が上がる前でも捨てる（P2A は E の立上りを知らない。OI-089）。"""
     fell = x['SYN2'] and not x['SYN1']
+    abt = x['ABT'] and x['WPH']
     s1, s0, rdh = x['S1'], x['S0'], x['RDH']
-    if x['ABT'] and rdh:
-        if (s1, s0) == (False, True):
-            s0 = False
-        elif (s1, s0) == (True, True):
-            s0 = False
-    rel = fell and s1
-    reply = False
-    live_read = False
-    if rel:
-        reply = live_read = s0 and rdh
+    if abt and rdh and s0:
+        s0 = False
+    ans = live = False
+    if fell and s1:
+        ans = live = s0 and rdh
         s1 = s0 = False
-    queued = x['LA'] and not x['OPP0'] and not x['ABT'] and not x['RPL'] and not live_read
-    lat = queued and not s1 and not s0
+    lat = (x['LA'] and not x['OPP0'] and not abt and not x['PND'] and not x['PR'] and not live
+           and not s1 and not s0)
     if lat:
         s0, rdh = True, not x['OPW']
-        reply = reply or x['OPW']
+        ans = ans or x['OPW']
     if fell and not x['BW'] and (s1, s0) == (False, True):
         s1 = True
-    return dict(syn2=x['SYN1'], s1=s1, s0=s0, rdh=rdh, rpl=reply or x['RPL'] and not x['LCLK'], lat=lat,
-                p2r=x['RPL'] or x['MCLK'] and reply)
+    pnd, p2r = spec_answer(x, ans, abt)
+    return dict(syn2=x['SYN1'], s1=s1, s0=s0, rdh=rdh, pnd=pnd, p2r=p2r, ldq=lat)
+
+
+def p2a_reachable(x):
+    """P2A の届く組。E の 1 周期は 16 MHz の 8 周期以上（DOC の CLK は 16 MHz 以下）とする。"""
+    fell = x['SYN2'] and not x['SYN1']
+    a = x['LA'] and not x['OPP0']
+    held = x['S1'] or x['S0']
+    pr = x['PND'] or x['PR']
+    if x['S1'] and not x['S0'] and not x['RDH']:
+        return False          # 捨てる段（10）は読出しだけ
+    if fell and x['S1'] and pr:
+        return False          # 窓の終わりの縁では、答えはもう数えた（ラッチから E の 1 周期以上）
+    if x['PND'] and x['PR'] or pr and not a:
+        return False          # 答えを預かるか数えている間は、OP はそのアクセスのまま
+    if pr and held and x['RDH']:
+        return False          # 読出しを預かっている間は、答えはない
+    if x['PR'] and x['ABT'] and x['WPH']:
+        return False          # 数えたスロットの次の頭は、ODN があるので打ち切らない
+    if held and x['RDH'] and x['S0'] and not (a and not x['OPW']):
+        return False          # 捨てていない、預かった読出しは OP のアクセス
+    return True
 
 
 def check_p2a(pals):
     p = pals['P2A']
     for v in range(1 << len(P2A_IN)):
         x = bits_env(P2A_IN, v)
-        # 届く組：LCLK と MCLK は同時にない。捨てる段（10）は読出しだけ。窓の終わりの縁では、このスロットの答え
-        # はまだない（ラッチから窓の終わりまで E の 1 周期以上）
-        if x['LCLK'] and x['MCLK'] or x['S1'] and not x['S0'] and not x['RDH']:
+        if not p2a_reachable(x):
             continue
-        if x['RPL'] and x['S1'] and x['SYN2'] and not x['SYN1']:
-            continue
-        env = {k: x[k] for k in ('SYN1', 'OPP0', 'OPW', 'LCLK', 'MCLK')}
-        env.update(LAN=not x['LA'], ABTN=not x['ABT'], BWN=not x['BW'], SYN2N=not x['SYN2'], S1N=not x['S1'],
-                   S0N=not x['S0'], RDHN=not x['RDH'], RPLN=not x['RPL'])
-        c, _, nxt = p.eval(env)
+        env = {k: x[k] for k in ('SYN1', 'OPP0', 'OPW')}
+        env.update(LAN=not x['LA'], ABQN=not (x['ABT'] and x['WPH']), WPHN=not x['WPH'], BWN=not x['BW'],
+                   SYN2N=not x['SYN2'], S1N=not x['S1'], S0N=not x['S0'], RDHN=not x['RDH'], PNDN=not x['PND'],
+                   P2RN=not x['PR'])
+        _, _, nxt = p.eval(env)
         w = spec_p2a(x)
         got = dict(syn2=not nxt['SYN2N'], s1=not nxt['S1N'], s0=not nxt['S0N'], rdh=not nxt['RDHN'],
-                   rpl=not nxt['RPLN'], lat=not c['LATN'], p2r=not c['P2RN'])
-        for k in got:
-            assert got[k] == w[k], (k, x)
+                   pnd=not nxt['PNDN'], p2r=not nxt['P2RN'], ldq=not nxt['LDQN'])
+        if not (w['s1'] or w['s0']):
+            del got['rdh'], w['rdh']    # 空き（00）の RDH は使わない
+        assert got == w, (x, got, w)
 
 
 def spec_hdec(off, fcs, uds, lds, rw):
@@ -709,7 +762,8 @@ def check_hack(pals):
         c, _, nxt = p.eval(env)
         ak = x['AREQ'] and (x['HG'] and x['MCLK'] or x['AK'])
         assert (not nxt['AKN']) == ak, x
-        assert c['HREQ'] == (x['AREQ'] and not x['AK']), x
+        # 許可のスロット（AOP＝001）の頭から下げる。次の SCLK の縁で ELG が見る値は AREQ ∧ ¬AK と同じ
+        assert c['HREQ'] == (x['AREQ'] and not x['AK'] and not x['HG']), x
         assert (not c['DTKN']) == (x['VLD'] or x['AK'] and x['AREQ'] or x['BDT']), x
         fell = x['SYN2'] and not x['SYN1']
         st = 'C' if x['BC'] else 'W' if x['BW'] else 'D' if x['BDT'] else 'I'

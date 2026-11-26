@@ -178,6 +178,9 @@ pub struct AcrtcBridge {
     active: bool,
     /// このスロットで終わったアクセス（読んだ語、DONE）。
     reply: Option<(u16, bool)>,
+    /// `reply` が来た 16 MHz の縁（0〜3 が q0〜q3）。q1〜q3 なら P1A が預かり、次のスロットに数える（DR-091）。
+    #[serde(default)]
+    reply_edge: u8,
     /// DACK を出したスロットの数（統計）。
     pub dack_slots: u64,
     /// 映像の出力段（パレット、画面、映像の割込み）。
@@ -235,6 +238,7 @@ impl AcrtcBridge {
             rdy1: false,
             active: false,
             reply: None,
+            reply_edge: 0,
             dack_slots: 0,
             video: Video::new(),
             period21: PERIOD_21M,
@@ -328,6 +332,11 @@ impl AcrtcBridge {
         }
     }
 
+    /// このスロットの答えが来た 16 MHz の縁（0〜3 が q0〜q3。答えがなければ 0）。
+    pub fn reply_edge(&self) -> u8 {
+        self.reply_edge
+    }
+
     /// Fabric がアクセスを打ち切った（時間切れ、STOP）。次のスロットの頭で DACK を戻す。
     pub fn abort(&mut self) {
         if self.active {
@@ -340,6 +349,7 @@ impl AcrtcBridge {
     pub fn run_slot(&mut self, t0: Time, starting: Option<&Access>) {
         let end = t0 + SLOT;
         self.reply = None;
+        self.reply_edge = 0;
         if let Some(a) = starting {
             self.active = true;
             self.bus_write = a.dir == Dir::Write;
@@ -421,6 +431,7 @@ impl AcrtcBridge {
                 self.acrtc.dma_data()
             };
             self.reply = Some((v, done));
+            self.reply_edge = q as u8;
             self.dack.set(false, t + T_OUT);
         }
     }

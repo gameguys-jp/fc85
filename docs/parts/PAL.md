@@ -54,6 +54,11 @@
 | 日立の HD74LS | 1985年以前の日立の TTL の本は、bitsavers・archive.org に見つからない [V] | — |
 | 74LS 系の AC 特性 | 74LS374 CLK→Q 28、tSU 20。74LS377 CLK→Q 27、/EN の準備 25。74LS173 tPZL 27。74LS157 選択 27。74LS151 選択→Y 43。74LS74 CLK→Q 25/40。74LS175 CLK→Q 25。74LS393 A→QD 60。いずれも VCC 5 V、25 °C の最大値 | [D TITTL85V2 p.3-1024, 3-1036, 3-688, 3-594, 3-567, 3-302, 3-693, 3-1061] |
 | 74S189、74S283、63S281A | 74S189 tAA 35、tWP 25、tDSW 25（0〜70 °C）。74S283 A・B→C4 12、C0→C4 11、C0→Σ 18。63S281A tAA 28 | [D NS83IBL p.22-4, 22-5, 22-7]、[D TITTL85V2 p.3-921]、[D MMI85 p.3-18] |
+| 74S02、74S30、74S32、74S157（2026-11-27 追記） | 74S02 5.5（tPLH・tPHL）。74S30 6（tPLH）・7（tPHL）。74S32 7（tPLH）。74S157 データ→Y 7.5、選択→Y 15。ICC の典型・最大（ICCH と ICCL の平均）は 74S02 22・37、74S30 4・8、74S32 28・50、74S157 50・78 mA。いずれも VCC 5 V、25 °C | [D TITTL85V2 p.3-22, 3-146, 3-155, 3-595] |
+| 74LS670（2026-11-27 追記） | 読出しの番地→Q 45、読出しの許可→出力の禁止 35 | [D TITTL85V2 p.3-1273] |
+| 74ALS534（2026-11-27 追記） | 74ALS534A：tSU 10、tH 0（0〜70 °C）。CLK→Q 16、tPZL 18 は、走査の表の列の読み方が確かでない [V]。1984年の第 1 巻の索引に載る | [D TITTL84V1 p.3-131] |
+| 74F377（2026-11-27 追記） | fMAX 80、CP→Q 11（tPLH）・12（tPHL）、tSU（D・/CE）3、tH（D・/CE）1、クロックの Low の幅 4（0〜70 °C）。Fairchild の 1985年の本は 25 °C の典型だけで、商用の範囲の欄は空き | [D SIGFAST84 p.5-286, 5-287]、[D FSFAST85 p.4-237] |
+| 登録の出力の帰還（2026-11-27 追記） | 登録の PAL の出力を同じ PAL の組合せの出力に使うと、遅れは tCO＋tPD（A 品で 15＋25＝40）。資料は帰還の遅れを別に書かない（推定） | — |
 
 ## 資料
 
@@ -64,7 +69,7 @@
 | MMIPAL83 | A | MMI PAL Handbook, 3rd ed.；3-3、3-7、3-10、3-12、3-13、3-15〜3-18 | 1983 | …/mmi/_dataBooks/1983_MMI_PAL_Handbook_3ed.pdf |
 | MMI85 | B | MMI LSI Databook, 6th ed.；3-17〜3-19、5-20、5-28〜5-34、7-17〜7-19、15-2、15-7 | 1985 | …/mmi/_dataBooks/1985_MMI_LSI_Databook_6ed.pdf |
 | MMIPAL86 | C | MMI PAL/PLE Handbook, 5th ed.；2-26〜2-28、2-75、PDF99 | 1986 | …/mmi/_dataBooks/1986_MMI_PAL_PLE_Handbook_5ed.pdf |
-| TITTL84V1 | A | TI The TTL Data Book Vol. 1；索引だけ | 1984 | …/ti/_dataBooks/1984_TI_The_TTL_Data_Book_Vol_1.pdf |
+| TITTL84V1 | A | TI The TTL Data Book Vol. 1；索引、3-131（2026-11-27） | 1984 | …/ti/_dataBooks/1984_TI_The_TTL_Data_Book_Vol_1.pdf |
 | TITTL85V2 | B | TI The TTL Data Book Vol. 2；上の表の頁 | 1985 | …/ti/_dataBooks/1985_TI_The_TTL_Data_Book_Vol_2.pdf |
 | TITTL85V4 | B | TI The TTL Data Book Vol. 4（SDZD001）；索引、3-3、3-17、3-35、3-37、3-46、3-47 | 1985 | https://archive.org/details/texas-instruments-the-ttl-data-book-volume-4-bipolar-programmable-logic-and-memory-1985 |
 | TITTL86V4 | C | TI The TTL Data Book Vol. 4（SDZD001B）；PDF57–58、71–72、85–86、114–117 | 1986 | …/ti/_dataBooks/1986_TI_The_TTL_Data_Book_Vol_4.pdf |
@@ -73,3 +78,5 @@
 | NSLOG84V1 | A | National Logic Databook Vol. 1；74LS534 がないことの確認 | 1984 | …/national/_dataBooks/1984_National_Logic_Databook_Volume_1.pdf |
 | AMDBMLI85 | B | AMD Bipolar Microprocessor Logic and Interface；12-7、12-8 | 1985 | …/amd/_dataBooks/1985_AMD_Bipolar_Microprocessor_Logic_and_Interface.pdf |
 | MOTSTTL83 | A | Motorola Schottky TTL Data；索引、PDF628 | 1983 | …/motorola/_dataBooks/1983_Motorola_Schottky_TTL_Data.pdf |
+| SIGFAST84 | A | Signetics FAST Data Manual；5-284〜5-287（2026-11-27） | 1984 | …/signetics/_dataBooks/1984_Signetics_FAST_Data_Manual.pdf |
+| FSFAST85 | B | Fairchild FAST Data Book；4-235〜4-237（2026-11-27） | 1985 | …/fairchild/_dataBooks/1985_Fairchild_FAST_Data_Book.pdf |

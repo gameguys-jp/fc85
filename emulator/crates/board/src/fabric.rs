@@ -230,6 +230,12 @@ pub trait Ports {
     fn continue_access(&mut self, _port: u8) -> PortReply {
         PortReply::Done(0)
     }
+    /// 延びたアクセスの、このスロットの答えが来た 16 MHz の縁（0〜3 が q0〜q3）。`access`・`continue_access`
+    /// が答えを返した後に問う。q0 の縁の答えはこのスロットに、q1〜q3 の縁の答えは次のスロットに数える
+    /// （P1A・P2A の預かり。fabric.md §03、DR-091）。
+    fn reply_edge(&self, _port: u8) -> u8 {
+        0
+    }
     /// 延びたアクセスを打ち切る（時間切れ、STOP）。
     fn abort_access(&mut self, _port: u8) {}
     /// DOC 子基板があるか（MODULES の bit 2）。
@@ -472,6 +478,10 @@ struct Active {
     result: Option<u16>,
     /// ポートが最後の語の印（DONE）を出した。
     end_mark: bool,
+    /// q1〜q3 の縁で来た答え（値、DONE の印）。P1A・P2A が預かり、次のスロットの頭（q0 の縁）でそのスロットの
+    /// 答えにする。打ち切ると捨てる（DR-091）。
+    #[serde(default)]
+    held: Option<(u16, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -700,6 +710,7 @@ impl Fabric {
         if let Some(a) = self.active
             && a.acc.ch == c8
         {
+            // 数えていない延びたアクセスは打ち切る。預かった答え（held）も捨てる（P1A・P2A の q0 の縁の ABQ）
             if a.kind == Kind::Long && a.result.is_none() {
                 self.abort = Some(a.acc.port);
             }
@@ -765,20 +776,29 @@ impl Fabric {
         let mut slot_flag = false;
         if let Some(mut a) = self.active.take() {
             slot_flag = a.flag;
-            let reply = if a.elapsed == 0 {
+            // 前のスロットの q1〜q3 の縁で来た答えは、このスロットの答え（P1R・P2R が q0 の縁で取る）
+            let held = a.held.take();
+            let reply = if let Some((v, last)) = held {
+                Some(if last {
+                    PortReply::Last(v)
+                } else {
+                    PortReply::Done(v)
+                })
+            } else if a.elapsed == 0 {
                 Some(ports.access(&a.acc))
             } else if a.kind == Kind::Long && a.result.is_none() {
                 Some(ports.continue_access(a.acc.port))
             } else {
                 None
             };
-            match reply {
-                Some(PortReply::Done(v)) => a.result = Some(v),
-                Some(PortReply::Last(v)) => {
+            if let Some(r @ (PortReply::Done(v) | PortReply::Last(v))) = reply {
+                let last = matches!(r, PortReply::Last(_));
+                if a.kind == Kind::Long && held.is_none() && ports.reply_edge(a.acc.port) > 0 {
+                    a.held = Some((v, last));
+                } else {
                     a.result = Some(v);
-                    a.end_mark = true;
+                    a.end_mark = last;
                 }
-                _ => {}
             }
             a.elapsed += 1;
             let finished = match a.kind {
@@ -882,6 +902,7 @@ impl Fabric {
             flag: attr & ATR_FLAG != 0,
             result: None,
             end_mark: false,
+            held: None,
         }
     }
 

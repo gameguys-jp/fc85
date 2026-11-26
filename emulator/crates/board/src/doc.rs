@@ -407,6 +407,10 @@ pub struct DocBoard {
     /// 打ち切った後で、答えを捨てる。
     discard: bool,
     reply: Option<u16>,
+    /// このスロットで `reply` が来た 16 MHz の縁（0〜3 が q0〜q3）。q1〜q3 なら P2A が預かり、次のスロットに
+    /// 数える（DR-091）。
+    #[serde(default)]
+    reply_edge: u8,
     /// DOC のサイクルの数。
     pub cycles: u64,
     /// 最後に訪れたオシレータの読出しと、最後の SIG±。
@@ -528,6 +532,7 @@ impl DocBoard {
             op_done: None,
             discard: false,
             reply: None,
+            reply_edge: 0,
             cycles: 0,
             last_osc: None,
             last_sig: 0,
@@ -673,6 +678,11 @@ impl DocBoard {
         }
     }
 
+    /// このスロットの答えが来た 16 MHz の縁（0〜3 が q0〜q3。答えがなければ 0）。
+    pub fn reply_edge(&self) -> u8 {
+        self.reply_edge
+    }
+
     /// 打ち切り（時間切れ、STOP）。
     pub fn abort(&mut self) {
         self.reply = None;
@@ -714,6 +724,7 @@ impl DocBoard {
                 at: t0 + T_OUT,
             });
         }
+        self.reply_edge = 0;
         let mut q = 0;
         loop {
             let ff = (q < 4).then(|| t0 + q * PERIOD_16M);
@@ -731,7 +742,11 @@ impl DocBoard {
                 (None, None) => break,
                 (Some(f), Some(e)) if e <= f => self.e_edge(e, rise == Some(e)),
                 (Some(f), _) => {
+                    let had = self.reply.is_some();
                     self.ff_edge(f);
+                    if !had && self.reply.is_some() {
+                        self.reply_edge = q as u8;
+                    }
                     q += 1;
                 }
                 (None, Some(e)) => self.e_edge(e, rise == Some(e)),

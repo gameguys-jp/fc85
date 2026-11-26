@@ -73,7 +73,7 @@ impl Compare for FabricPorts {
 }
 
 /// 網羅の目安：突き合わせたスロットのうち、それぞれのことが起きた数。
-const COVER: [&str; 27] = [
+const COVER: [&str; 31] = [
     "スロット",
     "アクセス",
     "Start",
@@ -88,6 +88,10 @@ const COVER: [&str; 27] = [
     "延びたアクセス",
     "port 1 の延びたアクセスが終わる",
     "port 2 の延びたアクセスが終わる",
+    "答え q0",
+    "答え q1",
+    "答え q2",
+    "答え q3",
     "時間切れ（port 1）",
     "時間切れ（port 2）",
     "DONE の印の食い違い",
@@ -204,6 +208,13 @@ impl<P: Compare> Lock<P> {
         self.count("port 1 の延びたアクセスが終わる", long_done(1));
         self.count("port 2 の延びたアクセスが終わる", long_done(2));
         let ev = self.g.events();
+        // 延びたアクセスの答えが来た縁（q0 はそのスロット、q1〜q3 は次のスロットに数える。DR-091）
+        for (q, name) in ["答え q0", "答え q1", "答え q2", "答え q3"]
+            .iter()
+            .enumerate()
+        {
+            self.count(name, ev.answer_edge == Some(q as u8));
+        }
         self.count("時間切れ（port 1）", ev.timeout == Some(1));
         self.count("時間切れ（port 2）", ev.timeout == Some(2));
         self.count("DONE の印の食い違い", ev.mark_mismatch);
@@ -551,6 +562,8 @@ struct MockPorts {
     max_wait: u64,
     /// port 1 が最後の語の印を出す割合（n 回に 1 回）。
     mark_one_in: u64,
+    /// 延びたアクセスの最後の答えが来た 16 MHz の縁（0〜3）。始めたスロットでは q1〜q3。
+    edge: u8,
 }
 
 impl MockPorts {
@@ -574,6 +587,7 @@ impl MockPorts {
             trig: 0,
             max_wait,
             mark_one_in,
+            edge: 0,
         }
     }
 
@@ -643,6 +657,8 @@ impl Ports for MockPorts {
             (1, _) | (2, _) if a.port == 1 || self.doc => {
                 let wait = self.rng.below(self.max_wait) as u32;
                 if wait == 0 {
+                    // 始めたスロットの答えは q1〜q3（P1A・P2A は q0 の縁の後にアクセスを見る）
+                    self.edge = 1 + self.rng.below(3) as u8;
                     return self.reply(a.port, v);
                 }
                 let mark = a.port == 1 && self.rng.one_in(self.mark_one_in);
@@ -664,6 +680,7 @@ impl Ports for MockPorts {
                     let m = *mark;
                     self.long = None;
                     let v = self.rng.next() as u16;
+                    self.edge = self.rng.below(4) as u8;
                     return if m {
                         PortReply::Last(v)
                     } else {
@@ -674,6 +691,9 @@ impl Ports for MockPorts {
             }
             _ => PortReply::Wait,
         }
+    }
+    fn reply_edge(&self, _port: u8) -> u8 {
+        self.edge
     }
     fn abort_access(&mut self, port: u8) {
         self.log.push(Call::Abort(port));

@@ -8,15 +8,18 @@
 //!
 //! 門の模型にした部分：TIM、CST、ELG、SEQ、ELS、EVT、ADC、CHS×2、STS×2、AFC0–1、RDY、DPA、
 //! アクセスの制御（OPA、OPB、NX・OP のレジスタ、U38 の 74LS163）、CPU の窓（HDEC0–1、HACK、U5–U6 の
-//! 74LS138、PRST）、変換部（DR-084）、A ファイル（74S189）と加算器（74LS283）、PS・PD、IL、トリガの
-//! 発生源の選択（74LS151）と同期化の 1 段目（U36）。
+//! 74LS138、PRST）、変換部（DR-084）、A ファイル（74S189）と語の bit 0 の選択（U64）、加算器（74LS283）、
+//! 0 の検出（DR-091）、PS・PD、IL、トリガの発生源の選択（74LS151）と同期化の 1 段目（U36）。
 //! ポートの向こう（P1A、P2A、STB、FIFO、ACRTC と DOC）は `Ports` の模型が受け持つ。P1A・P2A・STB の式は
 //! fabric_logic.py が、ポートの模型（acrtc.rs、doc.rs）の 16 MHz の縁と突き合わせる。
 //! 時間切れの打切りは、OPB の TOR が次の頭で P1A・P2A に届く。動作の模型と同じく、時間切れのスロットで
-//! `abort_access` を呼ぶ（ポートの模型は、次のスロットの頭で効かせる）。
+//! `abort_access` を呼ぶ（ポートの模型は、次のスロットの頭で効かせる）。延びたアクセスの答えは、q0 の縁なら
+//! そのスロットに、q1〜q3 の縁なら預かって（P1A・P2A の PND）次のスロットに数える（`Ports::reply_edge`、
+//! DR-091）。頭の打切り（ABQ）は預かった答えを捨てる。
 //!
-//! クロック（fabric.md §03）：TIM が 16 MHz の縁を数え、SCLK（スロットの頭）で SEQ・OPA と NX・OP、MCLK
-//! （中ほど）で RDY、LCLK（4 分の 3）で OPB・CHS・STS・ELS・U36・U38 と A ファイルの書込み。CPU の書込みの
+//! クロック（fabric.md §03）：TIM が 16 MHz の縁を数え、SCLK（スロットの頭）で SEQ・AFC0–1・OPA と NX・OP、
+//! q2 の縁で MCLK（RDY）と LCLK（OPB・CHS・STS・ELS・U38・U36、A ファイルの読みの取込み：PS・PD・U7–U8・
+//! SL）、q3（WPH）で A ファイルの書込みと HACK の AK。CPU の書込みの
 //! うち START・STOP と STATUS の W1C は要求の FF（74LS74）に入り、次の LCLK で効いて消える。CPU の 2 回の
 //! アクセスの間には 1 スロット以上ある（68000 のバスサイクルは 4 クロック＝2 スロット）とする。同じ
 //! スロットの間の書込みと読出しでは、動作の模型（書込みがすぐ効く）と STATUS の値が違う。CPU のアクセスは
@@ -33,10 +36,21 @@ use fc85_board::fabric::{
     SlotRecord, atr, fd_value,
 };
 use fc85_board::fabric_pal::{
-    ATR_FLAG, ATR_OKD, ATR_OKN, ATR_TWO, ATR_W16, ChsOut, CstOut, HackOut, Hdec0Out, Hdec1Out,
-    StsOut, adc, afc0, afc1, chs, cst, dpa, elg, els, evt, hack, hdec0, hdec1, opa, opb, prst, rdy,
-    seq, sts, tim,
+    ATR_FLAG, ATR_OKD, ATR_OKN, ATR_TWO, ATR_W16, Afc0Out, Afc1Out, ChsOut, CstOut, HackOut,
+    Hdec0Out, Hdec1Out, StsOut, adc, afc0, afc1, chs, cst, dpa, elg, els, evt, hack, hdec0, hdec1,
+    opa, opb, prst, rdy, seq, sts, tim,
 };
+
+/// AFC0（PAL20R6A、SCLK）のレジスタ。ピンの値（負の論理）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Afc0Regs {
+    aa3n: bool,
+    aa2n: bool,
+    aa1n: bool,
+    ar0n: bool,
+    aw0n: bool,
+    awn: bool,
+}
 
 /// CHS（PAL20R6A）のレジスタ。ピンの値（負の論理）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +105,24 @@ struct TimRegs {
     sclk: bool,
     mclk: bool,
     lclk: bool,
+    /// q3 の間 Low（次の縁が q0）。
+    wphn: bool,
+    /// A ファイルの書込みの相（AWN のとき q3 の間 Low。/AWE ＝ AWQN ∨ C16）。
+    awqn: bool,
+}
+
+impl TimRegs {
+    fn of(t: fc85_board::fabric_pal::TimOut) -> Self {
+        Self {
+            ph: t.ph,
+            sx: t.sx,
+            sclk: t.sclk,
+            mclk: t.mclk,
+            lclk: t.lclk,
+            wphn: t.wphn,
+            awqn: t.awqn,
+        }
+    }
 }
 
 /// Data Fabric の門の模型。
@@ -102,6 +134,13 @@ pub struct GateFabric {
     /// A ファイル（74S189×4、16 語）。語は ch×8＋（0 SRC の設定値、1 作業値、2 DST の設定値、3 作業値、
     /// 4 COUNT の設定値、5 作業値）。
     afile: [u16; 16],
+    // AFC0・AFC1（SCLK）
+    afc0: Afc0Regs,
+    afc1: Afc1Out,
+    /// SL（74ALS534×2）：LCLK で取り込んだ和。
+    sl: u16,
+    /// U7–U8（74LS534×2）：CPU の読出しで LCLK に取り込んだ A バス。
+    u78: u16,
     ps: u16,
     pd: u16,
     il: u16,
@@ -133,6 +172,8 @@ pub struct GateFabric {
     acc: Access,
     /// port 9 の 1 スロット目に A 基板が出した値（2 スロット目の終わりに IL が取り込む）。
     two_data: u16,
+    /// P1A・P2A が預かった答え（q1〜q3 の縁で来た値と DONE の印）。次の q0 の縁で P1R・P2R になる。
+    pnd: Option<(u16, bool)>,
     // ELS（LCLK）
     infn: bool,
     q1n: bool,
@@ -154,7 +195,7 @@ pub struct GateFabric {
     wmq: [bool; CHANNELS],
     /// CPU の A ファイルのアクセス（HDEC の AREQ の間）。
     hreq: Option<HostReq>,
-    /// HACK の AK（負の論理）：許可のスロットの LCLK で立ち、CPU のサイクルが終わると消える。
+    /// HACK の AK（負の論理）：許可のスロットの q3 の縁で立ち、CPU のサイクルが終わると消える。
     akn: bool,
     trig_in: u8,
     /// このスロットで起きたこと（試験の網羅の目安）。
@@ -170,6 +211,8 @@ pub struct SlotEvents {
     pub timeout: Option<u8>,
     /// port 1 の DONE の印が、要素が最後かと食い違った（OPB の ERRK の印の項）。
     pub mark_mismatch: bool,
+    /// 延びたアクセスの答えがポートから来た 16 MHz の縁（0〜3 が q0〜q3）。
+    pub answer_edge: Option<u8>,
 }
 
 impl Default for GateFabric {
@@ -223,18 +266,31 @@ impl GateFabric {
             staln: true,
         };
         // TIM：RESN の縁の後（q3、X）。
-        let r = tim(false, 0, false);
+        let r = tim(false, true, 0, false);
         Self {
             slot: 0,
-            tim: TimRegs {
-                ph: r.ph,
-                sx: r.sx,
-                sclk: r.sclk,
-                mclk: r.mclk,
-                lclk: r.lclk,
-            },
+            tim: TimRegs::of(r),
             regs: Default::default(),
             afile: [0; 16],
+            afc0: Afc0Regs {
+                aa3n: true,
+                aa2n: true,
+                aa1n: true,
+                ar0n: true,
+                aw0n: true,
+                awn: true,
+            },
+            afc1: Afc1Out {
+                benn: true,
+                ba: 3,
+                sloen: true,
+                hwoen: true,
+                pscn: true,
+                pdcn: true,
+                hrcn: true,
+            },
+            sl: 0,
+            u78: 0,
             ps: 0,
             pd: 0,
             il: 0,
@@ -265,6 +321,7 @@ impl GateFabric {
                 data: 0,
             },
             two_data: 0,
+            pnd: None,
             infn: true,
             q1n: true,
             q0n: true,
@@ -316,6 +373,7 @@ impl GateFabric {
             true,
             k.p1n,
             k.p0n,
+            true,
             t.syn2n,
             t.risen,
             t.armn,
@@ -373,7 +431,7 @@ impl GateFabric {
         (h0, h1)
     }
 
-    /// HACK の今の値（Fabric の窓の側。DOC のブリッジの側は使わない）。`mclk` は次の縁が LCLK か。
+    /// HACK の今の値（Fabric の窓の側。DOC のブリッジの側は使わない）。`mclk` は次の縁が q3 か。
     fn hack_now(&self, mclk: bool) -> HackOut {
         hack(
             self.hreq.is_none(),
@@ -522,16 +580,27 @@ impl GateFabric {
 
     // ------------------------------------------------------------------ スロット
 
-    /// TIM の 1 回の 16 MHz の縁。
+    /// TIM の 1 回の 16 MHz の縁。AWN は AFC0 のレジスタ。
     fn tim_edge(&mut self) {
-        let t = tim(true, self.tim.ph, self.tim.sx);
-        self.tim = TimRegs {
-            ph: t.ph,
-            sx: t.sx,
-            sclk: t.sclk,
-            mclk: t.mclk,
-            lclk: t.lclk,
-        };
+        self.tim = TimRegs::of(tim(true, self.afc0.awn, self.tim.ph, self.tim.sx));
+    }
+
+    /// AFC0 の組合せの出力（CIN）。AFC0 のレジスタだけで決まるので、ほかの入力は何でもよい。
+    fn afc0_now(&self) -> Afc0Out {
+        let f = &self.afc0;
+        afc0(
+            true, true, true, true, true, true, false, 0, true, f.aa2n, f.ar0n,
+        )
+    }
+
+    /// A ファイルの語の bit 0（U64、74S157）：PH1 で、q0〜q1 は AFC0 の AR0N（読み）、q2〜q3（`write`）は
+    /// AW0N（書き）を選ぶ。
+    fn aa0n(&self, write: bool) -> bool {
+        if write {
+            self.afc0.aw0n
+        } else {
+            self.afc0.ar0n
+        }
     }
 
     /// CST の今の出力。
@@ -581,11 +650,11 @@ impl GateFabric {
 
     pub fn step_slot<P: Ports + ?Sized>(&mut self, ports: &mut P) -> SlotRecord {
         let doc = ports.doc_present();
-        // TIM：q0 の縁の前は LCLK（次の縁がスロットの頭）。
-        debug_assert!(self.tim.lclk);
+        // TIM：q0 の縁の前は WPH（q3。次の縁がスロットの頭）。
+        debug_assert!(!self.tim.wphn);
 
         // STOP の要求のあるチャネルの延びたアクセスの打切り（OPA の ABT の STOP の項）。P1A・P2A は
-        // この頭の縁で効かせる。時間切れの打切り（TOR）は、前のスロットで済んでいる。
+        // この頭の縁で効かせる（ABQ ＝ ABT∧WPH）。時間切れの打切り（TOR）は、前のスロットで済んでいる。
         self.ev = SlotEvents::default();
         if !self.opa_now(false).abtn {
             ports.abort_access(self.op.port);
@@ -596,6 +665,14 @@ impl GateFabric {
         //    よいか（CD）。DPA：判断バスのポートの属性と FB（OP と、入る NX の FLAG）。
         let o = self.opa_now(self.tor);
         let free = !o.opldn;
+        // 打切り（ABQ）は、P1A・P2A が預かった答えを捨てる
+        if !o.abtn {
+            self.pnd = None;
+        }
+        debug_assert!(
+            self.pnd.is_none() || !free,
+            "預かった答えのアクセスは、数えるまで OP にある"
+        );
         debug_assert!(!self.nx.v || free, "NX が有効なら、OP はこの頭で空く");
         // DPA の X は TIM の SX のピン：縁の前は前のスロットが S、つまり縁の後のスロットが X。
         let x = self.tim.sx;
@@ -618,7 +695,7 @@ impl GateFabric {
             dp.addrs, dp.sokd, o.cd, hreq, dp.addrd,
         );
 
-        // SCLK の縁：TIM、SEQ、OPA の登録、OP ← NX（空いていれば。有効は OPVD）、NX ← 判断バス。
+        // SCLK の縁：TIM、SEQ、AFC0–1、OPA の登録、OP ← NX（空いていれば。有効は OPVD）、NX ← 判断バス。
         self.tim_edge();
         debug_assert!(self.tim.sclk && self.tim.ph == 0);
         let s = self.tim.sx;
@@ -628,6 +705,25 @@ impl GateFabric {
             g.ac2n, g.ac1n, g.ac0n, g.grn, g.gwn, g.keepn, k.ck1n, k.ck0n, k.crldn, k.orldn,
             k.orunn, hold, self.dbchn,
         );
+        // AFC0–1：SEQ と同じ入力（AC、CK、次の ACH ＝ 縁の前の DBCH）と、CPU の窓の番地（bit 6 がチャネル、
+        // bit 3・2 が語）と向き
+        let (hch, ha, hrw) = match self.hreq {
+            Some(h) => (h.ch == 1, h.reg as u32 & 0x0C, h.write.is_none()),
+            None => (false, 0, true),
+        };
+        let f = self.afc0;
+        let a0 = afc0(
+            g.ac2n, g.ac1n, g.ac0n, k.ck1n, k.ck0n, self.dbchn, hch, ha, hrw, f.aa2n, f.ar0n,
+        );
+        self.afc0 = Afc0Regs {
+            aa3n: a0.aa3n,
+            aa2n: a0.aa2n,
+            aa1n: a0.aa1n,
+            ar0n: a0.ar0n,
+            aw0n: a0.aw0n,
+            awn: a0.awn,
+        };
+        self.afc1 = afc1(g.ac2n, g.ac1n, g.ac0n, self.dbchn, hrw);
         let new_op = free && o.opvd;
         if free {
             self.op = AccReg {
@@ -668,10 +764,10 @@ impl GateFabric {
         };
         ports.run_slot(starting.as_ref());
 
-        // 2. q1、MCLK：判断バスの新しいチャネルの準備を RDY が取り込む。
+        // 2. q2 の縁（MCLK・LCLK）：判断バスの新しいチャネルの準備を RDY が取り込む。
         self.tim_edge();
         self.tim_edge();
-        debug_assert!(self.tim.mclk);
+        debug_assert!(self.tim.mclk && self.tim.lclk);
         let nr = &self.regs[!self.dbchn as usize];
         let lines = ports.ready_lines();
         let o2 = rdy(
@@ -687,26 +783,42 @@ impl GateFabric {
         self.srdy = o2.srdy;
         self.drdy = o2.drdy;
 
-        // 3. アクセス。ポートの答え（P1A・P2A の P1R・P2R、port 1 の DONE の印 P1M）と U38 の TOUT から、OPB が
-        //    完了・ERROR・時間切れを出す。終わった読出しは IL へ。
+        // 3. アクセス。ポートの答え（P1A・P2A が q0 の縁で登録する P1R・P2R、port 1 の DONE の印 P1M）と U38 の
+        //    TOUT から、OPB が完了・ERROR・時間切れを出す。終わった読出しは、次の SCLK で IL へ（/EN ＝ DNRQ）。
+        //    q1〜q3 の縁で来た答えは預かり（PND）、次のスロットの頭で P1R・P2R にする。
         let la = !self.lan;
         let mut record_access = None;
         let mut access_done = false;
         let (mut p1r, mut p2r, mut p1m) = (false, false, false);
         let mut v = 0;
         if self.op.v {
-            let reply = if new_op {
+            let held = self.pnd.take();
+            let reply = if let Some((x, last)) = held {
+                Some(if last {
+                    PortReply::Last(x)
+                } else {
+                    PortReply::Done(x)
+                })
+            } else if new_op {
                 Some(ports.access(&self.acc))
             } else if la {
                 Some(ports.continue_access(self.op.port))
             } else {
                 None
             };
-            let (got, val, last) = match reply {
+            let (mut got, val, last) = match reply {
                 Some(PortReply::Done(x)) => (true, x, false),
                 Some(PortReply::Last(x)) => (true, x, true),
                 _ => (false, 0, false),
             };
+            if got && la && held.is_none() {
+                let q = ports.reply_edge(self.op.port);
+                self.ev.answer_edge = Some(q);
+                if q > 0 {
+                    self.pnd = Some((val, last));
+                    got = false;
+                }
+            }
             if self.op.two {
                 if new_op {
                     self.two_data = if got { val } else { 0 };
@@ -751,9 +863,7 @@ impl GateFabric {
         let opch = self.op.ch;
         debug_assert!(!errk || !self.nx.v, "延びたアクセスの間は、NX に判断がない");
 
-        // 4. LCLK
-        self.tim_edge();
-        debug_assert!(self.tim.lclk);
+        // 4. LCLK（q2 の縁の続き）
         let aop = self.aop();
         let decision = if !self.accrn {
             Decision::Start(!self.achn as u8)
@@ -769,6 +879,11 @@ impl GateFabric {
         self.tcnt = if la { (self.tcnt + 1) & 15 } else { 0 };
         self.odn = b.odn;
         self.tor = b.tor;
+
+        // 5. q3 の縁（WPH）
+        self.tim_edge();
+        debug_assert!(!self.tim.wphn && self.tim.ph == 3);
+        self.wph();
 
         let rec = SlotRecord {
             slot: self.slot,
@@ -821,7 +936,8 @@ impl GateFabric {
         }
     }
 
-    /// LCLK：A ファイルの操作と、CHS・STS・ELS・U36・HACK の登録。要求の FF を消す。
+    /// LCLK（q2）：A ファイルの読み（SCLK に AFC0 が登録した読みの語）と、CHS・STS・ELS の登録。要求の FF を
+    /// 消す。
     fn lclk<P: Ports + ?Sized>(
         &mut self,
         ports: &P,
@@ -832,61 +948,39 @@ impl GateFabric {
         opch: bool,
     ) {
         let (a2, a1, a0, ach) = (self.aop2n, self.aop1n, self.aop0n, self.achn);
-        // A ファイル：読みの相で AFC0 の番地を読み、B（74S189 の B ファイルか、全部 1）と Cin を足す。
-        // PS・PD・U7–U8 は読んだ値を取り込む。書きの相で、和か CPU のデータを書く。
-        let host = self.hreq.filter(|_| self.akn);
-        let (hch, ha, hrw, hdata) = match host {
-            // 窓の番地の bit 6 がチャネル、bit 3・2 が語（HA3・HA2）。
-            Some(h) => (h.ch == 1, h.reg as u32 & 0x0C, h.write.is_none(), h.write),
-            None => (false, 0, true, None),
-        };
-        let rd0 = afc0(a2, a1, a0, ach, hch, ha, hrw, false);
-        let rd1 = afc1(a2, a1, a0, ach, hrw, false);
-        let av = self.afile[word(rd0.aa3n, rd0.aa2n, rd0.aa1n, rd0.aa0n)];
-        let bv = if rd1.benn {
+        // A ファイル：q0〜q1（PH1＝0）の読みの語を読み、B（74LS670 の B ファイルか、全部 1）と Cin を足す。
+        // SL が和を、PS・PD・U7–U8 が A バスを取り込む。桁上げ（CY）は加算器ではなく A バスの 0 の検出
+        // （74S02×2・74S30）：A ≠ 0。使うのは COUNT と再設定の 3 段目（B ＝ FFFF、Cin ＝ 0）だけで、そこでは
+        // 加算器の桁上げと同じ。
+        let f = self.afc0;
+        let rd = self.afc0_now();
+        let av = self.afile[word(f.aa3n, f.aa2n, f.aa1n, self.aa0n(false))];
+        let f1 = self.afc1;
+        let bv = if f1.benn {
             0xFFFF
         } else {
-            let r = &self.regs[(rd1.ba >> 1) as usize];
-            if rd1.ba & 1 != 0 {
+            let r = &self.regs[(f1.ba >> 1) as usize];
+            if f1.ba & 1 != 0 {
                 r.dst_step
             } else {
                 r.src_step
             }
         };
-        let sum = av as u32 + bv as u32 + rd0.cin as u32;
-        let cy = sum > 0xFFFF;
-        if !rd1.pscn {
+        let sum = av as u32 + bv as u32 + rd.cin as u32;
+        let cy = av != 0;
+        debug_assert!(
+            !matches!(self.aop(), Aop::Count(_) | Aop::Reload(_, 2)) || cy == (sum > 0xFFFF)
+        );
+        self.sl = sum as u16;
+        if !f1.pscn {
             self.ps = av;
         }
-        if !rd1.pdcn {
+        if !f1.pdcn {
             self.pd = av;
         }
-        let wr0 = afc0(a2, a1, a0, ach, hch, ha, hrw, true);
-        let wr1 = afc1(a2, a1, a0, ach, hrw, true);
-        if !wr0.awen {
-            let v = if !wr1.sloen {
-                sum as u16
-            } else {
-                debug_assert!(!wr1.hwoen);
-                hdata.unwrap_or(0xFFFF)
-            };
-            self.afile[word(wr0.aa3n, wr0.aa2n, wr0.aa1n, wr0.aa0n)] = v;
+        if !f1.hrcn {
+            self.u78 = av;
         }
-        // HACK：許可（AOP＝001）のスロットの LCLK の縁で AK が立ち、DTACK を返す。
-        let hk = self.hack_now(true);
-        if self.akn
-            && !hk.akn
-            && let Some(h) = &mut self.hreq
-        {
-            h.result = Some(match h.write {
-                Some(_) => HostReply::Ack,
-                None => {
-                    debug_assert!(!rd1.hrcn);
-                    HostReply::Data(av)
-                }
-            });
-        }
-        self.akn = hk.akn;
 
         // 組合せ：EVT、ADC、START の検査（判断バスのポートの ATR と /PRES）。
         let k = self.cst();
@@ -920,20 +1014,17 @@ impl GateFabric {
             bus(each),
             bus([self.imm(0), self.imm(1)]),
         );
-        // トリガの発生源の選択（U34–U35、74LS151）。入力 0（即時）、6、7 は Low に固定。
-        let trig = (self.trig_in | ports.trigger_levels()) & 0x3E;
         let mut nk = [ChsOut {
-            nbsyn: true,
+            nbsyxn: true,
             p2n: true,
             p1n: true,
             p0n: true,
             okn: true,
             donen: true,
             errn: true,
-            nrunn: true,
+            nrun0n: true,
         }; CHANNELS];
         let mut nt = [self.sts_now(0); CHANNELS];
-        let mut level = [false; CHANNELS];
         for c in 0..CHANNELS {
             let (r, kr, t) = (&self.regs[c], &self.chs[c], &self.sts[c]);
             nk[c] = chs(
@@ -957,8 +1048,8 @@ impl GateFabric {
             );
             nt[c] = sts(
                 self.s1q[c],
-                nk[c].nbsyn,
-                nk[c].nrunn,
+                nk[c].nbsyxn,
+                nk[c].nrun0n,
                 self.strq[c],
                 bit(d.sten, c),
                 self.wmq[c],
@@ -967,6 +1058,7 @@ impl GateFabric {
                 self.stln,
                 kr.p1n,
                 kr.p0n,
+                bit(e.blkn, c),
                 t.syn2n,
                 t.risen,
                 t.armn,
@@ -974,7 +1066,6 @@ impl GateFabric {
                 t.missn,
                 t.staln,
             );
-            level[c] = ls151(r.trigger & 7, trig);
         }
         let l = els(
             self.accrn,
@@ -1017,7 +1108,6 @@ impl GateFabric {
                 staln: t.staln,
             };
         }
-        self.s1q = level;
         self.infn = l.infn;
         self.q1n = l.q1n;
         self.q0n = l.q0n;
@@ -1031,5 +1121,41 @@ impl GateFabric {
         self.wdq = [false; CHANNELS];
         self.weq = [false; CHANNELS];
         self.wmq = [false; CHANNELS];
+        // U36：同じ LCLK の縁で、選んだトリガのレベルを取り込む（STS は縁の前の値を使った）。発生源の選択
+        // （U34–U35、74LS151）の入力 0（即時）、6、7 は Low に固定。
+        let trig = (self.trig_in | ports.trigger_levels()) & 0x3E;
+        for c in 0..CHANNELS {
+            self.s1q[c] = ls151(self.regs[c].trigger & 7, trig);
+        }
+    }
+
+    /// q3 の縁（WPH）：A ファイルの書込み（/AWE ＝ AWQN ∨ C16 で q3 の後半。PH1＝1 の書きの語に、SL の和か
+    /// CPU のデータ）、HACK の AK（許可のスロットの q3 の縁で立ち、DTACK を返す）。
+    fn wph(&mut self) {
+        if !self.tim.awqn {
+            let f = self.afc0;
+            let w = word(f.aa3n, f.aa2n, f.aa1n, self.aa0n(true));
+            let v = if !self.afc1.sloen {
+                self.sl
+            } else {
+                debug_assert!(!self.afc1.hwoen);
+                self.hreq.and_then(|h| h.write).unwrap_or(0xFFFF)
+            };
+            self.afile[w] = v;
+        }
+        let hk = self.hack_now(true);
+        if self.akn
+            && !hk.akn
+            && let Some(h) = &mut self.hreq
+        {
+            h.result = Some(match h.write {
+                Some(_) => HostReply::Ack,
+                None => {
+                    debug_assert!(!self.afc1.hrcn);
+                    HostReply::Data(self.u78)
+                }
+            });
+        }
+        self.akn = hk.akn;
     }
 }

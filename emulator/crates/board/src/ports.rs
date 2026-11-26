@@ -343,6 +343,14 @@ impl Ports for FabricPorts {
         }
     }
 
+    fn reply_edge(&self, port: u8) -> u8 {
+        match port {
+            1 => self.acrtc.reply_edge(),
+            2 if self.doc => self.doc_board.reply_edge(),
+            _ => 0,
+        }
+    }
+
     fn abort_access(&mut self, port: u8) {
         match port {
             1 => self.acrtc.abort(),
