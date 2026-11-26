@@ -2,6 +2,7 @@
 //! 期待値は仕様書 §06、DR-022、`docs/parts/host-acrtc-interface.md` §2.3・§7 と、`fc85_board::acrtc` の
 //! 模型の前提（ピンの遅れ）からの手計算で取る。
 
+use fc85_board::dram::DramEnv;
 use fc85_board::fabric::{Decision, Fabric, HostReply, Phase, SlotRecord};
 use fc85_board::ports::FabricPorts;
 use fc85_core::time::PERIOD_2CLK;
@@ -270,6 +271,36 @@ fn one_word_takes_six_or_seven_slots_from_temporal_ram() {
             "位相 {phase}"
         );
     }
+}
+
+/// ベンド点「同期化の段」（DR-088）：段を飛ばすと、DACK から DTACK を見るまでが短くなる。語は正しく届く。
+#[test]
+fn fewer_sync_stages_shorten_port1_accesses() {
+    let mut total = Vec::new();
+    for stages in [2, 1, 0] {
+        let mut r = Rig::new();
+        r.p.acrtc.set_sync(DramEnv::default(), stages);
+        for i in 0..16 {
+            r.p.temporal.mem[i] = 0x30 + i as u8;
+        }
+        r.set_rwp(0x500);
+        r.acrtc_cmd(&[DWT, 15, 0]);
+        r.channel_format(7, 1, 0, 0, 16, 1, 0, 2);
+        r.run_until_idle(500);
+        assert_eq!(r.f.status(0), DONE, "{stages} 段");
+        r.acrtc_finish();
+        assert!(
+            (0..16).all(|i| r.p.acrtc.vram.0[0x500 + i] == 0x30 + i as u16),
+            "{stages} 段"
+        );
+        let l = r.port1_lengths();
+        assert_eq!(l.len(), 16);
+        total.push(l.iter().sum::<u64>());
+    }
+    // 16 回のアクセスの計：2 段は 48 スロット、1 段は 43、0 段は 45（0 段は RDY1 も早く、DTACK より前に
+    // 始めたアクセスが待つ）
+    assert_eq!(total[0], 3 * 16);
+    assert!(total[1] < total[0] && total[2] < total[0], "{total:?}");
 }
 
 #[test]

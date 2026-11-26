@@ -98,6 +98,21 @@ impl Clocks {
     }
 }
 
+/// 同期化の段の数（ベンド点「同期化の段」。DR-088）。FF のソケットで D と Q をつなぐと、その段を飛ばす。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStages {
+    /// DOC の E（2：74ALS74 と P2A の登録。1：74ALS74 を飛ばし、P2A が E をそのまま取る）。
+    pub doc: u8,
+    /// ACRTC のブリッジの DREQ・DTACK（2。1：2 段目を飛ばす。0：両方と、DONE の 1 段を飛ばす）。
+    pub acrtc: u8,
+}
+
+impl Default for SyncStages {
+    fn default() -> Self {
+        Self { doc: 2, acrtc: 2 }
+    }
+}
+
 /// ベンド点の設定とモード（DR-065）。保存と復元に入る。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bends {
@@ -119,6 +134,9 @@ pub struct Bends {
     /// Main RAM のリフレッシュの見張りのカウンタ（DR-081）を切り、HSYNC だけにする（`dram refresh hsync`）。
     #[serde(default)]
     pub refresh_hsync_only: bool,
+    /// 同期化の段の数（`sync`、DR-088）。
+    #[serde(default)]
+    pub sync: SyncStages,
 }
 
 impl Bends {
@@ -131,6 +149,7 @@ impl Bends {
             && self.dram == DramEnv::default()
             && self.doc_lines.is_normal()
             && !self.refresh_hsync_only
+            && self.sync == SyncStages::default()
     }
 
     /// 1 行の命令で設定を変える。形は次のとおり（大文字・小文字は区別しない）。
@@ -145,6 +164,8 @@ impl Bends {
     /// - `dram refresh hsync|auto`：Main RAM のリフレッシュを HSYNC だけにする（見張りのカウンタを切る。
     ///   DR-081）か、戻す
     /// - `docbus A3=0,A4=A5,A5=A4,D7=1,A9=Z`：DOC 子基板のバスのテストピン（`normal` で戻す。`DocLines::parse`）
+    /// - `sync doc 2|1`・`sync acrtc 2|1|0`・`sync normal`：同期化の段の数（DR-088。判定点の個体と温度は
+    ///   `dram unit`・`dram temp`）
     /// - `factory`：設定を全部工場出荷に戻す（モードは変えない）
     pub fn command(&mut self, line: &str) -> Result<(), String> {
         let line = line.trim();
@@ -259,6 +280,21 @@ impl Bends {
                     }
                 }
             }
+            "sync" => {
+                let mut f = rest.split_whitespace();
+                let which = f.next().unwrap_or("").to_ascii_lowercase();
+                let n: Option<u8> = f.next().and_then(|v| v.parse().ok());
+                match (which.as_str(), n) {
+                    ("normal", _) => self.sync = SyncStages::default(),
+                    ("doc", Some(n @ 1..=2)) => self.sync.doc = n,
+                    ("acrtc", Some(n @ 0..=2)) => self.sync.acrtc = n,
+                    _ => {
+                        return Err(format!(
+                            "sync doc 2|1、sync acrtc 2|1|0、sync normal: {line}"
+                        ));
+                    }
+                }
+            }
             "factory" => {
                 *self = Self {
                     mode: self.mode,
@@ -267,7 +303,7 @@ impl Bends {
             }
             _ => {
                 return Err(format!(
-                    "知らない命令（mode・char・clock・fifo・sig・dram・docbus・factory）: {line}"
+                    "知らない命令（mode・char・clock・fifo・sig・dram・docbus・sync・factory）: {line}"
                 ));
             }
         }
@@ -314,6 +350,13 @@ impl Bends {
         }
         if self.refresh_hsync_only {
             v.push("Main RAM のリフレッシュは HSYNC だけ".into());
+        }
+        let s = SyncStages::default();
+        if self.sync.doc != s.doc {
+            v.push(format!("DOC の E の同期化 {} 段", self.sync.doc));
+        }
+        if self.sync.acrtc != s.acrtc {
+            v.push(format!("ACRTC の同期化 {} 段", self.sync.acrtc));
         }
         v.join("、")
     }
@@ -595,6 +638,18 @@ mod tests {
         assert!(b.summary().contains("止めた"));
         b.command("clock video off").unwrap();
         assert!(b.is_factory());
+        // 同期化の段（DR-088）
+        b.command("sync acrtc 0").unwrap();
+        b.command("SYNC doc 1").unwrap();
+        assert_eq!(b.sync, SyncStages { doc: 1, acrtc: 0 });
+        assert!(
+            b.summary().contains("ACRTC の同期化 0 段"),
+            "{}",
+            b.summary()
+        );
+        assert!(!b.is_factory());
+        b.command("sync normal").unwrap();
+        assert!(b.is_factory());
         for bad in [
             "mode on",
             "clock doc",
@@ -610,6 +665,10 @@ mod tests {
             "dram temp 200",
             "dram unit x",
             "dram hot 1",
+            "sync doc 0",
+            "sync acrtc 3",
+            "sync dsp 1",
+            "sync doc",
             "wobble",
         ] {
             assert!(b.command(bad).is_err(), "{bad}");

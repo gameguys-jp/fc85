@@ -6,7 +6,7 @@
 //! アダプタ（`adpcm`）、DSP のアダプタ（`dsp`）、DOC 子基板と port 2 のアダプタ（`doc`）、音声のアナログの段
 //! （`analog`。段階 4）、DRAM の保持の模型（`dram`。ベンド点）、映像のクロックのベンド点（`vclock`）と
 //! 機械の外のテレビの模型（`tv`）、クロックを上げすぎたときのメモリのアクセス時間の模型（`access`。
-//! ベンド点、DR-083）。時刻は core 層の単位で数える。
+//! ベンド点、DR-083）、同期化の FF とメタステーブルの模型（`sync`。DR-088）。時刻は core 層の単位で数える。
 //! 状態はすべて serde で保存・復元できる（DR-040）。
 
 pub mod access;
@@ -25,6 +25,7 @@ pub mod fabric;
 pub mod fabric_pal;
 pub mod fifo;
 pub mod ports;
+pub mod sync;
 pub mod tv;
 pub mod vclock;
 pub mod video;

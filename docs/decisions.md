@@ -871,3 +871,13 @@
 | 理由 | ユーザーの方針（回路への忠実さと、本機特有の音）。E1 は 1986 年の ERS で、IIGS の測定と食い違う所がある。DR-068 は曲線を「GPL を避ける（DR-064）うえ、根拠の資料がない」として退けたが、MAME の es5503.cpp は BSD-3-Clause で、曲線は IIGS の測定に基づく。式と定数は事実として台帳に書き起こし、コードは写していない。BIOS は 0xE1 を書く前に 32 個の制御を書き、割込みでは OIR を 1 回読んで IE を落とすので、どちらの規則でも動く |
 | 却下した案 | E1 の文のまま：実機の測定と違い、照合が 1 サイクル目から合わない。曲線をコアの SIG± に入れる：デジタルの出力（DR-054）が乗算でなくなり、V3 で MAME の表を外して比べられない。曲線を入れない：小さい音量の包絡の消え方と、片側の配線（DR-011）の直流が実機と違う |
 | 影響 | emulator/crates/chips/src/es5503.rs、board/src/doc.rs、試験（chips の es5503.rs・es5503_v3.rs、board の analog.rs・access_time.rs・doc_bend.rs・doc_bridge.rs・doc_port.rs）、parts/ES5503.md 追補 2026-11-26、impl/emulator.md §03、impl/v3-mame.md §05、spec/hardware.md §10、OI-062・OI-066 |
+
+## DR-088　同期化の FF のメタステーブルを作り、DOC の E の 1 段目を 74ALS74 にする。ベンド点「同期化の段」
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-26 |
+| 決定 | ユーザーが方向を承認（同期化の FF のメタステーブルを作る。通常モードは実機どおり、表現は Bend）。細部はエージェントが決めた（要見直し）。(1) 非同期の境界の同期化の FF（DOC の E、ACRTC のブリッジの DREQ・DTACK・DONE）を、判定点とメタステーブルのある模型にする。判定点は系列の典型のセットアップで、個体と温度でずれる（`dram unit`・`dram temp`。個体 0・25 °C は典型）[P][V]。判定点の近くでは、新旧のどちらを取るかと落ち着くまでの時間を、TI の SDYA006 の定数（LS、ALS。PAL は LS で代える [V]）で決める。取る側の登録は別々に取り、食い違いうる。(2) DOC の E の同期化の 1 段目を、P2A の外の 74ALS74 にする。P2A は 2 段目（SYN2）と、E の立下りを使う 3 つの登録を持つ。見る縁は変わらないので、時間は前と同じ。部品は 74ALS74 が 1 個増える（spec/fabric.md と board.md の数は、Fabric の残りの式の作業で直す）。(3) ベンド点「同期化の段」を足す。DOC の E の 1 段目と、ACRTC の DREQ・DTACK の段を、ソケットとジャンパで飛ばす（`sync doc 1`、`sync acrtc 1`・`sync acrtc 0`、`sync normal`）[P]。(4) DSP の BIO と Fabric のトリガは、入力がスロット単位で変わるので、普通の FF のままにする |
+| 理由 | ユーザーの方針（回路への忠実さ）。前の模型は、FF が 10 ns 前の値を決まって取り、メタステーブルがなかった。調べると、P2A の中の 2 段は、取る側が 1 段目（SYN1）の出力を組合せで読むので、実際は 1 段だった。PAL16R4A-2 の最大のセットアップ（35 ns [V]）では、DOC の CLK を外部に替えたとき、平均故障間隔が約 9 ms になる（台帳 host-acrtc-interface.md の追補 F）。1 段目を外の FF にすれば、時間を変えずに直せる。74ALS74 は国産（HD74ALS。日立の 1984 年の早見表、review-digital §4.2）で、TI も非同期の入力の同期化に使う（台帳 TMS32010.md の BIO）。最大のセットアップでも約 1.7 時間、典型で約 8,000 年になる。ACRTC のブリッジの 74LS175 の 2 段は、DMA が続いても最悪で約 60 日、典型で約 1 億年で、変えない。本体のクロックでは DOC の E が 16 MHz の縁にそろい、通常の動作は前と同じ |
+| 却下した案 | 74F74：速さは最も有利だが、1985 年の日本での入手が未確認で、review-digital §4.2 で不採用。74AS74：最も安全だが、日立の早見表になく輸入品。74S74（host-acrtc-interface §7.6 の案）：T が LS の半分で、メタステーブルでは不利。3 段にする：見る縁が 16 MHz の 1 クロック遅れ、port 2 の速さと 68000 の待ち（DR-050、DR-051）が変わる。確率だけを作る（時刻を細かくしない）：判定点の個体差と、取る側の食い違いが出ない。速さ：判定点に近い縁だけで計算し、SAMPLE 6 の 1800 フレームは 24.8 秒から 24.9 秒 |
+| 影響 | emulator/crates/board/src/sync.rs（新）、doc.rs、acrtc.rs、bend.rs、console.rs、試験（board の sync.rs（新）、acrtc_port.rs）、spec/hardware.md §07・§11、parts/host-acrtc-interface.md 追補 2026-11-26、impl/emulator.md §03・§04、spec/fabric.md の P2A（Fabric の残りの式の作業で直す）、OI-086 |

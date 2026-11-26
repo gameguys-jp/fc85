@@ -14,7 +14,10 @@
 //!   次の立上り。番地は U48–U49、書込みのデータは U50 の 74LS374）。書込みはラッチしたらすぐ Fabric に
 //!   終わり（OPDN）を返す。預かっているものがあれば、その窓が終わるまで Fabric を待たせる。
 //! - E を 16 MHz の 2 段の FF で同期化し、預かったアクセスは、同期化した E の立下り（ラッチと同じ縁を
-//!   含む）で次の E High の窓を取る。窓では CS̄ を出し、書込みはその窓で波形 RAM に書き、読出しは窓の
+//!   含む）で次の E High の窓を取る。1 段目は 74ALS74、2 段目は P2A の登録（DR-088）。立下りは
+//!   「2 段目が High で 1 段目が Low」で、それを使う登録は 3 つ（68000 への DTACK、預かりを空ける、窓を
+//!   取る）。どれも P2A の判定点で 2 段目と 1 段目を取る（`sync`。メタステーブルで食い違うことがある）。
+//!   ベンド点「同期化の段」（`set_sync`）で 1 段目を飛ばすと、E をそのまま取る。窓では CS̄ を出し、書込みはその窓で波形 RAM に書き、読出しは窓の
 //!   終わり（E の立下り）の値を読出しのラッチ（U58 の 74LS374）に取る。同期化した E の次の立下りで
 //!   預かりを空け、読出しならそこで Fabric に終わりを返す [P]。続けて書くと、窓の終わりの縁で次の
 //!   書込みをラッチし、すぐ後の窓を取る。窓の前に番地を出しておくのは、台帳 §2 の注意 2（アドレスは
@@ -58,11 +61,12 @@
 //!   アップが短く、DOC の読出しより後に崩れる）[P][V]。
 
 use crate::access::{AccessTime, Path};
-use crate::acrtc::{T_OUT, T_SETUP};
+use crate::acrtc::T_OUT;
 use crate::analog::{Hold, SigWiring, sh_alpha_q16};
 use crate::bend::Wire;
 use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
+use crate::sync::{Family, Line, Reg, SETTLE, Span, SyncFf};
 use fc85_chips::es5503::{self, Es5503, Slot, WaveBus};
 use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
@@ -219,24 +223,34 @@ fn activate_row(wave: &mut [u8], dram: &mut Dram, row: u8, now: Time) {
     }
 }
 
-/// 時刻つきの線のレベル。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Level {
-    level: bool,
-    prev: bool,
-    at: Time,
+/// E の同期化の FF の番号（`sync` の擬似乱数と個体のばらつきの鍵）。
+const ID_E1: u32 = 0x0D0C_0001;
+const ID_E2: u32 = 0x0D0C_0002;
+/// E の立下りを使う P2A の登録：68000 への DTACK、預かりを空ける、窓を取る。
+const ID_USERS: [u32; 3] = [0x0D0C_0010, 0x0D0C_0011, 0x0D0C_0012];
+
+/// E の同期化：1 段目は 74ALS74、2 段目は P2A の登録（DR-088）。
+fn e_sync() -> [SyncFf; 2] {
+    [
+        SyncFf::new(Family::Als, ID_E1),
+        SyncFf::new(Family::Pal, ID_E2),
+    ]
 }
 
-impl Level {
-    fn value(&self, t: Time) -> bool {
-        if t >= self.at { self.level } else { self.prev }
-    }
+fn e_users() -> [Reg; 3] {
+    ID_USERS.map(|id| Reg::new(Family::Pal, id))
+}
 
-    fn set(&mut self, level: bool, t: Time) {
-        self.prev = self.value(t);
-        self.level = level;
-        self.at = t;
-    }
+fn e_span() -> Span {
+    sync_span(&e_sync(), &e_users())
+}
+
+fn sync_span(syn: &[SyncFf; 2], users: &[Reg; 3]) -> Span {
+    Span::of(syn.iter().map(|s| &s.reg).chain(users))
+}
+
+fn busy_default() -> Time {
+    Time::MAX
 }
 
 /// 68000 の DOC の窓。
@@ -362,9 +376,25 @@ pub struct DocBoard {
     fall: Clock,
     /// 今のサイクルの E の立上りがまだか。
     rise_pending: bool,
-    e: Level,
-    /// E の同期化の FF（16 MHz）。
-    sync: [bool; 2],
+    e: Line,
+    /// E の同期化の FF（16 MHz。74ALS74 と P2A の登録）。
+    #[serde(default = "e_sync")]
+    syn: [SyncFf; 2],
+    /// 同期化した E の立下りを使う登録の判定点。
+    #[serde(default = "e_users")]
+    users: [Reg; 3],
+    /// 1 段目（74ALS74）を飛ばす（ベンド点「同期化の段」。ソケットで D と Q をつなぐ）。
+    #[serde(default)]
+    skip_first: bool,
+    /// 3 つの登録が E の立下りの見方で食い違った縁の数。
+    #[serde(default)]
+    pub sync_splits: u64,
+    /// 判定点の範囲（`syn` と `users`）。
+    #[serde(default = "e_span")]
+    span: Span,
+    /// E が最後に変わってから `SETTLE` 後。これより後の縁では、どの段も E と同じ値で、立下りはない。
+    #[serde(default = "busy_default")]
+    busy_until: Time,
     stage: Stage,
     /// Fabric が始めた、まだラッチしていないアクセス（Fabric は待っている）。
     queued: Option<Request>,
@@ -484,8 +514,13 @@ impl DocBoard {
             wave: vec![0; WAVE_BYTES],
             fall: Clock::new(PERIOD_DOC_E, 0),
             rise_pending: false,
-            e: Level::default(),
-            sync: [false; 2],
+            e: Line::default(),
+            syn: e_sync(),
+            users: e_users(),
+            skip_first: false,
+            sync_splits: 0,
+            span: e_span(),
+            busy_until: 0,
             stage: Stage::Idle,
             queued: None,
             req: None,
@@ -593,13 +628,30 @@ impl DocBoard {
     /// 見ず、本当の縁を落とさないため）。
     fn settle(&mut self, now: Time) {
         let high = self.fall.next() - now <= self.fall.period() / 2;
-        self.e = Level {
-            level: high,
-            prev: high,
-            at: now,
-        };
+        self.e = Line::steady(high, now);
         self.rise_pending = !high;
-        self.sync = [high; 2];
+        for s in &mut self.syn {
+            s.settle(high, now);
+        }
+        self.busy_until = now + SETTLE;
+    }
+
+    /// E の同期化の FF の個体と温度（DR-072 の `dram unit`・`dram temp`）と、1 段目を飛ばすか（ベンド点
+    /// 「同期化の段」）。通常モードは個体 0・25 °C、2 段（DR-088）。
+    pub fn set_sync(&mut self, env: DramEnv, skip_first: bool) {
+        for s in &mut self.syn {
+            s.reg.set_env(env);
+        }
+        for r in &mut self.users {
+            r.set_env(env);
+        }
+        self.skip_first = skip_first;
+        self.span = sync_span(&self.syn, &self.users);
+    }
+
+    /// E の同期化の FF が普通の遅れより長くかかった回数（[1 段目, 2 段目]）。
+    pub fn sync_meta(&self) -> [u64; 2] {
+        [self.syn[0].meta, self.syn[1].meta]
     }
 
     /// DOC の CLK の周期（既定は 8 MHz。外部クロックのジャンパ。DR-035）。E の周期はその 8 倍。
@@ -692,6 +744,7 @@ impl DocBoard {
         if rising {
             self.rise_pending = false;
             self.e.set(true, t);
+            self.busy_until = t + SETTLE;
             if self.bridge.stage == Stage::Claimed {
                 self.bridge.owned = true;
             }
@@ -772,6 +825,7 @@ impl DocBoard {
             }
         }
         self.e.set(false, t);
+        self.busy_until = t + SETTLE;
         self.rise_pending = true;
         // DOC のサイクル：E Low で波形 RAM を読む
         self.cycles += 1;
@@ -854,15 +908,49 @@ impl DocBoard {
         out
     }
 
+    /// E の同期化の縁：E の立下りを使う 3 つの登録が見た立下り。
+    fn sync_edge(&mut self, t: Time) -> [bool; 3] {
+        // 立下り＝2 段目が High で 1 段目が Low（この縁の前の出力）。使う登録ごとに判定点で取る
+        let s1 = if self.skip_first {
+            self.e
+        } else {
+            self.syn[0].q()
+        };
+        let s2 = self.syn[1].q();
+        let fell = self
+            .users
+            .map(|r| r.sample(t, &s2).0 && !r.sample(t, &s1).0);
+        if fell[0] != fell[1] || fell[1] != fell[2] {
+            self.sync_splits += 1;
+        }
+        let e = self.e;
+        self.syn[1].clock(t, &s1);
+        self.syn[0].clock(t, &e);
+        fell
+    }
+
     /// 16 MHz の立上り：E の同期化と、P2A・ブリッジの段。
     fn ff_edge(&mut self, t: Time) {
-        let s2_old = self.sync[1];
-        self.sync[1] = self.sync[0];
-        self.sync[0] = self.e.value(t.saturating_sub(T_SETUP));
-        let fell = s2_old && !self.sync[1];
+        // E が変わってから `SETTLE` の後は、どの段も E と同じ値で、立下りはない。その前も、どの線の変わり目も
+        // 判定点から離れていれば、どの登録も同じ値を取る。どちらでもなければ FF を 1 つずつ見る
+        let fell = if t >= self.busy_until {
+            [false; 3]
+        } else {
+            let sp = self.span;
+            let (e, q0, q1) = (self.e, self.syn[0].q(), self.syn[1].q());
+            match (sp.clean(t, &e), sp.clean(t, &q0), sp.clean(t, &q1)) {
+                (Some(ev), Some(v0), Some(v1)) => {
+                    let s1 = if self.skip_first { ev } else { v0 };
+                    self.syn[1].take(t, s1);
+                    self.syn[0].take(t, ev);
+                    [v1 && !s1; 3]
+                }
+                _ => self.sync_edge(t),
+            }
+        };
         // 68000 の窓が終わった：DTACK を出す
         let b = &mut self.bridge;
-        if fell
+        if fell[0]
             && b.stage == Stage::Claimed
             && let Some((read, fall)) = b.op.take()
         {
@@ -893,7 +981,7 @@ impl DocBoard {
             b.stage = Stage::Wait;
         }
         // 窓が終わった：預かりを空ける。読出しはここで答える
-        if fell
+        if fell[1]
             && self.stage == Stage::Claimed
             && let Some(v) = self.op_done.take()
         {
@@ -917,7 +1005,7 @@ impl DocBoard {
         }
         // 同期化した E の立下りで次の窓を取る（同じ縁でラッチしたものも。番地から E の立上りまで
         // 365 ns 以上ある）。68000 と P2A が同じ縁で待っていれば 68000 が先 [P]（OI-055）
-        if fell {
+        if fell[2] {
             if self.bridge.stage == Stage::Wait {
                 self.bridge.stage = Stage::Claimed;
             } else if self.stage == Stage::Wait {

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adpcm::AdpcmCtrl;
 use crate::analog::{self, Analog, SigWiring, TICK};
-use crate::bend::{Bends, FifoPins, Mode, RomLines};
+use crate::bend::{Bends, FifoPins, Mode, RomLines, SyncStages};
 use crate::doc;
 use crate::dram::DramEnv;
 use crate::dsp::{BioSel, DspCtrl};
@@ -994,6 +994,14 @@ impl System {
         let now = p.now();
         p.doc_board
             .set_bends(on.then_some((&self.bends.doc_lines, self.bends.dram)), now);
+        // 同期化の FF の判定点の個体と温度と、段の数（DR-088）：通常モードは個体 0・25 °C、2 段
+        let (env, st) = if on {
+            (self.bends.dram, self.bends.sync)
+        } else {
+            (DramEnv::default(), SyncStages::default())
+        };
+        p.doc_board.set_sync(env, st.doc < 2);
+        p.acrtc.set_sync(env, st.acrtc);
         p.dsp.set_input_period(4 * dsp);
         // プログラム RAM のアクセス時間の個体と温度（DR-083）：通常モードは個体 0・25 °C
         p.dsp.set_access_env(if on {

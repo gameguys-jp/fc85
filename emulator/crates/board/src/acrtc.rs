@@ -23,14 +23,20 @@
 //!   70 ns 後（tDDTZL）、DONE は 50 ns 後（tDND）に変わる。どれも表の値 [D U85 p.314–315]。DTACK と
 //!   DONE が DACK＝H から戻る時刻（tDDTLH、tDNLZ）は扱わず、Tn の立上りで戻す（次のアクセスまでに
 //!   同期化の FF を抜けるので、結果は変わらない。host-acrtc-interface.md §7.3）。
-//! - ブリッジの FF は 16 MHz の立上りで、10 ns 前の値を取る [P]。DREQ と DTACK は 2 段、DONE は 1 段（DR-016）。
+//! - ブリッジの FF（74LS175）は 16 MHz の立上りで、10 ns 前の値を取る [P]。DREQ と DTACK は 2 段、DONE は
+//!   1 段（DR-016）。判定点の個体と温度のばらつきと、判定点のすぐ近くの縁のメタステーブルは `sync`（DR-088）。
 //! - P1A は 16 MHz の立上りで、2 段目の DTACK（その立上りの前の値）を見たら DACK を戻し、データバスの語と
 //!   DONE の FF を取り込む。アクセスはそのスロットで終わる（Fabric は次のスロットの頭で次を決める）。
-//! - RDY1（Fabric の準備の信号）は、スロットの中ほど（q2 の立上り、MCLK↑）に取り込む 2 段目の DREQ。
+//!   P1A の判定点は PAL のもの（`sync::Family::Pal`）。P1A の中の登録どうしの食い違いは扱わない [V]。
+//! - RDY1（Fabric の準備の信号）は、スロットの中ほど（q2 の立上り、MCLK↑）に RDY（PAL20R4A）が取り込む
+//!   2 段目の DREQ。
+//! - ベンド点「同期化の段」（`set_sync`）：2 段目を飛ばす（1 段）か、両方を飛ばす（0 段。DONE の 1 段も
+//!   飛ばす）と、P1A と RDY は前の段の出力か ACRTC のピンをそのまま取る。
 
 use crate::access::{AccessTime, Path};
 use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
+use crate::sync::{Family, Line, Reg, SETTLE, Span, SyncFf};
 use crate::vclock::{self, TrackedVram};
 use crate::video::Video;
 use fc85_chips::hd63484::{Hd63484, Vram};
@@ -47,8 +53,41 @@ const T_DRQD: Time = 756;
 const T_DDTZL: Time = 1058;
 /// tDND（50 ns）。
 const T_DND: Time = 756;
-/// 同期化の FF のセットアップ（10 ns）。
-pub(crate) const T_SETUP: Time = 151;
+/// 同期化の FF の番号（`sync` の擬似乱数と個体のばらつきの鍵）：DREQ の 2 段、DTACK の 2 段、DONE。
+const ID_DREQ: [u32; 2] = [0xAC00_0001, 0xAC00_0002];
+const ID_DTACK: [u32; 2] = [0xAC00_0003, 0xAC00_0004];
+const ID_DONE: u32 = 0xAC00_0005;
+/// 同期化した線を取る登録：RDY（DREQ）、P1A（DTACK）、P1A（DONE）。
+const ID_USERS: [u32; 3] = [0xAC00_0010, 0xAC00_0011, 0xAC00_0012];
+
+fn dreq_sync() -> [SyncFf; 2] {
+    ID_DREQ.map(|id| SyncFf::new(Family::Ls, id))
+}
+
+fn dtack_sync() -> [SyncFf; 2] {
+    ID_DTACK.map(|id| SyncFf::new(Family::Ls, id))
+}
+
+fn done_sync() -> SyncFf {
+    SyncFf::new(Family::Ls, ID_DONE)
+}
+
+fn bridge_span() -> Span {
+    let (a, b, c, u) = (dreq_sync(), dtack_sync(), done_sync(), bridge_users());
+    Span::of(a.iter().chain(&b).chain([&c]).map(|s| &s.reg).chain(&u))
+}
+
+fn busy_default() -> Time {
+    Time::MAX
+}
+
+fn bridge_users() -> [Reg; 3] {
+    ID_USERS.map(|id| Reg::new(Family::Pal, id))
+}
+
+fn two() -> u8 {
+    2
+}
 
 /// ACRTC の VRAM：128 KiB（64K 語。HM4864A×16、仕様書 §05）。ACRTC の 20 bit の語番地のうち
 /// 下位 16 bit を使い、上は折り返す [V]。
@@ -111,12 +150,29 @@ pub struct AcrtcBridge {
     /// DMA の R/W（H が ACRTC への書込み）とデータバス。DACK を戻した後も保つ。
     bus_write: bool,
     bus_data: u16,
-    dreq: Pin,
-    dtack: Pin,
-    done: Pin,
-    dreq_s: [bool; 2],
-    dtack_s: [bool; 2],
-    done_ff: bool,
+    dreq: Line,
+    dtack: Line,
+    done: Line,
+    /// 同期化の FF（74LS175。DR-016、DR-088）。DR-088 の前の保存の形（bool の `dreq_s` など）とは
+    /// 名前を変えた。
+    #[serde(default = "dreq_sync")]
+    dreq_ffs: [SyncFf; 2],
+    #[serde(default = "dtack_sync")]
+    dtack_ffs: [SyncFf; 2],
+    #[serde(default = "done_sync")]
+    done_ffs: SyncFf,
+    /// 同期化した線を取る登録（RDY、P1A）の判定点。
+    #[serde(default = "bridge_users")]
+    users: [Reg; 3],
+    /// 同期化の段の数（ベンド点「同期化の段」。通常は 2）。
+    #[serde(default = "two")]
+    stages: u8,
+    /// 判定点の範囲（FF と取る側の全部）。
+    #[serde(default = "bridge_span")]
+    span: Span,
+    /// ACRTC のピンが最後に変わってから `SETTLE` 後。これより後の縁では、どの段もピンと同じ値。
+    #[serde(default = "busy_default")]
+    busy_until: Time,
     rdy1: bool,
     /// P1A が DACK を出している。
     active: bool,
@@ -166,12 +222,16 @@ impl AcrtcBridge {
             dack: Pin::default(),
             bus_write: false,
             bus_data: 0,
-            dreq: Pin::default(),
-            dtack: Pin::default(),
-            done: Pin::default(),
-            dreq_s: [false; 2],
-            dtack_s: [false; 2],
-            done_ff: false,
+            dreq: Line::default(),
+            dtack: Line::default(),
+            done: Line::default(),
+            dreq_ffs: dreq_sync(),
+            dtack_ffs: dtack_sync(),
+            done_ffs: done_sync(),
+            users: bridge_users(),
+            stages: 2,
+            span: bridge_span(),
+            busy_until: 0,
             rdy1: false,
             active: false,
             reply: None,
@@ -306,17 +366,53 @@ impl AcrtcBridge {
         self.now = end;
     }
 
+    /// 同期化の FF の個体と温度（DR-072 の `dram unit`・`dram temp`）と段の数（ベンド点「同期化の段」。
+    /// 0〜2）。通常モードは個体 0・25 °C、2 段（DR-016、DR-088）。
+    pub fn set_sync(&mut self, env: DramEnv, stages: u8) {
+        for s in self
+            .dreq_ffs
+            .iter_mut()
+            .chain(&mut self.dtack_ffs)
+            .chain([&mut self.done_ffs])
+        {
+            s.reg.set_env(env);
+        }
+        for r in &mut self.users {
+            r.set_env(env);
+        }
+        self.stages = stages.min(2);
+        self.span = Span::of(
+            self.dreq_ffs
+                .iter()
+                .chain(&self.dtack_ffs)
+                .chain([&self.done_ffs])
+                .map(|s| &s.reg)
+                .chain(&self.users),
+        );
+    }
+
+    /// 同期化の FF が普通の遅れより長くかかった回数（DREQ・DTACK・DONE の全部）。
+    pub fn sync_meta(&self) -> u64 {
+        self.dreq_ffs
+            .iter()
+            .chain(&self.dtack_ffs)
+            .chain([&self.done_ffs])
+            .map(|s| s.meta)
+            .sum()
+    }
+
     /// 16 MHz の立上り：同期化の FF と P1A。
     fn ff_edge(&mut self, t: Time, q: Time) {
-        let s = t.saturating_sub(T_SETUP);
-        let dtack2 = self.dtack_s[1];
-        let done = self.done_ff;
-        if q == 2 {
-            self.rdy1 = self.dreq_s[1];
-        }
-        self.dreq_s = [self.dreq.value(s), self.dreq_s[0]];
-        self.dtack_s = [self.dtack.value(s), self.dtack_s[0]];
-        self.done_ff = self.done.value(s);
+        // ピンが変わってから `SETTLE` の後は、どの段もピンと同じ値で、取る側はピンの値を取る。その前も、
+        // どの線の変わり目も判定点から離れていれば、FF ごとに落ち着いた値で進める
+        let (dtack2, done) = if t >= self.busy_until {
+            if q == 2 {
+                self.rdy1 = self.dreq.level;
+            }
+            (self.dtack.level, self.done.level)
+        } else {
+            self.near_edge(t, q)
+        };
         if self.active && dtack2 {
             self.active = false;
             let v = if self.bus_write {
@@ -327,6 +423,63 @@ impl AcrtcBridge {
             self.reply = Some((v, done));
             self.dack.set(false, t + T_OUT);
         }
+    }
+
+    /// ピンが変わった後の縁：どの線の変わり目も判定点から離れていれば、FF ごとに落ち着いた値で進める。
+    /// そうでなければ `sync_edge`。
+    fn near_edge(&mut self, t: Time, q: Time) -> (bool, bool) {
+        let sp = self.span;
+        let c = |l: &Line| sp.clean(t, l);
+        let (r, d) = (&self.dreq_ffs, &self.dtack_ffs);
+        let (Some(r0), Some(r1), Some(r2)) = (c(&self.dreq), c(&r[0].q()), c(&r[1].q())) else {
+            return self.sync_edge(t, q);
+        };
+        let (Some(d0), Some(d1), Some(d2)) = (c(&self.dtack), c(&d[0].q()), c(&d[1].q())) else {
+            return self.sync_edge(t, q);
+        };
+        let (Some(n0), Some(n1)) = (c(&self.done), c(&self.done_ffs.q())) else {
+            return self.sync_edge(t, q);
+        };
+        let n = usize::from(self.stages.min(2));
+        if q == 2 {
+            self.rdy1 = [r0, r1, r2][n];
+        }
+        self.dreq_ffs[1].take(t, r1);
+        self.dtack_ffs[1].take(t, d1);
+        self.dreq_ffs[0].take(t, r0);
+        self.dtack_ffs[0].take(t, d0);
+        self.done_ffs.take(t, n0);
+        ([d0, d1, d2][n], if n == 0 { n0 } else { n1 })
+    }
+
+    /// 同期化の FF の縁：取る側（P1A）の見た DTACK と DONE を返し、RDY1 を取る（q2）。
+    fn sync_edge(&mut self, t: Time, q: Time) -> (bool, bool) {
+        let pick = |s: &[SyncFf; 2], pin: Line, n: u8| match n {
+            0 => pin,
+            1 => s[0].q(),
+            _ => s[1].q(),
+        };
+        let dtack_in = pick(&self.dtack_ffs, self.dtack, self.stages);
+        let done_in = if self.stages == 0 {
+            self.done
+        } else {
+            self.done_ffs.q()
+        };
+        let dtack2 = self.users[1].sample(t, &dtack_in).0;
+        let done = self.users[2].sample(t, &done_in).0;
+        if q == 2 {
+            let dreq_in = pick(&self.dreq_ffs, self.dreq, self.stages);
+            self.rdy1 = self.users[0].sample(t, &dreq_in).0;
+        }
+        // 後ろの段から進める
+        let (r1, d1) = (self.dreq_ffs[0].q(), self.dtack_ffs[0].q());
+        let (dreq, dtack, done_pin) = (self.dreq, self.dtack, self.done);
+        self.dreq_ffs[1].clock(t, &r1);
+        self.dtack_ffs[1].clock(t, &d1);
+        self.dreq_ffs[0].clock(t, &dreq);
+        self.dtack_ffs[0].clock(t, &dtack);
+        self.done_ffs.clock(t, &done_pin);
+        (dtack2, done)
     }
 
     /// 2CLK の立上り：ACRTC を 1 周期進める。
@@ -343,9 +496,12 @@ impl AcrtcBridge {
         }
         self.video
             .tick(&self.acrtc, &self.vram, &mut self.vram_read, e);
-        self.dreq.set(self.acrtc.dreq(), e + T_DRQD);
-        self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL);
-        self.done.set(self.acrtc.done(), e + T_DND);
+        let changed = self.dreq.set(self.acrtc.dreq(), e + T_DRQD)
+            | self.dtack.set(self.acrtc.dma_dtack(), e + T_DDTZL)
+            | self.done.set(self.acrtc.done(), e + T_DND);
+        if changed {
+            self.busy_until = e + T_DDTZL + SETTLE;
+        }
     }
 
     /// VRAM の保持を追跡しているか、アクセス時間が足りないときの 2CLK：描画の読み書き、リフレッシュ、表示の
