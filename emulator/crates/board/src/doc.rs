@@ -226,7 +226,7 @@ fn activate_row(wave: &mut [u8], dram: &mut Dram, row: u8, now: Time) {
 /// E の同期化の FF の番号（`sync` の擬似乱数と個体のばらつきの鍵）。
 const ID_E1: u32 = 0x0D0C_0001;
 const ID_E2: u32 = 0x0D0C_0002;
-/// E の立下りを使う P2A の登録：68000 への DTACK、預かりを空ける、窓を取る。
+/// E の立下りを使う登録：68000 への DTACK、預かりを空ける、窓を取る（P2A と HACK。DR-089）。
 const ID_USERS: [u32; 3] = [0x0D0C_0010, 0x0D0C_0011, 0x0D0C_0012];
 
 /// E の同期化：1 段目は 74ALS74、2 段目は P2A の登録（DR-088）。

@@ -32,7 +32,8 @@ fn the_board_clock_keeps_e_away_from_the_decision_points() {
 }
 
 /// 外部のクロック（約 8.07 MHz。16 MHz と非同期）でも、2 段なら E の立下りを使う 3 つの登録は食い違わない。
-/// 74ALS74 の 1 段目を飛ばすと、P2A の登録が E をそのまま取り、判定点の個体差の間に E が落ちると食い違う。
+/// 74ALS74 の 1 段目を飛ばすと、P2A と HACK の登録が E をそのまま取り、判定点の個体差の間に E が落ちると
+/// 食い違う。
 #[test]
 fn skipping_the_74als74_lets_the_p2a_registers_disagree_on_an_external_clock() {
     let clk = 1873;
