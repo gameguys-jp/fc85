@@ -63,7 +63,7 @@ use crate::analog::{Hold, SigWiring, sh_alpha_q16};
 use crate::bend::Wire;
 use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
-use fc85_chips::es5503::{Es5503, Slot, WaveBus};
+use fc85_chips::es5503::{self, Es5503, Slot, WaveBus};
 use fc85_core::time::{Clock, PERIOD_8M, PERIOD_16M, PERIOD_DOC_E, SLOT, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
 
@@ -800,13 +800,22 @@ impl DocBoard {
     }
 
     /// アナログの S/H（CSTRB の Low の間に、チャネル `c` の保持容量を SIG の電圧へ充電する）。
-    /// 電流は I± ＝ I_FS×(音量/255)×(1/2 ± s/256)。両側は差 2×sig、片側は SIG+ だけで sig＋128×音量
+    /// 電流は I± ＝ I_FS×(L/255)×(1/2 ± s/256)。L は音量の特性（`es5503::volume_level`。測った非線形、
+    /// 台帳 §4.5）で、s は符号付きの波形の値。両側は差 2×s×L、片側は SIG+ だけで (s＋128)×L
     /// （単位は差の半分）[P][V]。
     fn sample_hold(&mut self, t: Time, c: usize, sig: i32, n: u8) {
+        let vol = self.doc.volume(usize::from(n));
+        // コアの SIG は波形×音量の単純な掛け算なので、割って波形の値に戻す
+        let s = if vol == 0 {
+            0
+        } else {
+            i64::from(sig / i32::from(vol))
+        };
+        let level = es5503::volume_level(vol);
         let x = match self.sig_wiring {
-            SigWiring::Both => 2 * i64::from(sig),
-            SigWiring::One => i64::from(sig) + 128 * i64::from(self.doc.volume(usize::from(n))),
-        } << 16;
+            SigWiring::Both => 2 * s * level,
+            SigWiring::One => (s + 128) * level,
+        };
         let d = ((x - self.sh[c]) * i64::from(self.sh_alpha)) >> 16;
         if d != 0 {
             self.sh[c] += d;

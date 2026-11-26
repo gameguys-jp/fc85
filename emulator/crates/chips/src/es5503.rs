@@ -11,7 +11,8 @@
 //!   board 層の仕事（台帳 §3.3）。
 //! - 出力は、サイクルごとの SIG±（符号付きの波形値×音量）、CA3–CA0、CSTRB。チャンネルごとのサンプルホールドと
 //!   加算は board 層の仕事（仕様書 §10）。リフレッシュの 2 サイクルは、最後のオシレータの SIG± を保つ [V]。
-//! - 音量は単純な乗算（E1 p.6）。IIGS で測った非線形の特性（台帳 §4.5）はアナログの層で足す。
+//! - SIG± の音量は単純な乗算（E1 p.6）。IIGS で測った非線形の特性（台帳 §4.5）は `volume_level` に置き、
+//!   board 層のアナログの S/H が使う。
 //! - オシレータのレジスタはダイナミックで、走査で訪れたときに書き戻される（E2 p.15。台帳 §3.1・§4.7）。
 //!   訪れない間が保持時間を超えたビットは 1 になる。保持時間はビットごとに分布から決める [P][V]
 //!   （`REG_T_MIN_S` ほか）。時刻は core 層の単位で、`tick` ごとに E の周期（`set_cycle_time`）だけ進む。
@@ -23,8 +24,38 @@
 //!   行のカウンタは 8 bit で、リフレッシュのサイクルごとに 1 進む [P][V]。
 //! - 資料で決まらない動作は、`docs/impl/emulator.md` §03 にどう扱ったかを書く。
 
+use std::sync::LazyLock;
+
 use fc85_core::time::{PERIOD_DOC_E, Time, UNITS_PER_SECOND};
 use serde::{Deserialize, Serialize};
+
+/// 音量の特性（IIGS の測定に基づく MAME v3.1 の式。台帳 §4.5・追補 2026-11-26）[V]：
+/// 伝導 g(v)＝(W·ln(1＋e^((v−K)/W)))^P、大きさ L(v)＝255×(g(v)×(1＋LEAK)/g(255) − LEAK)、L(0)＝0。
+/// ソフトニーの中央の音量 K。
+pub const VOL_KNEE: f64 = 22.1;
+/// ニーの柔らかさ W（音量の段）。
+pub const VOL_WIDTH: f64 = 2.77;
+/// ニーより上の立ち上がり P。
+pub const VOL_POWER: f64 = 1.104;
+/// 反転して漏れる量（音量 255 の大きさに対する割合）。
+pub const VOL_LEAK: f64 = 0.0042;
+
+/// 音量のレジスタの値 `vol` から、SIG± の電流の大きさ（音量 255 で 255×2^16、0 で 0）。
+/// 音量の掛け算はアナログで、ソフトニー（音量 22 付近）より下はほとんど通らず、波形がわずかに反転して漏れる
+/// （音量 1〜21 で負）。上では音量より少し速く増える（音量 128 で 106.2、64 で 37.5）[V]。
+/// コアの `Tick::sig` は単純な掛け算（E1 p.6）のままで、board 層のアナログの段がこれを使う。
+pub fn volume_level(vol: u8) -> i64 {
+    static TABLE: LazyLock<[i64; 256]> = LazyLock::new(|| {
+        let g = |v: f64| (VOL_WIDTH * ((v - VOL_KNEE) / VOL_WIDTH).exp().ln_1p()).powf(VOL_POWER);
+        let scale = (1.0 + VOL_LEAK) / g(255.0);
+        let mut t = [0i64; 256];
+        for (v, l) in t.iter_mut().enumerate().skip(1) {
+            *l = ((g(v as f64) * scale - VOL_LEAK) * 255.0 * 65536.0).round() as i64;
+        }
+        t
+    });
+    TABLE[usize::from(vol)]
+}
 
 /// オシレータの数。
 pub const OSCILLATORS: usize = 32;

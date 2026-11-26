@@ -429,7 +429,8 @@ fn the_one_sided_jumper_halves_the_signal_and_adds_dc_by_volume() {
     // 振幅は半分、中央は音量に比例した直流（音量 255 で S/H の 1.0 V）
     close(one_hi - one_lo, (both_hi - both_lo) / 2.0, 1e-4);
     close((one_hi + one_lo) / 2.0, 10.0 / 39.0, 1e-4);
-    // 音量 96 では直流も 96/255
+    // 音量 96 では、直流も振幅も音量の特性 L(96)/255（測った非線形。台帳 ES5503.md §4.5）
+    let l96 = level(96) / 255.0;
     let mut s = doc_system(0xC0, 96, 0x00);
     s.ports.doc_board.sig_wiring = SigWiring::One;
     run_slots(&mut s, 4000);
@@ -437,8 +438,38 @@ fn the_one_sided_jumper_halves_the_signal_and_adds_dc_by_volume() {
     set_wave(&mut s, 0x40);
     run_slots(&mut s, 4000);
     let lo = mixer(&s);
-    close((hi + lo) / 2.0, 96.0 / 255.0 * 10.0 / 39.0, 1e-4);
-    close(hi - lo, 96.0 / 255.0 * 0.5 * 2.0 * 10.0 / 39.0, 1e-4);
+    close((hi + lo) / 2.0, l96 * 10.0 / 39.0, 1e-4);
+    close(hi - lo, l96 * 0.5 * 2.0 * 10.0 / 39.0, 1e-4);
+}
+
+/// 音量の特性 L（音量 255 で 255）。
+fn level(vol: u8) -> f64 {
+    fc85_chips::es5503::volume_level(vol) as f64 / 65536.0
+}
+
+#[test]
+fn the_doc_volume_follows_the_measured_curve() {
+    // 台帳 ES5503.md §4.5（追補 2026-11-26）の式からの手計算：L(255)＝255、L(128)≈106.20、L(64)≈37.47、
+    // L(30)≈5.171。音量 1〜21 はニーの下で、波形がわずかに反転して漏れる（L≈−1.07）
+    close(level(255), 255.0, 1e-9);
+    close(level(128), 106.202, 1e-4);
+    close(level(64), 37.4706, 1e-4);
+    close(level(30), 5.1711, 1e-4);
+    close(level(1), -1.0706, 1e-3);
+    assert_eq!(level(0), 0.0, "音量 0 は漏れもない");
+    assert!((1..=21).all(|v| level(v) < 0.0) && level(22) > 0.0);
+    // 両側の配線の S/H は 2×s×L（音量 255、s＝64 で 1.0 V）：音量 128、波形 0xC0 で 2×64×106.20／32640 V
+    let mut s = doc_system(0xC0, 128, 0x00);
+    run_slots(&mut s, 4000);
+    close(
+        mixer_l(&s),
+        2.0 * 64.0 * level(128) / 32640.0 * 10.0 / 39.0,
+        1e-4,
+    );
+    // 音量 10 では、波形 0xC0 の S/H は負（反転した漏れ）
+    let mut s = doc_system(0xC0, 10, 0x00);
+    run_slots(&mut s, 4000);
+    assert!(s.ports.doc_board.sample_holds()[0] < 0);
 }
 
 /// ミキサの L の電圧（結合容量の前）。
@@ -457,13 +488,13 @@ fn a_halted_oscillator_at_volume_zero_is_silent_in_both_wirings() {
         assert_eq!(s.ports.doc_board.sample_holds()[0], 0, "{wiring:?}");
         assert_eq!(mixer_l(&s), 0.0);
     }
-    // 音量が 0 でないと、片側では止めたオシレータが 128×音量の直流を出す（S/H 0.784 V、音量 200）
+    // 音量が 0 でないと、片側では止めたオシレータが 128×L(音量) の直流を出す（S/H 0.742 V、音量 200）
     let mut s = doc_system(0xC0, 200, 0x01);
     s.ports.doc_board.sig_wiring = SigWiring::One;
     run_slots(&mut s, 4000);
     close(
         mixer_l(&s),
-        128.0 * 200.0 * 2.0 / 65280.0 * 10.0 / 39.0,
+        128.0 * level(200) * 2.0 / 65280.0 * 10.0 / 39.0,
         1e-4,
     );
     // 両側では中央（0 V）
