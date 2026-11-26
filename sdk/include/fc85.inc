@@ -57,12 +57,29 @@ ACRTC_HDR       EQU     $84             ; 水平表示
 ACRTC_VSR       EQU     $86             ; 垂直同期
 ACRTC_VDR       EQU     $88             ; 垂直表示
 ACRTC_SSW       EQU     $8A             ; 分割画面の幅 1
+ACRTC_SSW0      EQU     $8C             ; 上画面のラスタの数（U85 p.91）
+ACRTC_SSW2      EQU     $8E             ; 下画面のラスタの数
+ACRTC_BCR       EQU     $90             ; 属性の点滅：BON1・BOFF1・BON2・BOFF2（4 bit ずつ、U85 p.92–93）
+ACRTC_HWR       EQU     $92             ; ウィンドウの横：上位 HWS−1（HSYNC の終わりから）、下位 HWW−1
+ACRTC_VWS       EQU     $94             ; ウィンドウの縦の始まり−1（VSYNC の終わりから、U85 p.89–91）
+ACRTC_VWW       EQU     $96             ; ウィンドウのラスタの数
+ACRTC_GCRX      EQU     $98             ; グラフィックカーソル：上位 CXE、下位 CXS（HSYNC の始まりからのメモリサイクル）
+ACRTC_GCRYS     EQU     $9A             ; CYS（VSYNC の終わりからのラスタ、U85 p.94）
+ACRTC_GCRYE     EQU     $9C             ; CYE
 ACRTC_MWR0      EQU     $C2             ; 上画面の記憶の幅
 ACRTC_SAR0H     EQU     $C4
 ACRTC_SAR0L     EQU     $C6
 ACRTC_MWR1      EQU     $CA             ; 基本画面の記憶の幅
-ACRTC_SAR1H     EQU     $CC             ; 基本画面の開始番地
+ACRTC_SAR1H     EQU     $CC             ; 基本画面の開始番地（bit 11–8 は SDA：横のスムーズスクロール）
 ACRTC_SAR1L     EQU     $CE
+ACRTC_MWR2      EQU     $D2             ; 下画面
+ACRTC_SAR2H     EQU     $D4
+ACRTC_SAR2L     EQU     $D6
+ACRTC_MWR3      EQU     $DA             ; ウィンドウ
+ACRTC_SAR3H     EQU     $DC
+ACRTC_SAR3L     EQU     $DE
+ACRTC_CDR       EQU     $E8             ; カーソルの定義（U85 p.107–109）
+ACRTC_ZFR       EQU     $EA             ; ズーム：bit 15–12 HZF、bit 11–8 VZF（倍率−1、基本画面だけ、U85 p.110）
 
 ; CCR のビット
 ACRTC_CCR_ABT   EQU     $8000           ; 打切り（リセットの後は 1）
@@ -75,6 +92,21 @@ ACRTC_CCR_GBM4  EQU     $0200           ; 4 bit/画素
 ACRTC_OMR_MS    EQU     $8000           ; マスタ
 ACRTC_OMR_STR   EQU     $4000           ; 表示と描画を始める
 ACRTC_OMR_ACM_I EQU     $0008           ; インタリーブ
+ACRTC_OMR_ACP   EQU     $2000           ; 単一アクセスで描画を優先
+ACRTC_OMR_CSK1  EQU     $0400           ; カーソルのスキュー（×1〜3 メモリサイクル。十字では 0 にしない）
+ACRTC_OMR_DSK1  EQU     $0100           ; DISP のスキュー（×1〜3 メモリサイクル）
+ACRTC_OMR_RAM   EQU     $0080           ; 1：HSYNC の間に DRAM をリフレッシュしない
+; DCR のビット（U85 p.75–78）。SE は 0x 使わない、10 ブランク、11 表示（基本画面の SE1 は 1 bit）
+ACRTC_DCR_DSP   EQU     $8000
+ACRTC_DCR_BASE  EQU     $4000           ; 基本画面を表示（電源投入時の値とする [V]）
+ACRTC_DCR_UPPER EQU     $3000           ; 上画面を表示（ブランクは $2000）
+ACRTC_DCR_LOWER EQU     $0C00           ; 下画面を表示（ブランクは $0800）
+ACRTC_DCR_WIN   EQU     $0300           ; ウィンドウを表示（ブランクは $0200）
+; CDR のビット（U85 p.107–109）。CON・COFF は 4 フィールド単位
+ACRTC_CDR_GRAPHIC EQU   $8000           ; GCR のカーソルを CUD1 に
+ACRTC_CDR_CROSS EQU     $C000           ; 十字（横が CUD1、縦が CUD2）
+ACRTC_CDR_CON1  EQU     $0800           ; ×1〜7：ON は 4×(n＋1) フィールド。0 は出さない
+ACRTC_CDR_COFF1 EQU     $0100           ; ×1〜7：OFF は 4×(n＋1) フィールド。0 は常に ON
 
 ; 案B の表示（256×192、4 bpp、262 ライン、台帳 HD63484.md §3.4）[P]
 ACRTC_B_HSR     EQU     $AA0D
