@@ -248,15 +248,30 @@ const KNOB_HELP: &str =
     "PageUp・PageDown（か ]・[）で半音ずつ、Shift で 1/8 半音、Home（か \\）で戻す";
 
 /// つまみ `i` を `semitones` 回す（`None` は基板の発振器に戻す）。止まっていれば基板の周波数から回す。
-fn turn_knob(c: &mut Console, i: usize, semitones: Option<f64>) {
+/// `pos` はつまみの位置（基板から何半音か）。基板の周期は整数の時刻単位に丸まるので、読み直した
+/// 周波数から回すと誤差がたまる。位置から周波数を決め、台本などで半音の半分より大きく替わって
+/// いたときだけ、今の周波数から位置を読み直す。
+fn turn_knob(c: &mut Console, i: usize, pos: &mut f64, semitones: Option<f64>) {
     let (name, label, f0) = KNOBS[i];
+    let lo = 12.0 * (1.0 / f0).log2();
     let cmd = match semitones {
         Some(s) => {
-            let f = knob_hz(c, i);
-            let f = if f > 0.0 { f * 2f64.powf(s / 12.0) } else { f0 };
-            format!("clock {name} {}", f.clamp(1.0, 4.0 * f0))
+            let now = knob_hz(c, i);
+            if now <= 0.0 {
+                *pos = 0.0;
+            } else {
+                let p = 12.0 * (now / f0).log2();
+                if (p - *pos).abs() > 0.5 {
+                    *pos = p;
+                }
+                *pos = (*pos + s).clamp(lo, 24.0);
+            }
+            format!("clock {name} {}", f0 * 2f64.powf(*pos / 12.0))
         }
-        None => format!("clock {name} off"),
+        None => {
+            *pos = 0.0;
+            format!("clock {name} off")
+        }
     };
     if c.sys.bends.mode != Mode::Bend {
         let _ = c.sys.bend("mode bend");
@@ -265,11 +280,9 @@ fn turn_knob(c: &mut Console, i: usize, semitones: Option<f64>) {
         Ok(()) => {
             let f = knob_hz(c, i);
             if f > 0.0 {
-                eprintln!(
-                    "つまみ：{label} {}（基板から {:+.2} 半音）",
-                    fmt_hz(f),
-                    12.0 * (f / f0).log2()
-                );
+                // -0.00 と出さない
+                let p = if pos.abs() < 0.005 { 0.0 } else { *pos };
+                eprintln!("つまみ：{label} {}（基板から {p:+.2} 半音）", fmt_hz(f));
             } else {
                 eprintln!("つまみ：{label} 止まっている");
             }
@@ -773,6 +786,7 @@ fn main() {
     let mut midi = midi::Midi::open(a.midi_in, a.midi_out);
     let mut frames = 0u64;
     let mut knob = 0usize;
+    let mut knob_pos = [0.0f64; KNOBS.len()];
     eprintln!("{KEY_HELP}");
     while w.is_open() && !w.is_key_down(minifb::Key::Escape) {
         if w.is_key_pressed(minifb::Key::F5, minifb::KeyRepeat::No) {
@@ -799,19 +813,19 @@ fn main() {
             &[minifb::Key::PageUp, minifb::Key::RightBracket],
             minifb::KeyRepeat::Yes,
         ) {
-            turn_knob(&mut c, knob, Some(step));
+            turn_knob(&mut c, knob, &mut knob_pos[knob], Some(step));
         }
         if pressed(
             &[minifb::Key::PageDown, minifb::Key::LeftBracket],
             minifb::KeyRepeat::Yes,
         ) {
-            turn_knob(&mut c, knob, Some(-step));
+            turn_knob(&mut c, knob, &mut knob_pos[knob], Some(-step));
         }
         if pressed(
             &[minifb::Key::Home, minifb::Key::Backslash],
             minifb::KeyRepeat::No,
         ) {
-            turn_knob(&mut c, knob, None);
+            turn_knob(&mut c, knob, &mut knob_pos[knob], None);
         }
         run_bend_script(&mut c, &a, frames);
         c.sys.set_ports(pad(&w), 0);
@@ -837,5 +851,36 @@ fn main() {
     }
     if let Some(p) = &a.dump {
         dump_ppm(p, &buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_knob_returns_to_the_board_clock_without_drift() {
+        // 基板の周期は整数の時刻単位に丸まる。半音ずつ上げ下げしても、位置から決めるので誤差がたまらない
+        for (i, &(_, label, f0)) in KNOBS.iter().enumerate() {
+            let mut c = Console::new();
+            let mut pos = 0.0;
+            for _ in 0..7 {
+                turn_knob(&mut c, i, &mut pos, Some(1.0));
+            }
+            for _ in 0..7 {
+                turn_knob(&mut c, i, &mut pos, Some(-1.0));
+            }
+            assert_eq!(pos, 0.0, "{label}");
+            let cents = 1200.0 * (knob_hz(&c, i) / f0).log2();
+            assert!(cents.abs() < 0.5, "{label}：{cents:.3} セント");
+            // 上限（基板の 4 倍）で止まり、Home で基板の発振器に戻る
+            for _ in 0..30 {
+                turn_knob(&mut c, i, &mut pos, Some(1.0));
+            }
+            assert_eq!(pos, 24.0, "{label}");
+            turn_knob(&mut c, i, &mut pos, None);
+            assert_eq!(pos, 0.0, "{label}");
+            assert_eq!(knob_hz(&c, i), f0, "{label}");
+        }
     }
 }
