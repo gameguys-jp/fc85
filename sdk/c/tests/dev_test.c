@@ -3,7 +3,8 @@
  *
  * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）→ 40 フレーム待つ →
  * HBlank の割込みで色 0 を替える（v_phase 4。その後 10 フレームはそのまま）→ 同じことを DIRECT で（v_phase 5）→
- * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）→ Temporal RAM（v_phase 8）→ MIDI（試験が送るのを待つ。v_phase 9）。
+ * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）→ Temporal RAM（v_phase 8）→ MIDI（試験が送るのを待つ。v_phase 9）→
+ * A/D（試験が Audio IN に入れる音を待つ。v_phase 10）。
  * 試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を分けて測り、v_phase 4・5 で画面を撮る。
  *
  * echo_dsp.h は試験が tests/echo.dsp から dspasm --c-array で作る。
@@ -35,6 +36,9 @@ uint16_t r_dsp[8];
 uint16_t r_dma[8];
 uint16_t r_tmp[10];
 uint16_t r_midi[14];
+uint16_t r_adc[6];
+uint8_t r_rec[512];
+uint8_t r_rec3[128];
 
 /* ラスタの区切り（画面の y＝60 と 120 の辺りのラスタで比べる） */
 #define SPLIT1 (VIDEO_TOP_RASTER + 60U)
@@ -356,6 +360,25 @@ static void midi_tests(void)
     v_phase = 9;
 }
 
+/* A/D（DR-131）：何もつながない Audio IN を 64 標本録る → 試験が Audio IN に正弦波を入れるのを、しきい値 16 で
+ * 待って 512 標本（ラスタ 1 本ごと）→ 続けて 128 標本（ラスタ 3 本ごと）→ 来ない大きさ（100）を待って時間切れ */
+static void adc_tests(void)
+{
+    uint8_t one;
+    unsigned lo = 255, hi = 0;
+    r_adc[0] = (uint16_t)doc_adc_record(r_rec, 64, 1, 0, 0);
+    for (unsigned i = 0; i < 64; i++) {
+        lo = r_rec[i] < lo ? r_rec[i] : lo;
+        hi = r_rec[i] > hi ? r_rec[i] : hi;
+    }
+    r_adc[1] = (uint16_t)lo;
+    r_adc[2] = (uint16_t)hi;
+    r_adc[3] = (uint16_t)doc_adc_record(r_rec, sizeof r_rec, 1, 16, 2UL * DOC_ADC_LINE_HZ);
+    r_adc[4] = (uint16_t)doc_adc_record(r_rec3, sizeof r_rec3, 3, 0, 0);
+    r_adc[5] = (uint16_t)doc_adc_record(&one, 1, 1, 100, 1000);
+    v_phase = 10;
+}
+
 int main(void)
 {
     acrtc_tests();
@@ -368,6 +391,7 @@ int main(void)
     dma_tests();
     temporal_tests();
     midi_tests();
+    adc_tests();
     done = 0xC0DE;
     return 0;
 }

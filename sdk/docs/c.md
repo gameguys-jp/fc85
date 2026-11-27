@@ -1,7 +1,7 @@
 # C で ROM を書く
 
-**v0.9**  
-2026年11月27日
+**v0.10**  
+2026年11月28日
 
 > fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
 
@@ -200,9 +200,12 @@ acrtc_dma(0);
 | `doc_freq(osc, f)`・`doc_volume(osc, v)` | 周波数・音量だけを替える | なし |
 | `doc_halt(osc)`・`doc_go(osc)` | 制御を読み、H だけを替えて書く | なし |
 | `doc_load_wave(ch, wave, staging, bytes)` | Staging RAM から波形 RAM へ、Fabric のチャネル ch で運ぶ（port 0 → port 2、FORMAT 0）。終わるまで待つ | STATUS |
+| `doc_adc()` | A/D（0xE2）を MOVE.B で 1 回読む。前の変換の結果を返し、次の変換を始める。続けて呼ぶ間は 30 µs 以上あける（DR-123）。値は背面の Audio IN の (L＋R)/2（何もつながなければ 128、±1 V が 25〜230。DR-129） | 0〜255 |
+| `doc_adc_record(buf, n, lines, threshold, wait)` | 録る：ラスタ lines 本ごと（1 本は約 63.7 µs、`DOC_ADC_LINE_HZ`＝15,700 Hz）に A/D を読み、buf に n 個。threshold が 1 以上なら、\|値−128\| が threshold 以上になるまで最大 wait 本のラスタを待ち、その標本から録る。割込みを止めて回す（VBlank の処理と MIDI の受信も止まる）。値の 0 は 1 にする（そのまま波形にできる）。DR-131 | 録った数（待って来なければ 0） |
 
-- 子基板がないと DOC の窓はバスエラー（§03 の 3）。`doc_present()` が 1 のときだけほかの関数を呼ぶ。`doc_load_wave` は自分で確かめ、なければ何もせず `FAB_ST_ERROR` を返す（port 2 は本体 DAC の FIFO になっているため）。
-- 窓は MOVE.B の 1 回の読みか書きだけで触る。0xE0・0xE2 は読まない（§03 の 12・13）。
+- 子基板がないと DOC の窓はバスエラー（§03 の 3）。`doc_present()` が 1 のときだけほかの関数を呼ぶ。`doc_load_wave` と `doc_adc_record` は自分で確かめ、なければ何もしない（`doc_load_wave` は `FAB_ST_ERROR`、`doc_adc_record` は 0 を返す。port 2 は本体 DAC の FIFO になっているため）。
+- 窓は MOVE.B の 1 回の読みか書きだけで触る。0xE0 は読まない。0xE2 は A/D の関数だけが読む（§03 の 12・13。値を使わない読みも TST にしない）。
+- 標本の時刻は、`doc_adc_record` ならラスタの変わり目（変わり目を見る間の数 µs ゆれる）。ほかの時刻で録るなら、DOC のオシレータの割込み（ベクタ 28）や HBlank の割込み（`video.h`）の中で `doc_adc()` を 1 回呼ぶ。C で書いた手本は SAMPLE 10（`sdk/samples/sampler`。録って波形 RAM に運び、MIDI で弾く。DR-131）。
 - 鳴らさないオシレータは、鳴らすものと別のチャンネル（CA）に置く。波形の値は $01〜$FF（0 はオシレータを止める印）（§03 の 16・17）。
 - 制御に IE を立てるなら、先にジャンプ表のベクタ 28 を替える（`guarantees.md` §03 の 14。替え方は §07 の `fc85_set_vector`）。
 - `doc_halt`・`doc_go` は読みと書きの 2 回のアクセスで、その間に DOC が制御を変えることがある（ワンショットの終わりで H が立つ、スワップ）。`doc_go` はそれでも動かす。
@@ -330,5 +333,5 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
 - 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。MIDI は v0.9 で足した（DR-127）。音声の入力はまだ扱わない（機械の側が決まっていない。OI-105）。
-- C で書いた、DSP の音を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を、v0.9 で MIDI で弾く DOC のシンセの SAMPLE 9（`sdk/samples/midi`、DR-128）を足した。
+- C で書いた、DSP の音を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を、v0.9 で MIDI で弾く DOC のシンセの SAMPLE 9（`sdk/samples/midi`、DR-128）を、v0.10 で DOC の A/D の関数（`doc_adc`・`doc_adc_record`）と Audio IN を録って弾くサンプラーの SAMPLE 10（`sdk/samples/sampler`、DR-131）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

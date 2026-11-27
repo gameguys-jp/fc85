@@ -82,3 +82,55 @@ unsigned doc_load_wave(unsigned ch, uint16_t wave, uint16_t staging, uint16_t by
     };
     return fab_run(ch, &x);
 }
+
+/* 0xE2 を MOVE.B で 1 回読む。値を使わない読みを GCC が TST にしないよう、命令を決めて書く（DR-030、DR-123） */
+static inline uint8_t adc_read(void)
+{
+    uint8_t v;
+    __asm__ volatile("move.b %1,%0" : "=d"(v) : "m"(REG_DOC_ADC));
+    return v;
+}
+
+uint8_t doc_adc(void)
+{
+    return adc_read();
+}
+
+/* ラスタが line から変わるまで待ち、新しいラスタを返す */
+static unsigned next_line(unsigned line)
+{
+    unsigned now;
+    while ((now = REG_VIDEO_LINE) == line) {
+    }
+    return now;
+}
+
+unsigned doc_adc_record(uint8_t *buf, unsigned n, unsigned lines, unsigned threshold, uint32_t wait)
+{
+    if (n == 0 || !doc_present())
+        return 0;
+    if (lines < 1)
+        lines = 1;
+    uint16_t sr = fc85_irq_disable();
+    unsigned line = next_line(REG_VIDEO_LINE);      /* ラスタの変わり目から */
+    (void)adc_read();                               /* 最初の変換を始める（値は捨てる） */
+    unsigned got = 0;
+    uint32_t waited = 0;
+    while (got < n) {
+        for (unsigned k = 0; k < lines; k++)
+            line = next_line(line);
+        uint8_t v = adc_read();                     /* ラスタ lines 本前に始めた変換の結果 */
+        if (got == 0 && threshold) {
+            unsigned d = v >= 128 ? v - 128U : 128U - v;
+            if (d < threshold) {
+                waited += lines;
+                if (waited >= wait)
+                    break;
+                continue;
+            }
+        }
+        buf[got++] = v ? v : 1;
+    }
+    fc85_irq_restore(sr);
+    return got;
+}

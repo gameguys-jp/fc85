@@ -74,7 +74,7 @@ cd emulator && cargo build --release -p fc85-api -p fc85-host
 - **ACRTC**：FIFO は SR の WFR・RFR を見てから読み書きし、待ちの数に頼らない（DR-096）。描画は VBlank の直後にまとめる。
 - **時間**：呼出しの時間、起動のフレーム数、命令の待ちの数に頼らない。時間が要るなら `VIDEO_LINE` か `bios_frame` で測る。
 - **字**：文字 ROM の記号と一部の漢字の字形はまだそろっていない（描いていない字は市松模様）。
-- **C**：浮動小数点・`malloc`・`printf` はない（整数と固定小数点で書く）。ACRTC・DOC の窓に `|=`・`&=` を使わない（値を作って `=` で書く）。割込みの関数は `fc85_set_vector` と `__attribute__((interrupt_handler))`、VBlank のフックはふつうの関数でよい。GCC が出す命令の時間に頼らない（`sdk/docs/c.md` §05〜§11）。ACRTC の図形と矩形の DMA・Data Fabric・DOC・ADPCM・パレットと HBlank の割込み・DSP・Temporal RAM・MIDI は `acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`・`video.h`・`dsp.h`・`temporal.h`・`midi.h` の関数を使うと、規約の手順を関数が守る（`sdk/docs/c.md` §09）。窓口の `midi` の手順で MIDI IN に byte を置き、送った MIDI OUT を時刻つきで取り出せる（`sdk/docs/emulator-api.md` §03）。HBlank の割込みで替えた色は、比べたラスタの 2 つ後から効く。
+- **C**：浮動小数点・`malloc`・`printf` はない（整数と固定小数点で書く）。ACRTC・DOC の窓に `|=`・`&=` を使わない（値を作って `=` で書く）。割込みの関数は `fc85_set_vector` と `__attribute__((interrupt_handler))`、VBlank のフックはふつうの関数でよい。GCC が出す命令の時間に頼らない（`sdk/docs/c.md` §05〜§11）。ACRTC の図形と矩形の DMA・Data Fabric・DOC・ADPCM・パレットと HBlank の割込み・DSP・Temporal RAM・MIDI は `acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`・`video.h`・`dsp.h`・`temporal.h`・`midi.h` の関数を使うと、規約の手順を関数が守る（`sdk/docs/c.md` §09）。窓口の `midi` の手順で MIDI IN に byte を置き、送った MIDI OUT を時刻つきで取り出せる（`sdk/docs/emulator-api.md` §03）。窓口の `audio_in` の手順で背面の Audio IN に音（WAV・数の列・正弦波）を入れ、`doc.h` の `doc_adc_record` で録れる（DR-129、DR-131）。HBlank の割込みで替えた色は、比べたラスタの 2 つ後から効く。
 
 ## 06　読むもの
 
@@ -86,7 +86,7 @@ cd emulator && cargo build --release -p fc85-api -p fc85-host
 | `sdk/docs/emulator-api.md` | エミュレータの窓口の手順 |
 | `sdk/include/fc85.h`・`fc85.inc` | 番地とビットの名前（`docs/spec/registers.toml` から生成） |
 | `docs/spec/hardware.md` | 機械の仕様（§05 メモリ、§06 Data Fabric、§07 クロックと映像、§11 ベンド） |
-| `sdk/samples/*/README.md` | サンプル：game（SAMPLE 1：ACRTC の XOR の動く物、ADPCM の効果音、DOC か本体 DAC の音楽）、dsp（SAMPLE 2：DSP で音を加工）、patches（SAMPLE 3：実験パッチ）、video（SAMPLE 4：ACRTC の分割画面・ウィンドウ・ズーム・スクロール）、bend（SAMPLE 5：ベンド点の試験信号）、showcase（SAMPLE 6：ラスタのパレット、DSP と ACRTC の線画、ソフトのスプライト、漢字、描画の予算）、raster（SAMPLE 7：C で書いた HBlank のラスタのパレットと DIRECT。C の ROM の手本）、echo（SAMPLE 8：C で書いた Temporal RAM の残像。ACRTC の DMA と Fabric）、midi（SAMPLE 9：C で書いた MIDI で弾く DOC のシンセ。同期と AM のモード、声ごとの CA） |
+| `sdk/samples/*/README.md` | サンプル：game（SAMPLE 1：ACRTC の XOR の動く物、ADPCM の効果音、DOC か本体 DAC の音楽）、dsp（SAMPLE 2：DSP で音を加工）、patches（SAMPLE 3：実験パッチ）、video（SAMPLE 4：ACRTC の分割画面・ウィンドウ・ズーム・スクロール）、bend（SAMPLE 5：ベンド点の試験信号）、showcase（SAMPLE 6：ラスタのパレット、DSP と ACRTC の線画、ソフトのスプライト、漢字、描画の予算）、raster（SAMPLE 7：C で書いた HBlank のラスタのパレットと DIRECT。C の ROM の手本）、echo（SAMPLE 8：C で書いた Temporal RAM の残像。ACRTC の DMA と Fabric）、midi（SAMPLE 9：C で書いた MIDI で弾く DOC のシンセ。同期と AM のモード、声ごとの CA）、sampler（SAMPLE 10：C で書いた Audio IN のサンプラー。DOC の A/D で録り、波形 RAM で弾く） |
 
 ## 07　しないこと
 

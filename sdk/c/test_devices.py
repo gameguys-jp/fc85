@@ -227,6 +227,10 @@ class TestDeviceHelpers(unittest.TestCase):
             to_phase(9)
             emu.call("run", frames=2, stop_on_bus_error=True)
             midi_out = [b["byte"] for b in emu.call("midi")["out"]]
+            # A/D（DR-131）：ROM はしきい値で待っている。Audio IN に 1 kHz、±0.5 V の正弦波を 300 ms 入れる
+            emu.call("audio_in", tone={"hz": 1000, "amp": 0.5, "ms": 300})
+            to_phase(10)
+            emu.call("run", frames=2, stop_on_bus_error=True)
             self.assertEqual(peek("bios_exc_vector", 2)[0], 0, "例外で止まった")
             self.assertEqual(peek("done", 2)[0], 0xC0DE, "終わりまで来ていない")
 
@@ -355,6 +359,30 @@ class TestDeviceHelpers(unittest.TestCase):
                 self.assertEqual(r[12:], [0, 0], "捨てた byte はなく、リングは空")
                 self.assertEqual(midi_out, [0x90, 60, 100, 0x90, 62, 0, 0xF8, 0xB0, 1, 64],
                                  "ステータスを付け直して送り返す")
+
+            with self.subTest("A/D"):
+                a = peek("r_adc", 2, 6)
+                self.assertEqual(a[:3], [64, 128, 128], "何もつながない A/D は 128（DR-129）")
+                self.assertEqual(a[3:6], [512, 128, 0], "しきい値で録る、ラスタ 3 本ごと、来ない大きさは時間切れ")
+                rec, rec3 = peek("r_rec", 1, 512), peek("r_rec3", 1, 128)
+                self.assertGreaterEqual(abs(rec[0] - 128), 16, "しきい値を超えた標本から録る")
+                self.assertNotIn(0, rec + rec3, "0 は 1 にする")
+                # ±0.5 V は 128±51（0〜2.5 V を 256 に分ける。中央 1.25 V。DR-129）。1 kHz を 15.7 kHz で録ると、
+                # 山は 1 周期の 15.7 標本のどれかに入り、端から 2 以内
+                self.assertTrue(75 <= min(rec) <= 80 and 176 <= max(rec) <= 181, f"{min(rec)}〜{max(rec)}")
+
+                def ups(xs):
+                    return sum(1 for p, q in zip(xs, xs[1:]) if p < 128 <= q)
+
+                # 512 標本は 512÷15700 秒で 32.6 周期。ラスタ 3 本ごとの 128 標本は 128×3÷15700 秒で 24.5 周期
+                self.assertIn(ups(rec), (32, 33), "ラスタ 1 本ごと（15.7 kHz）")
+                self.assertIn(ups(rec3), (24, 25), "ラスタ 3 本ごと（5.2 kHz）")
+                # 0xE2 は MOVE.B でだけ読む（TST・CMP で読まない。DR-030、DR-123）
+                adc = f"{0x210000 + 2 * 0xE2:x}"
+                reads = [(n, op) for n in ("doc_adc", "doc_adc_record") for op, args in self.funcs.get(n, [])
+                         if adc in args]
+                self.assertTrue(reads, "0xE2 を読む命令が見つからない")
+                self.assertEqual({op for _, op in reads}, {"moveb"}, reads)
 
             with self.subTest("DSP"):
                 d = peek("r_dsp", 2, 8)

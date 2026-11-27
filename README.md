@@ -60,6 +60,7 @@ py sdk/samples/showcase/build.py
 py sdk/samples/raster/build.py      # C のサンプル。68000 の GCC が要る（sdk/docs/c.md §02）
 py sdk/samples/echo/build.py        # 同じく C
 py sdk/samples/midi/build.py        # 同じく C
+py sdk/samples/sampler/build.py     # 同じく C
 cd emulator
 cargo run --release -p fc85-host                                              # Boot ROM の内蔵のデモ
 cargo run --release -p fc85-host -- --cart ../sdk/samples/game/build/game.bin  # サンプルのカートリッジ
@@ -71,6 +72,7 @@ cargo run --release -p fc85-host -- --cart ../sdk/samples/showcase/build/showcas
 cargo run --release -p fc85-host -- --cart ../sdk/samples/raster/build/raster.bin      # C で書いたラスタの帯（A で DIRECT、B で音）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/echo/build/echo.bin          # C で書いた Temporal RAM の残像（上下で遅れ、A で HOLD）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/midi/build/midi.bin --midi-in 0  # C で書いた MIDI で弾く DOC のシンセ（A で弾く、C で音色）
+cargo run --release -p fc85-host -- --cart ../sdk/samples/sampler/build/sampler.bin --audio-in-device default  # C で書いた Audio IN のサンプラー（B で録る、A で弾く）
 ```
 
 | キー | 働き |
