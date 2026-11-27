@@ -1,7 +1,7 @@
 # SAMPLE 5（ベンド点を試す試験信号のカートリッジ）
 
-**v0.1**  
-2026年11月26日
+**v0.2**  
+2026年11月27日
 
 > 状態：作業中の版。仕様書 §11 のベンド点（クロックのジャンパ、DOC 子基板のバスの線、文字 ROM の線、FIFO のテストピン、Main RAM のリフレッシュ）を試すときに鳴らしておく、止まらない試験信号のサンプル。機械仕様は [仕様書](../../../docs/spec/hardware.md)、BIOS の約束は [bios-abi.md](../../docs/bios-abi.md)、エミュレータのベンド点の命令は `emulator/crates/board/src/bend.rs` が正。このサンプルで決めた値はすべて [P] で、エージェントが決めた（ユーザーが判断を任せた。要見直し）。題名の `SAMPLE 5` は中立な仮の名前で、製品名ではない。
 
@@ -56,6 +56,8 @@ cargo run --release -p fc85-host -- --headless --frames 900 --cart ../sdk/sample
 300 clock doc 4e6
 600 clock doc off
 ```
+
+ブラウザで動かす（WebAssembly の試しの頁。`py emulator/embed/build.py` と `py emulator/embed/serve.py` の後、`http://127.0.0.1:8000/?sample=bend` を開く）：頁の「ベンド」の欄に `mode bend`、`clock doc 4e6` のように 1 行ずつ打って Enter（台本の行からフレームの数を除いたもの。DR-124）。頁を読み込み直すと通常に戻る（emulator-api.md §08）。
 
 試験は `py -m unittest discover -s sdk/samples/bend`（見出し、大きさ、波形に 0x00 がないこと、FC の表と式、太鼓の ADPCM の byte の列、格子のデータ）と、エミュレータの `the_bend_cartridge_plays_and_draws`（`emulator/crates/board/tests/console_boot.rs`）。
 
