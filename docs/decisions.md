@@ -1131,3 +1131,13 @@
 | 理由 | ユーザーの方針（本機特有の効果）。Temporal RAM の残像・帰還・遅延は本機の映像と音の表現の柱で、CTRL の書き方（モードを毎回決め直す、W1C）を知らずに書くと、印を消すつもりでモードを落としたり、モードを替えるつもりで印を消したりする。確かめたこと [V]（エミュレータ）：CLEAR の後はポインタ 0 で EQUAL、16 byte を書くと DIST 16 で印なし、読み戻すと EQUAL｜UNDERRUN、HOLD にしてから印を消すと HOLD は残り EQUAL だけ、CLEAR でモードも 0、読み戻した 16 byte は書いた並びと同じ |
 | 却下した案 | 見出しの static inline だけにする：試験の逆アセンブルの見張り（I/O の窓に読み書き一体の命令がないこと）は `sdk/c` の .c だけを見るので、関数にして見張りに入れる。CTRL を読んで書き戻す形の「モードを替える」：読んだ値の OVERRUN・UNDERRUN を書き戻すと W1C で消える |
 | 影響 | sdk/c（temporal.c・include/temporal.h（新規）、tests/dev_test.c、test_devices.py）、sdk/tools/m68kgcc.py、sdk/docs/c.md v0.6（§05、§09、§11、§12）、CLAUDE.md、ひな形の AGENTS.md と main.c |
+
+## DR-114　C で書いた Temporal RAM の残像のサンプル（SAMPLE 8）
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。`sdk/samples/echo` に、C で書いた 2 本目のサンプル SAMPLE 8 を足す [P]。左の 64×32 画素の矩形で玉を跳ねさせ、毎回その矩形を DRD と Fabric で Temporal RAM（port 6）に記録する（1 語を `FMT_16_8_HI` と `FMT_16_8_LO` の 2 回に分け、1 回 1024 byte。64 KiB で 64 回分）。右の 3 つの矩形に d・2d・3d 回前の記録を、上位 byte を DWT（`FMT_8_16`、SHIFT 8。下位は 0）、下位 byte を DMOD の OR（SHIFT 0）で描き戻す。上・下で d（1〜21）、A で HOLD、START で戻す。使うのは SDK の C の関数（`acrtc.h` の DMA、`temporal.h`、`fabric.h`）だけ。字は DDM を下ろした後に、値が変わったときだけ BIOS で書く。試験：主ループが 60 フレームで 60 回、誤り 0、主ループの 1 回ごとに VRAM を読み、右の k 番目の矩形が k×d 回前の左の矩形と語まで同じこと、HOLD の後は記録しなかった回の代わりに 64 回前の周の記録が出ること |
+| 理由 | ユーザーの方針（本機特有の映像効果）。Temporal RAM の遅延・保持は本機の映像の柱で、C の関数（DR-112・DR-113）を組み合わせた手本がなかった。語を 2 byte に分けて 8 bit の RAM を往復させる手順（FORMAT・SHIFT・DMOD の OR）は、関数の説明だけでは組み立てにくい。確かめたこと [V]（エミュレータ）：1 フレームの仕事は CPU 約 86%・ACRTC 約 70%・Fabric 約 41% で毎フレーム回る。最初の版（64×48）は 1 フレームに収まらず 2 フレームに 1 回になったので、高さを 32 にした。16 回ごとに BIOS で数を書くと、その回だけ 1 フレームを越えたので、変わったときだけ書く |
+| 却下した案 | 毎回、記録の後に読出しのポインタを WPTR−k·d·1024 に置くのでなく、遅延を DIST で固定して RPTR を進めるだけにする：3 つの遅れを 1 本の読出しのポインタで作れない。玉を ACRTC の XOR で動かし、消さずに残す：記録した絵と比べる試験が、前の回の絵に左右される |
+| 影響 | sdk/samples/echo（新規：main.c、build.py、test_build.py、README.md）、sdk/docs/c.md v0.7（§09、§12）、CLAUDE.md、README.md、ひな形の AGENTS.md v0.7 と main.c |

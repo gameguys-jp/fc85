@@ -1,6 +1,6 @@
 # C で ROM を書く
 
-**v0.6**  
+**v0.7**  
 2026年11月27日
 
 > fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
@@ -267,6 +267,7 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 - Temporal RAM は 64 KiB の 8 bit の SRAM。ポインタは byte 番地で、Fabric が 1 要素を運ぶたびに 1 進み、64 KiB で回る。遅延は DIST で、読み書きの速さの差は Fabric のチャネルの速さで作る（DR-067）。
 - 追越しは止めず、印だけを立てる：書込みで WPTR＝RPTR になったら OVERRUN、読出しで一致したら UNDERRUN。ずれた履歴を混ぜる表現（Temporal feedback）のために、わざと起こしてもよい。書いていない番地は電源投入時の中身（決まらない）を読む。
 - CTRL の書込みはモードを毎回決め直す（CLEAR は 1 回の動作、OVERRUN・UNDERRUN は W1C）。関数は値を作って 1 回で書く。`TMP_SYNC` は VBlank の始まりで両方のポインタを、`TMP_RSYNC` は読出しのポインタだけを 0 にし（書いた 1 フィールドを毎フィールド繰り返す）、`TMP_HOLD` は書込みを止める（ポインタは進む。フィールドの保持）。
+- C で書いた手本は SAMPLE 8（`sdk/samples/echo`。矩形を 1 語 2 byte で記録し、d・2d・3d 回前を DWT と DMOD の OR で描き戻す。HOLD。DR-114）。
 
 ### DSP（`dsp.h`）
 
@@ -307,5 +308,5 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
 - 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。外の入出力（音声の入力、MIDI）はまだ扱わない。
-- C で書いた、DSP・DOC の音楽・ACRTC の描画を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を足した。
+- C で書いた、DSP と DOC の音楽を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

@@ -5,7 +5,8 @@
  * 文字列には英字・数字・空白を使う。ここから書き足して自分の ROM にする。ACRTC の図形・Data Fabric・DOC・ADPCM・
  * パレットと HBlank の割込み・DSP・Temporal RAM を C から使う関数は acrtc.h・fabric.h・doc.h・adpcm.h・video.h・
  * dsp.h・temporal.h（sdk/docs/c.md §09）。音・映像・DSP の使い方の手本は sdk/samples/ の各サンプル（README.md）。C で書いた
- * ものは sdk/samples/raster（HBlank のラスタのパレット）、ほかはアセンブラ。
+ * ものは sdk/samples/raster（HBlank のラスタのパレット）と sdk/samples/echo（Temporal RAM の残像）、ほかは
+ * アセンブラ。
  *
  * 番地とビットの名前は fc85.h、BIOS は bios.h（sdk/docs/bios-abi.md）、ROM が守ることは sdk/docs/guarantees.md。
  */
