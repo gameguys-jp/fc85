@@ -34,6 +34,34 @@ static AREA: Mutex<&'static CStr> = Mutex::new(c"view");
 static UPDATED: AtomicBool = AtomicBool::new(false);
 static PAD: AtomicU16 = AtomicU16::new(0);
 static POLLS: AtomicUsize = AtomicUsize::new(0);
+/// 偽の MIDI の口：IN に来る byte、OUT に書かれた byte と delta_time、flush の数。
+static MIDI_IN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+static MIDI_OUT: Mutex<Vec<(u8, u32)>> = Mutex::new(Vec::new());
+static MIDI_FLUSHES: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn midi_enabled() -> bool {
+    true
+}
+
+unsafe extern "C" fn midi_read(byte: *mut u8) -> bool {
+    let mut q = lock(&MIDI_IN);
+    if q.is_empty() {
+        return false;
+    }
+    // SAFETY: コアは書ける b を渡す
+    unsafe { *byte = q.remove(0) };
+    true
+}
+
+unsafe extern "C" fn midi_write(byte: u8, delta_time: u32) -> bool {
+    lock(&MIDI_OUT).push((byte, delta_time));
+    true
+}
+
+unsafe extern "C" fn midi_flush() -> bool {
+    MIDI_FLUSHES.fetch_add(1, Ordering::SeqCst);
+    true
+}
 
 fn seen() -> MutexGuard<'static, Seen> {
     lock(&SEEN)
@@ -98,6 +126,16 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                 seen()
                     .messages
                     .push(CStr::from_ptr(m.msg).to_string_lossy().into_owned());
+                true
+            }
+            RETRO_ENVIRONMENT_GET_MIDI_INTERFACE => {
+                *data.cast::<RetroMidiInterface>() = RetroMidiInterface {
+                    input_enabled: Some(midi_enabled),
+                    output_enabled: Some(midi_enabled),
+                    read: Some(midi_read),
+                    write: Some(midi_write),
+                    flush: Some(midi_flush),
+                };
                 true
             }
             _ => false,
@@ -295,6 +333,50 @@ fn a_frontend_session() {
     std::fs::write(dir.join("game.bends"), "clock nothing 1\n").unwrap();
     // SAFETY: path は 0 で終わる
     assert!(!unsafe { retro_load_game(&info) }, "読めないベンド点は誤り");
+
+    // MIDI（DR-126）：来た byte を送り返す Boot ROM に替える。MIDI IN の byte はフレームの頭に線に来て、
+    // ACIA が送り返した byte は前の byte からの µs を付けて書かれる
+    retro_unload_game();
+    let mut echo = vec![0xFFu8; 0x10000];
+    let code: [u16; 25] = [
+        0x13FC, 0x0003, 0x0026, 0x0014, 0x13FC, 0x0015, 0x0026, 0x0014, // ACIA：$03、$15
+        0x0839, 0x0000, 0x0026, 0x0014, 0x67F6, // RDRF を待つ
+        0x1039, 0x0026, 0x0016, // MOVE.B MIDI_DATA,D0
+        0x0839, 0x0001, 0x0026, 0x0014, 0x67F6, // TDRE を待つ
+        0x13C0, 0x0026, 0x0016, // MOVE.B D0,MIDI_DATA
+        0x60DE,
+    ];
+    echo[..8].copy_from_slice(&[0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);
+    for (i, w) in code.iter().enumerate() {
+        echo[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&w.to_be_bytes());
+    }
+    std::fs::write(dir.join(BOOT_FILE), &echo).unwrap();
+    // SAFETY: NULL はゲームなし
+    assert!(unsafe { retro_load_game(std::ptr::null()) });
+    run(1);
+    lock(&MIDI_IN).extend([0x90, 60, 100]);
+    let flushes = MIDI_FLUSHES.load(Ordering::SeqCst);
+    run(1);
+    assert!(lock(&MIDI_IN).is_empty());
+    let out = std::mem::take(&mut *lock(&MIDI_OUT));
+    assert_eq!(out.iter().map(|o| o.0).collect::<Vec<_>>(), [0x90, 60, 100]);
+    assert_eq!(out[0].1, 0, "最初の byte は前がない");
+    assert!(
+        out[1..].iter().all(|o| (320..330).contains(&o.1)),
+        "{out:?}"
+    );
+    assert_eq!(MIDI_FLUSHES.load(Ordering::SeqCst), flushes + 1);
+    // 次のフレームで来た byte の delta_time は、前の byte からの時間（約 1 フレーム）
+    lock(&MIDI_IN).push(0xF8);
+    run(1);
+    let out = std::mem::take(&mut *lock(&MIDI_OUT));
+    assert_eq!(out.len(), 1);
+    assert!((15_000..18_000).contains(&out[0].1), "{out:?}");
+    // 何も送らないフレームでは flush しない
+    let flushes = MIDI_FLUSHES.load(Ordering::SeqCst);
+    run(2);
+    assert_eq!(MIDI_FLUSHES.load(Ordering::SeqCst), flushes);
+    retro_unload_game();
 
     // Boot ROM がない：読み込みに失敗し、画面に知らせる
     std::fs::remove_file(dir.join(BOOT_FILE)).unwrap();

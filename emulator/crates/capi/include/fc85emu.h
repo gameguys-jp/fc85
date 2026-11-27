@@ -76,6 +76,12 @@ int32_t fc85_reset(fc85_t *m);
 int32_t fc85_set_input(fc85_t *m, uint16_t port_a, uint16_t port_b);
 int32_t fc85_run_frames(fc85_t *m, uint32_t n);
 uint64_t fc85_frame(fc85_t *m);
+uint64_t fc85_time_us(fc85_t *m); /* 電源を入れてからの µs（68000 のクロックから） */
+
+/* MIDI（ACIA。31.25 kbit/s。DR-126）。in は今から delay_us µs 後に線に来たとする。out は送り終えた byte と
+ * その時刻（µs。time_us は NULL でもよい）を古い順に最大 cap 個。戻り値は 0／取り出した数か -1 */
+int32_t fc85_midi_in(fc85_t *m, const uint8_t *data, size_t len, uint32_t delay_us);
+int32_t fc85_midi_out(fc85_t *m, uint8_t *out, uint64_t *time_us, size_t cap);
 
 /* 画面（0x00RRGGBB、左上から行ごと。戻り値は画素の数）と音（L・R の s16。戻り値は組の数） */
 int32_t fc85_screen(fc85_t *m, int32_t area, uint32_t *out, size_t out_len);

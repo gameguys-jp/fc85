@@ -10,6 +10,8 @@
 //   m.runFrames(1);
 //   ctx.putImageData(new ImageData(m.screenRGBA(AREA.VIEW), 320, 240), 0, 0);
 //   const pcm = m.audio();                                   // Int16Array（L・R の順、48 kHz）
+//   m.midiIn([0x90, 60, 100]);                               // MIDI IN（ACIA の線）
+//   const { bytes, us } = m.midiOut();                       // MIDI OUT と送り終えた時刻（µs）
 //
 // 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 // ライセンスは MIT（リポジトリの LICENSE）。
@@ -22,6 +24,60 @@ export const PAD = Object.freeze({
   UP: 0x01, DOWN: 0x02, LEFT: 0x04, RIGHT: 0x08, A: 0x10, B: 0x20, C: 0x40, START: 0x80,
 });
 export const FLAGS = Object.freeze({ NO_DOC: 0x01, DIGITAL_AUDIO: 0x02 });
+
+/**
+ * MIDI の byte の列をメッセージに組み立てる（ランニングステータスを開く。リアルタイムはほかのメッセージの途中にも
+ * 入る。SysEx は F0〜F7 で 1 つ）。Web MIDI の send は完全なメッセージしか受けないので、送る前に通す。
+ * ホストの midi.rs の Assembler と同じ規則。
+ */
+export class MidiAssembler {
+  constructor() {
+    this.status = 0;
+    this.data = [];
+    this.sysex = null;
+  }
+
+  /** 1 byte を足し、メッセージがそろえば配列で返す（なければ null）。 */
+  push(b) {
+    if (b >= 0xf8) return [b];
+    if (this.sysex) {
+      this.sysex.push(b);
+      if (b === 0xf7) {
+        const s = this.sysex;
+        this.sysex = null;
+        return s;
+      }
+      if (b < 0x80) return null;
+      // F7 の前に別のステータス：SysEx を捨てて読み直す
+      this.sysex = null;
+    }
+    if (b === 0xf0) {
+      this.sysex = [b];
+      this.status = 0;
+      return null;
+    }
+    if (b >= 0x80) {
+      this.data = [];
+      if (b >= 0xf0) {
+        this.status = 0;
+        if (b === 0xf6) return [b];
+        if (b >= 0xf1 && b <= 0xf3) this.status = b;
+        return null;
+      }
+      this.status = b;
+      return null;
+    }
+    if (!this.status) return null;
+    this.data.push(b);
+    const s = this.status;
+    const need = (s & 0xf0) === 0xc0 || (s & 0xf0) === 0xd0 ? 1 : s === 0xf2 ? 2 : s >= 0xf0 ? 1 : 2;
+    if (this.data.length < need) return null;
+    const msg = [s, ...this.data];
+    this.data = [];
+    if (s >= 0xf0) this.status = 0;
+    return msg;
+  }
+}
 
 /** WebAssembly を読む。source は URL（文字列か URL）、Response、ArrayBuffer・型付き配列、WebAssembly.Module。 */
 export async function load(source) {
@@ -131,6 +187,39 @@ class Machine {
 
   get frame() {
     return Number(this.x.fc85_frame(this.ptr));
+  }
+
+  /** 仮想機の今の時刻（電源を入れてからの µs）。 */
+  get timeUs() {
+    return Number(this.x.fc85_time_us(this.ptr));
+  }
+
+  /** MIDI IN の線に byte の列（配列か Uint8Array）を置く。今から delayUs µs 後に来たとする（DR-126）。 */
+  midiIn(bytes, delayUs = 0) {
+    this.mod.withBytes(Uint8Array.from(bytes), (p, n) =>
+      this.check(this.x.fc85_midi_in(this.ptr, p, n, delayUs >>> 0), "fc85_midi_in"));
+  }
+
+  /** MIDI OUT：ACIA が送り終えた byte と、その時刻（µs）。{ bytes: Uint8Array, us: Float64Array }。 */
+  midiOut() {
+    const cap = 256;
+    const p = this.x.fc85_alloc(cap * 9);
+    try {
+      const bytes = [];
+      const us = [];
+      for (;;) {
+        const n = this.check(this.x.fc85_midi_out(this.ptr, p + cap * 8, p, cap), "fc85_midi_out");
+        const view = new DataView(this.x.memory.buffer);
+        for (let i = 0; i < n; i++) {
+          us.push(Number(view.getBigUint64(p + 8 * i, true)));
+          bytes.push(view.getUint8(p + cap * 8 + i));
+        }
+        if (n < cap) break;
+      }
+      return { bytes: Uint8Array.from(bytes), us: Float64Array.from(us) };
+    } finally {
+      this.x.fc85_dealloc(p, cap * 9);
+    }
   }
 
   /** 画面を 0x00RRGGBB の Uint32Array で（写し）。 */

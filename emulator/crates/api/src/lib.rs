@@ -48,6 +48,16 @@ pub const FRAME_RATE: f64 = fc85_core::time::UNITS_PER_SECOND as f64
 /// `pack_state` の頭の印と版。
 pub const STATE_MAGIC: &[u8; 8] = b"FC85ST01";
 
+/// 68000 の 1 µs のクロック数（8 MHz）。
+pub const CPU_CLOCKS_PER_US: u64 = 8;
+
+/// MIDI OUT の 1 byte と、ACIA が送り終えた時刻（電源を入れてからの µs。DR-126）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct MidiByte {
+    pub us: u64,
+    pub byte: u8,
+}
+
 /// 番地の範囲（CPU から見た番地。仕様書 §05）。
 pub const BOOT_ROM: u32 = 0x00_0000;
 pub const MAIN_RAM: u32 = 0x10_0000;
@@ -1096,6 +1106,36 @@ impl Machine {
     /// PORT_A・PORT_B に今の入力を置く（入力の割込みは基板が変化を見て出す）。
     pub fn set_input(&mut self, port_a: u16, port_b: u16) {
         self.console.sys.set_ports(port_a, port_b);
+    }
+
+    /// 仮想機の今の時刻（電源を入れてからの µs。68000 のクロックから）。
+    pub fn time_us(&self) -> u64 {
+        self.console.cpu.clock / CPU_CLOCKS_PER_US
+    }
+
+    /// MIDI IN の線に `bytes` を置く（DR-126）。今の時刻から `delay_us` µs 後に線に来たとし、ACIA が
+    /// 31.25 kbit/s で 1 byte ずつ受け取る。前に置いた byte より早くはならない（線の順は変えない）。
+    pub fn midi_in(&mut self, delay_us: u32, bytes: &[u8]) {
+        let at = self.console.cpu.clock + u64::from(delay_us) * CPU_CLOCKS_PER_US;
+        self.console.sys.midi_receive(at, bytes);
+    }
+
+    /// MIDI OUT：ACIA が送り終えた byte を古い順に取り出す。時刻は送り終えた µs（`time_us` と同じ数え方）。
+    pub fn take_midi_out(&mut self) -> Vec<MidiByte> {
+        self.console
+            .sys
+            .midi_out
+            .drain(..)
+            .map(|(t, byte)| MidiByte {
+                us: t / CPU_CLOCKS_PER_US,
+                byte,
+            })
+            .collect()
+    }
+
+    /// 取り出されないまま溜まりの上限（`MIDI_OUT_KEEP`）を超えて捨てた MIDI OUT の byte の数。
+    pub fn midi_out_dropped(&self) -> u64 {
+        self.console.sys.midi_out_dropped
     }
 
     /// 画面（テレビの模型の絵）を `0x00RRGGBB` で `out` に書く。幅と高さを返す。

@@ -4,7 +4,8 @@
 
 use fc85_board::analog::SigWiring;
 use fc85_board::console::{
-    BERR_CYCLE_CLOCKS, BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS, System, acrtc_timing,
+    BERR_CYCLE_CLOCKS, BRIDGE_TIMEOUT_DATA, BRIDGE_TIMEOUT_WAITS, MIDI_OUT_KEEP, System,
+    acrtc_timing,
 };
 use fc85_board::video::{RASTER_W, VIRQ_VBL, VIRQ_VBL_EN};
 use fc85_chips::hd68000::{Bus, BusReply, IackReply, Size, fc};
@@ -364,9 +365,70 @@ fn the_acia_receives_midi_and_raises_level_5() {
         BusReply::Ok { .. }
     ));
     c.idle(2600);
-    assert_eq!(c.sys.acia.take_sent(), Some(0xF8));
+    assert_eq!(c.sys.midi_out.pop_front().map(|(_, b)| b), Some(0xF8));
     // 下位レーンの ACIA はない
     assert_eq!(c.rd(0x26_0015, Size::Byte), BERR);
+}
+
+#[test]
+fn host_midi_arrives_at_its_time_and_sent_bytes_carry_theirs() {
+    // DR-126：ホストの MIDI IN は時刻を付けて線に置き、ACIA は 1 byte ずつ 320 µs（2560 クロック）で受ける。
+    // 送り終えた byte には時刻が付く
+    let mut c = Cpu::new();
+    c.wr(0x26_0014, Size::Byte, 0x03);
+    c.wr(0x26_0014, Size::Byte, 0x95);
+    let t0 = c.clock;
+    c.sys.midi_receive(t0 + 8000, &[0x90, 60]);
+    // 前より早い時刻は前の byte の時刻にそろえる（線の順は変えない）
+    c.sys.midi_receive(t0, &[100]);
+    // ACIA は 500 kHz（CPU の 16 クロック）の刻みで進むので、線に来るのは刻みにそろえて最大 15 クロック遅い
+    c.idle(8000 + 2560 - 40);
+    assert_eq!(c.sys.ipl(c.clock), 0);
+    c.idle(40 + 16);
+    assert_eq!(c.sys.ipl(c.clock), 5);
+    assert_eq!(c.rd(0x26_0016, Size::Byte).data(), Some(0x90));
+    // 続く byte は間をあけずに線に来ている
+    let t1 = c.clock;
+    while c.sys.ipl(c.clock) != 5 {
+        c.idle(16);
+    }
+    assert!(c.clock - t0 <= 8000 + 2 * 2560 + 16, "{}", c.clock - t0);
+    assert!(c.clock > t1);
+    assert_eq!(c.rd(0x26_0016, Size::Byte).data(), Some(60));
+    while c.sys.ipl(c.clock) != 5 {
+        c.idle(16);
+    }
+    assert_eq!(c.rd(0x26_0016, Size::Byte).data(), Some(100));
+    assert_eq!(c.sys.midi_line_pending(), 0);
+    // 送信：書いてから 2560 クロックで送り終え、その時刻が付く
+    c.wr(0x26_0016, Size::Byte, 0xF8);
+    let ts = c.clock;
+    c.wr(0x26_0016, Size::Byte, 0xFA);
+    c.idle(3 * 2560);
+    let out: Vec<_> = c.sys.midi_out.drain(..).collect();
+    assert_eq!(
+        out.iter().map(|&(_, b)| b).collect::<Vec<_>>(),
+        [0xF8, 0xFA]
+    );
+    let d0 = out[0].0 - ts;
+    assert!((2560 - 16..=2560 + 16).contains(&d0), "{d0}");
+    assert_eq!(out[1].0 - out[0].0, 2560);
+}
+
+#[test]
+fn unread_midi_out_is_capped() {
+    // 取り出されない MIDI OUT は MIDI_OUT_KEEP までで、古いものを捨てて数える（DR-126）
+    let mut c = Cpu::new();
+    c.wr(0x26_0014, Size::Byte, 0x03);
+    c.wr(0x26_0014, Size::Byte, 0x95);
+    for i in 0..MIDI_OUT_KEEP + 3 {
+        c.wr(0x26_0016, Size::Byte, (i & 0x7F) as u16);
+        c.idle(2560);
+    }
+    c.idle(2560);
+    assert_eq!(c.sys.midi_out.len(), MIDI_OUT_KEEP);
+    assert_eq!(c.sys.midi_out_dropped, 3);
+    assert_eq!(c.sys.midi_out.front().map(|&(_, b)| b), Some(3));
 }
 
 trait Data {

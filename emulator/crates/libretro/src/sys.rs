@@ -35,6 +35,8 @@ pub const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: c_uint = 17;
 pub const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: c_uint = 18;
 pub const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: c_uint = 27;
 pub const RETRO_ENVIRONMENT_SET_GEOMETRY: c_uint = 37;
+pub const RETRO_ENVIRONMENT_EXPERIMENTAL: c_uint = 0x10000;
+pub const RETRO_ENVIRONMENT_GET_MIDI_INTERFACE: c_uint = 48 | RETRO_ENVIRONMENT_EXPERIMENTAL;
 
 pub const RETRO_PIXEL_FORMAT_XRGB8888: c_uint = 1;
 
@@ -47,6 +49,21 @@ pub type EnvironmentFn = unsafe extern "C" fn(cmd: c_uint, data: *mut c_void) ->
 pub type VideoRefreshFn =
     unsafe extern "C" fn(data: *const c_void, width: c_uint, height: c_uint, pitch: usize);
 pub type AudioSampleFn = unsafe extern "C" fn(left: i16, right: i16);
+pub type MidiEnabledFn = unsafe extern "C" fn() -> bool;
+pub type MidiReadFn = unsafe extern "C" fn(byte: *mut u8) -> bool;
+pub type MidiWriteFn = unsafe extern "C" fn(byte: u8, delta_time: u32) -> bool;
+pub type MidiFlushFn = unsafe extern "C" fn() -> bool;
+
+/// `retro_midi_interface`（RETRO_ENVIRONMENT_GET_MIDI_INTERFACE）。write の delta_time は前の write からの µs。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RetroMidiInterface {
+    pub input_enabled: Option<MidiEnabledFn>,
+    pub output_enabled: Option<MidiEnabledFn>,
+    pub read: Option<MidiReadFn>,
+    pub write: Option<MidiWriteFn>,
+    pub flush: Option<MidiFlushFn>,
+}
 pub type AudioSampleBatchFn = unsafe extern "C" fn(data: *const i16, frames: usize) -> usize;
 pub type InputPollFn = unsafe extern "C" fn();
 pub type InputStateFn =

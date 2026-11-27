@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use fc85_api::protocol::{Session, handle_line};
-use fc85_api::{Area, Config, Machine, Space};
+use fc85_api::{Area, Config, Machine, MidiByte, Space};
 
 /// C の ABI の版。関数の形を変えたら上げる（足すだけなら変えない）。
 pub const ABI_VERSION: u32 = 1;
@@ -30,6 +30,8 @@ pub struct Fc85 {
     pic: Vec<u32>,
     /// `fc85_audio` で取り残した音。
     pending: Vec<(i16, i16)>,
+    /// `fc85_midi_out` で取り残した MIDI OUT の byte。
+    midi: Vec<MidiByte>,
 }
 
 thread_local! {
@@ -187,6 +189,7 @@ pub unsafe extern "C" fn fc85_new(
             session: Session::with_machine(m),
             pic: Vec::new(),
             pending: Vec::new(),
+            midi: Vec::new(),
         })))
     })
 }
@@ -217,6 +220,7 @@ pub unsafe extern "C" fn fc85_load_cart(m: *mut Fc85, cart: *const u8, len: usiz
         mm.config.cart = unsafe { bytes(cart, len) }.map(<[u8]>::to_vec);
         mm.reset()?;
         h.pending.clear();
+        h.midi.clear();
         Ok(0)
     })
 }
@@ -232,6 +236,7 @@ pub unsafe extern "C" fn fc85_reset(m: *mut Fc85) -> i32 {
         let h = unsafe { handle(m) }?;
         h.machine()?.reset()?;
         h.pending.clear();
+        h.midi.clear();
         Ok(0)
     })
 }
@@ -248,6 +253,75 @@ pub unsafe extern "C" fn fc85_set_input(m: *mut Fc85, port_a: u16, port_b: u16) 
         // SAFETY: 上の約束
         unsafe { handle(m) }?.machine()?.set_input(port_a, port_b);
         Ok(0)
+    })
+}
+
+/// MIDI IN の線に data の len byte を置く（DR-126）。今の時刻から delay_us µs 後に線に来たとし、ACIA が
+/// 31.25 kbit/s で 1 byte ずつ受け取る。前に置いた byte より早くはならない。0 か -1。
+///
+/// # Safety
+/// `m` は生きている仮想機。data は NULL か len byte を読める。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fc85_midi_in(
+    m: *mut Fc85,
+    data: *const u8,
+    len: usize,
+    delay_us: u32,
+) -> i32 {
+    guard(-1, || {
+        // SAFETY: 上の約束
+        let d = unsafe { bytes(data, len) }.unwrap_or(&[]);
+        // SAFETY: 上の約束
+        unsafe { handle(m) }?.machine()?.midi_in(delay_us, d);
+        Ok(0)
+    })
+}
+
+/// MIDI OUT：ACIA が送り終えた byte を古い順に out へ最大 cap 個書き、取り出す。time_us が NULL でなければ、
+/// 送り終えた時刻（電源を入れてからの µs。fc85_time_us と同じ数え方）を同じ順に書く。書いた数か -1。
+/// 残りは次に回す。
+///
+/// # Safety
+/// `m` は生きている仮想機。out は cap byte、time_us は NULL か cap 個の u64 を書ける。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fc85_midi_out(
+    m: *mut Fc85,
+    out: *mut u8,
+    time_us: *mut u64,
+    cap: usize,
+) -> i32 {
+    guard(-1, || {
+        // SAFETY: 上の約束
+        let h = unsafe { handle(m) }?;
+        let new = h.machine()?.take_midi_out();
+        h.midi.extend(new);
+        let n = h.midi.len().min(cap).min(i32::MAX as usize);
+        if n > 0 && out.is_null() {
+            return Err("out が NULL".into());
+        }
+        for (i, b) in h.midi[..n].iter().enumerate() {
+            // SAFETY: 上の約束（i < cap）。time_us は境界にそろっていなくてもよい
+            unsafe {
+                *out.add(i) = b.byte;
+                if !time_us.is_null() {
+                    time_us.add(i).write_unaligned(b.us);
+                }
+            }
+        }
+        h.midi.drain(..n);
+        Ok(n as i32)
+    })
+}
+
+/// 仮想機の今の時刻（電源を入れてからの µs。68000 のクロックから）。誤りなら 0。
+///
+/// # Safety
+/// `m` は生きている仮想機。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fc85_time_us(m: *mut Fc85) -> u64 {
+    guard(0, || {
+        // SAFETY: 上の約束
+        Ok(unsafe { handle(m) }?.machine()?.time_us())
     })
 }
 
@@ -410,6 +484,7 @@ pub unsafe extern "C" fn fc85_load_state(m: *mut Fc85, data: *const u8, len: usi
         let h = unsafe { handle(m) }?;
         h.machine()?.unpack_state(d)?;
         h.pending.clear();
+        h.midi.clear();
         Ok(0)
     })
 }

@@ -848,13 +848,12 @@ fn main() {
         }
         run_bend_script(&mut c, &a, frames);
         c.sys.set_ports(pad(&w), 0);
-        for b in midi.take_received() {
-            c.sys.acia.receive(b);
-        }
+        // MIDI IN はフレームの頭に線に来たとする。MIDI OUT は仮想機の時刻の間隔のまま送る（DR-126）
+        let start = c.cpu.clock;
+        c.sys.midi_receive(start, &midi.take_received());
         c.run_frame();
-        while let Some(b) = c.sys.acia.take_sent() {
-            midi.send(b);
-        }
+        let sent: Vec<(u64, u8)> = c.sys.midi_out.drain(..).collect();
+        midi.send(&sent, start, std::time::Instant::now());
         push_audio(&mut c, &ring, a.line);
         pace(audio.is_some(), &ring, &mut next);
         view(&c, &tv, &mut pic, &mut buf);

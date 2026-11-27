@@ -254,6 +254,59 @@ fn json_requests_go_to_the_same_machine() {
     unsafe { fc85_free(m) };
 }
 
+#[test]
+fn midi_goes_in_and_comes_out_with_times() {
+    // DR-126：来た byte を送り返す小さな Boot ROM（RDRF と TDRE を見る）
+    let mut boot = vec![0xFFu8; 0x10000];
+    let code: [u16; 25] = [
+        0x13FC, 0x0003, 0x0026, 0x0014, 0x13FC, 0x0015, 0x0026, 0x0014, // ACIA：$03、$15
+        0x0839, 0x0000, 0x0026, 0x0014, 0x67F6, // RDRF を待つ
+        0x1039, 0x0026, 0x0016, // MOVE.B MIDI_DATA,D0
+        0x0839, 0x0001, 0x0026, 0x0014, 0x67F6, // TDRE を待つ
+        0x13C0, 0x0026, 0x0016, // MOVE.B D0,MIDI_DATA
+        0x60DE,
+    ];
+    boot[..8].copy_from_slice(&[0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);
+    for (i, w) in code.iter().enumerate() {
+        boot[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&w.to_be_bytes());
+    }
+    let m = new(&boot, &[], FLAG_NO_DOC);
+    let msg = [0x90u8, 64, 1, 0x80, 64, 0];
+    let mut out = [0u8; 4];
+    let mut times = [0u64; 4];
+    // SAFETY: 生きている仮想機。長さどおりの配列
+    unsafe {
+        assert_eq!(fc85_run_frames(m, 1), 0);
+        let t0 = fc85_time_us(m);
+        assert!(t0 > 16_000);
+        assert_eq!(fc85_midi_in(m, msg.as_ptr(), msg.len(), 0), 0);
+        assert_eq!(fc85_run_frames(m, 1), 0);
+        // 4 個ずつ取り出し、残りは次に
+        assert_eq!(fc85_midi_out(m, out.as_mut_ptr(), times.as_mut_ptr(), 4), 4);
+        assert_eq!(out, [0x90, 64, 1, 0x80]);
+        assert!(times[0] >= t0 + 640 && times[0] < t0 + 660, "{times:?}");
+        assert!(times.windows(2).all(|w| w[1] - w[0] >= 320));
+        assert_eq!(
+            fc85_midi_out(m, out.as_mut_ptr(), std::ptr::null_mut(), 4),
+            2
+        );
+        assert_eq!(out[..2], [64, 0]);
+        assert_eq!(
+            fc85_midi_out(m, out.as_mut_ptr(), std::ptr::null_mut(), 4),
+            0
+        );
+        // NULL の out で取り出すものがあれば誤り
+        assert_eq!(fc85_midi_in(m, msg.as_ptr(), 1, 0), 0);
+        assert_eq!(fc85_run_frames(m, 1), 0);
+        assert_eq!(
+            fc85_midi_out(m, std::ptr::null_mut(), std::ptr::null_mut(), 4),
+            -1
+        );
+        assert!(last_error().contains("NULL"));
+        fc85_free(m);
+    }
+}
+
 /// fc85emu.h の関数の宣言と、Rust の側で出している関数が同じ名前の組か。
 #[test]
 fn header_declares_every_export() {

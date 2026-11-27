@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109。ACRTC の DMA。DR-112。
-temporal.h。DR-113）の試験。
+temporal.h。DR-113。midi.h。DR-127）の試験。
 `py -m unittest discover -s sdk/c` で走る。
 
 1. GCC があれば、試験の ROM（tests/dev_test.c）を組み、逆アセンブルを見る：周辺の関数は I/O の窓に読み書き
@@ -12,7 +12,8 @@ temporal.h。DR-113）の試験。
    ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。HBlank の割込みで替えた色 0 の
    区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を
    dspasm --c-array で C の見出しにする）、ACRTC の DMA（DRD で Staging RAM へ、DMOD の EOR で VRAM へ。DR-112）、
-   Temporal RAM の往復とポインタ・印（DR-113）。
+   Temporal RAM の往復とポインタ・印（DR-113）、MIDI の受信のリングとメッセージの組立てと送信（窓口の midi で
+   送り、送り返された byte を取る。DR-126・DR-127）。
 """
 
 import os
@@ -29,7 +30,7 @@ sys.path.insert(0, os.path.join(ROOT, "sdk", "dspasm"))
 import dspasm  # noqa: E402
 import m68kgcc  # noqa: E402
 
-DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c", "video.c", "dsp.c", "temporal.c"]
+DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c", "video.c", "dsp.c", "temporal.c", "midi.c"]
 IO = (0x200000, 0x300000)            # I/O の窓（registers.md）
 STAGING = 0x120000
 FRAME_HZ = 59.92
@@ -220,7 +221,12 @@ class TestDeviceHelpers(unittest.TestCase):
             to_phase(6)
             to_phase(7)
             to_phase(8)
+            # MIDI（DR-127）：ランニングステータス、リアルタイム、SysEx を含む byte を MIDI IN の線に置く
+            midi_in = [0x90, 60, 100, 62, 0, 0xF8, 0xF0, 0x7E, 0x01, 0xF7, 0xB0, 1, 64]
+            emu.call("midi", **{"in": midi_in})
+            to_phase(9)
             emu.call("run", frames=2, stop_on_bus_error=True)
+            midi_out = [b["byte"] for b in emu.call("midi")["out"]]
             self.assertEqual(peek("bios_exc_vector", 2)[0], 0, "例外で止まった")
             self.assertEqual(peek("done", 2)[0], 0xC0DE, "終わりまで来ていない")
 
@@ -339,6 +345,16 @@ class TestDeviceHelpers(unittest.TestCase):
                     self.assertEqual(row[0], before)
                     self.assertEqual(row[255], after)
                     self.assertEqual(direct[y + 1][0], after)
+
+            with self.subTest("MIDI"):
+                r = peek("r_midi", 2, 14)
+                self.assertEqual(r[0:3], [0x90, 0x3C64, 0x0102], "ノートオン")
+                self.assertEqual(r[3:6], [0x90, 0x3E00, 0x0012], "ランニングステータス、ベロシティ 0 はノートオフ")
+                self.assertEqual(r[6:9], [0xF8, 0, 0], "リアルタイム")
+                self.assertEqual(r[9:12], [0xB0, 0x0140, 0x0002], "SysEx は読み飛ばす")
+                self.assertEqual(r[12:], [0, 0], "捨てた byte はなく、リングは空")
+                self.assertEqual(midi_out, [0x90, 60, 100, 0x90, 62, 0, 0xF8, 0xB0, 1, 64],
+                                 "ステータスを付け直して送り返す")
 
             with self.subTest("DSP"):
                 d = peek("r_dsp", 2, 8)

@@ -12,6 +12,9 @@
 //! - 状態の保存は窓口の `pack_state` の形に長さを付けたもの。大きさは読み込んだときに上限を見積もる
 //!   （`pack_state_bound`）。
 //! - Main RAM（128 KiB）を `RETRO_MEMORY_SYSTEM_RAM` で見せる。状態を戻してもリセットしても同じ番地。
+//! - MIDI：フロントエンドの MIDI の口（RETRO_ENVIRONMENT_GET_MIDI_INTERFACE）があれば、MIDI IN の byte を
+//!   フレームの頭に ACIA の線に置き、ACIA が送り終えた byte を、前の byte からの µs（仮想機の時刻の差）を
+//!   付けて MIDI OUT に書く（DR-126）。
 //!
 //! 68000 が止まっても（halt）フレームは進む。中で panic したら、そのゲームを止めて記録に書き、
 //! フロントエンドは止めない。
@@ -25,7 +28,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use fc85_api::{AUDIO_RATE, Area, Config, FRAME_RATE, Machine};
+use fc85_api::{AUDIO_RATE, Area, Config, FRAME_RATE, Machine, MidiByte};
 use sys::*;
 
 /// system のフォルダの Boot ROM と文字 ROM の名前。
@@ -47,6 +50,8 @@ struct Callbacks {
     poll: Option<InputPollFn>,
     input: Option<InputStateFn>,
     log: Option<LogPrintfFn>,
+    /// フロントエンドの MIDI の口（なければ None。DR-126）。
+    midi: Option<RetroMidiInterface>,
 }
 
 static CB: Mutex<Callbacks> = Mutex::new(Callbacks {
@@ -56,7 +61,11 @@ static CB: Mutex<Callbacks> = Mutex::new(Callbacks {
     poll: None,
     input: None,
     log: None,
+    midi: None,
 });
+
+/// 1 フレームに MIDI IN から読む byte の上限（31.25 kbit/s の 1 フレームは約 52 byte）。
+const MIDI_READ_MAX: usize = 1024;
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
 
@@ -231,6 +240,8 @@ struct Core {
     pcm: Vec<i16>,
     /// `retro_serialize_size` の値（読み込んだときに決め、変えない）。
     state_size: usize,
+    /// MIDI OUT に最後に書いた byte の時刻（仮想機の µs）。write の delta_time の起点。
+    midi_last_us: Option<u64>,
 }
 
 /// Main RAM の領域を動かさずに `f` を走らせる（状態を戻す・電源を入れ直すと `Console` ごと作り直すので、
@@ -341,6 +352,7 @@ unsafe fn load(game: *const RetroGameInfo) -> Result<Core, String> {
         pic: Vec::new(),
         pcm: Vec::new(),
         state_size,
+        midi_last_us: None,
     })
 }
 
@@ -360,7 +372,7 @@ impl Core {
             self.opts = o;
         }
         let cb = lock(&CB);
-        let (poll, input, video, batch) = (cb.poll, cb.input, cb.video, cb.batch);
+        let (poll, input, video, batch, midi) = (cb.poll, cb.input, cb.video, cb.batch, cb.midi);
         drop(cb);
         if let Some(poll) = poll {
             // SAFETY: フロントエンドの関数
@@ -378,7 +390,16 @@ impl Core {
             }
         }
         self.m.set_input(ports[0], ports[1]);
+        if let Some(mi) = midi {
+            self.midi_in(&mi);
+        }
         self.m.run_frames(1);
+        let out = self.m.take_midi_out();
+        if let Some(mi) = midi
+            && !out.is_empty()
+        {
+            self.midi_out(&mi, &out);
+        }
         let (w, h) = self.m.screen_xrgb(self.opts.area, &mut self.pic);
         if let Some(video) = video {
             // SAFETY: pic は w×h 個。フロントエンドは呼んでいる間だけ読む
@@ -402,7 +423,50 @@ impl Core {
         }
     }
 
+    /// フロントエンドの MIDI IN で来た byte を、フレームの頭に ACIA の線に置く（DR-126。read には時刻が
+    /// ないので、フレームの中の間隔は分からない）。
+    fn midi_in(&mut self, mi: &RetroMidiInterface) {
+        let (Some(enabled), Some(read)) = (mi.input_enabled, mi.read) else {
+            return;
+        };
+        // SAFETY: フロントエンドの関数
+        if !unsafe { enabled() } {
+            return;
+        }
+        let mut buf = Vec::new();
+        let mut b = 0u8;
+        // SAFETY: フロントエンドの関数。b は書ける
+        while buf.len() < MIDI_READ_MAX && unsafe { read(&mut b) } {
+            buf.push(b);
+        }
+        if !buf.is_empty() {
+            self.m.midi_in(0, &buf);
+        }
+    }
+
+    /// ACIA が送り終えた byte を、前の byte からの µs（仮想機の時刻の差）を付けて MIDI OUT に書く。
+    fn midi_out(&mut self, mi: &RetroMidiInterface, out: &[MidiByte]) {
+        let (Some(enabled), Some(write)) = (mi.output_enabled, mi.write) else {
+            return;
+        };
+        // SAFETY: フロントエンドの関数
+        if !unsafe { enabled() } {
+            return;
+        }
+        for b in out {
+            let delta = b.us - self.midi_last_us.unwrap_or(b.us).min(b.us);
+            // SAFETY: フロントエンドの関数
+            unsafe { write(b.byte, delta.min(u64::from(u32::MAX)) as u32) };
+            self.midi_last_us = Some(b.us);
+        }
+        if let Some(flush) = mi.flush {
+            // SAFETY: フロントエンドの関数
+            unsafe { flush() };
+        }
+    }
+
     fn reset(&mut self) -> Result<(), String> {
+        self.midi_last_us = None;
         self.m.config.doc = self.opts.doc;
         self.m.config.line = self.opts.line;
         keep_ram(&mut self.m, Machine::reset)
@@ -432,6 +496,7 @@ impl Core {
         let body = data
             .get(STATE_HEAD..STATE_HEAD + n)
             .ok_or("状態の長さが合わない")?;
+        self.midi_last_us = None;
         keep_ram(&mut self.m, |m| m.unpack_state(body))
     }
 }
@@ -625,6 +690,14 @@ pub unsafe extern "C" fn retro_load_game(game: *const RetroGameInfo) -> bool {
         RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS,
         DESCRIPTORS.0.as_ptr().cast_mut().cast(),
     );
+    let mut mi = RetroMidiInterface {
+        input_enabled: None,
+        output_enabled: None,
+        read: None,
+        write: None,
+        flush: None,
+    };
+    lock(&CB).midi = env(RETRO_ENVIRONMENT_GET_MIDI_INTERFACE, (&raw mut mi).cast()).then_some(mi);
     guarded("load_game", false, |c| {
         // SAFETY: 上の約束
         *c = Some(unsafe { load(game) }?);

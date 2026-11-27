@@ -1251,3 +1251,23 @@
 | 理由 | emulator-api.md §07 の「Web の GUI の残り」の 1 つ。GUI はフレームを頼むたびに釦の値を送るので、そのときに読めば足り、描画の周期で読む仕組み（試しの頁）は要らない。配置は試しの頁と同じにして、どちらの頁でも同じ手で遊べるようにする |
 | 却下した案 | ホスト（minifb の窓）でもゲームパッドを読む：crate（gilrs など）を取ってくることになり、ユーザーの許可が要る（今夜は求めない）。確かめていないこと [V]：実物のゲームパッドでは試していない（試しの頁の DR-116 は模したパッドで確かめた） |
 | 影響 | emulator/crates/api/src/web/index.html、sdk/docs/emulator-api.md §06・§07 |
+
+## DR-126　MIDI の byte に線の時刻を付け、窓口・C の ABI・WebAssembly・libretro に通す
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。(1) 本体（board 層の `System`）は、ホストから来た MIDI の byte を、線に来た時刻（68000 のクロック）と組で並べ、その時刻からあとの最初の ACIA のクロック（500 kHz）の刻みで HD6850 に渡す。HD6850 が送り終えた byte は、送り終えた刻みの時刻と組で溜める（4,096 byte まで。超えたら古い方を捨てて数える）。基板を追いつかせる区切りの途中で送り終えても、その刻みで区切る [P]。(2) 窓口に JSON の手順 `midi`（置く byte と遅れ、送り終えた byte と時刻）と、`Machine::midi_in`・`take_midi_out`・`time_us` を足す。(3) C の ABI に `fc85_midi_in`・`fc85_midi_out`・`fc85_time_us` を足す（関数を足すだけなので ABI の版は 1 のまま）。(4) WebAssembly の糊に `midiIn`・`midiOut`・`timeUs` と、Web MIDI の `send` のために byte の列を完全なメッセージにする `MidiAssembler` を足し、試しの頁に Web MIDI の入出力の欄を置く。OUT は送り終えた時刻に音の先回りを足した時刻で `send` する。(5) libretro のコアは、フロントエンドの MIDI の口（`RETRO_ENVIRONMENT_GET_MIDI_INTERFACE`）があれば、フレームの頭で受けた byte を置き、フレームの後で送り終えた byte を前の byte からの間（µs）付きで `write` する。(6) ホスト（`fc85`）は、送り終えた時刻とフレームの頭の差だけ遅らせて、別のスレッドで送る。(7) 線の上の byte と溜めた送信は、状態の保存に入れない |
+| 理由 | ユーザーの方向（MIDI・音声などの入出力。回路への忠実さと本機の音の表現を優先）。これまでのホスト（DR-061）は、1 フレームの間に送った byte をフレームの終わりにまとめて送っていたので、外の音源への発音の時刻が約 16.7 ms の粒でそろってしまい、ACIA の 320 µs の間隔とソフトが送った時刻が失われていた。時刻を ACIA の刻みで付ければ、ホストやフロントエンドが送る時刻を回路の時刻に合わせられる。受信の時刻も線の上で持つので、窓口の試験で ACIA の受け取りの時刻を確かめられる。状態を変えない（`#[serde(skip)]`）ので、振る舞いの指紋は変わらない |
+| 却下した案 | ACIA に byte を置いたら即座に受け取らせる：線の 320 µs が抜け、連続した byte の RDRF の時刻が実物と合わない。送信の時刻を区切りの終わりで付ける：区切りの長さだけ時刻がずれる（試験で、送り終えた時刻から 7,684 クロック後ろにずれたのを見た）。受信もフレームの途中の時刻で置く：ホストの入力はフレームの頭でしか読まないので、今は意味がない（ホストのスレッドを分けるときに見直す）[O]。SysEx を Web MIDI で送る：ブラウザが SysEx の許可を別に求めるので、今は送らない [O]。確かめていないこと [V]：実物の MIDI 装置との送受信（ホスト、Web MIDI、RetroArch のどれでも）。受信の時刻はフレームの頭に丸まる（遅れは最大 1 フレーム） |
+| 影響 | emulator/crates/board/src/console.rs、emulator/crates/chips/src/hd6850.rs（`tx_left`）、emulator/crates/host、emulator/crates/api、emulator/crates/capi（fc85emu.h）、emulator/crates/libretro、emulator/embed（fc85emu.js、worker.js、index.html、試験）、sdk/docs/emulator-api.md §03・§08、docs/impl/emulator.md |
+
+## DR-127　C から MIDI を使う関数（midi.h）と、GCC の読出しのまとめを止める
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。(1) C の SDK に `midi.h`（`sdk/c/midi.c`・`midiparse.c`）を足す：BIOS の受信のリング（`bios-abi.md` §03）を tail から読む `midi_getc`・`midi_read`、ACIA の TDRE を待って書く `midi_putc`・`midi_send`・`midi_send_msg`、ランニングステータスを開くメッセージの組立て `midi_parse`。リアルタイムは途中に来てもその場で返し、SysEx の中身は読み飛ばす。送信は割込みを使わない [P]。(2) 組立ての道具（`m68kgcc.py`）の CFLAGS に `-fdisable-tree-bswap` を足す。GCC 11.4 は byte の欄を `(a << 8 | b)` で組む式を、奇数番地からの語の読出しにまとめることがあり、68000 ではアドレスエラーになる（`-mstrict-align` では止まらない）。段を止めた知らせは道具が落とす。(3) 周辺の関数の試験（`sdk/c/test_devices.py`）に MIDI の段を足し、窓口の `midi` の手順（DR-126）で byte を置いて確かめる |
+| 理由 | ユーザーの方向（MIDI の入出力）。受信は BIOS がすでにリングに入れている（DR-057）ので、C の側はリングの読み方と、メッセージの組立て（ランニングステータス、リアルタイムの割込み）を持てばよい。リングの tail はアプリだけが書くので、割込みを止めずに読める。送信は 3 byte のメッセージで最長約 0.64 ms で、割込みの送信のリングを BIOS に足す（版 3）ほどではない。GCC のまとめは、MIDI の試験の ROM（メッセージの byte の欄を語に組む）で見つけた：試験の ROM がベクタ 3 で止まった |
+| 却下した案 | 送信も割込みとリングにする：BIOS の約束（版 3）が要り、送りっぱなしで戻れる利点は、1 フレームに送る量が少ないゲームでは小さい [O]。`midi_msg_t` を語の欄にして、まとめが起きない形にする：利用者の書く式でも同じことが起き得るので、道具の側で止める。`-O1` に下げる：ほかの関数が遅くなる。確かめていないこと [V]：ほかの GCC の版と `m68k-elf` で、ほかの段が同じまとめをしないか |
+| 影響 | sdk/c/include/midi.h、sdk/c/midi.c、sdk/c/midiparse.c、sdk/tools/m68kgcc.py、sdk/c/test_devices.py、sdk/c/tests/dev_test.c、sdk/docs/c.md §02・§05・§09・§11・§12 |

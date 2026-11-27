@@ -262,6 +262,14 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type": "object", "required": ["cmd"], "properties": {"cmd": {"type": "string"}}}),
         ),
         (
+            "midi",
+            "MIDI の入出力（DR-126）。in の byte を MIDI IN の線に置き（今から delay_us µs 後に来たとする。ACIA が 31.25 kbit/s で 1 byte ずつ受け取る）、ACIA が送り終えた MIDI OUT の byte を、送り終えた時刻（電源を入れてからの µs）を付けて取り出す。進めるのは run で",
+            json!({"type": "object", "properties": {
+                "in": {"type": ["array", "string"], "items": {"type": "integer", "minimum": 0, "maximum": 255}, "description": "byte の列（数の配列か 16 進の文字列 \"903C64\"）"},
+                "delay_us": {"type": "integer", "minimum": 0, "maximum": 10_000_000, "default": 0}
+            }}),
+        ),
+        (
             "symbols",
             "ラベルを探す（prefix で始まる名前）か、addr の名前を返す",
             json!({"type": "object", "properties": {"prefix": {"type": "string"}, "addr": addr, "limit": {"type": "integer", "default": 50}}}),
@@ -646,6 +654,34 @@ impl Session {
                 let m = self.machine()?;
                 let summary = m.bend(&cmd)?;
                 json!({"summary": summary, "mode": m.mode()})
+            }
+            "midi" => {
+                let data = match p.get("in") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::String(s)) => unhex(s)?,
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|v| {
+                            v.as_u64()
+                                .and_then(|n| u8::try_from(n).ok())
+                                .ok_or("in の byte は 0〜255 の数")
+                        })
+                        .collect::<Result<_, _>>()?,
+                    Some(_) => return Err("in は数の配列か 16 進の文字列".into()),
+                };
+                let delay = opt_u64(p, "delay_us")?.unwrap_or(0);
+                if delay > 10_000_000 {
+                    return Err("delay_us は 0〜10000000".into());
+                }
+                let m = self.machine()?;
+                m.midi_in(delay as u32, &data);
+                let out = m.take_midi_out();
+                json!({
+                    "out": out,
+                    "now_us": m.time_us(),
+                    "dropped": m.midi_out_dropped(),
+                    "pending_in": m.console.sys.midi_line_pending(),
+                })
             }
             "symbols" => {
                 if p.get("addr").is_some_and(|v| !v.is_null()) {

@@ -56,6 +56,7 @@
 | `load_state` | `slot` か `path` | `frame`、`pc` |
 | `bend` | `cmd`（仕様書 §11 のベンド点の命令。`mode bend`、`clock video 18000000` など） | `summary`、`mode` |
 | `symbols` | `prefix`・`limit`、または `addr` | ラベルの一覧、または番地の名前 |
+| `midi` | `in`（MIDI IN の線に置く byte の列。数の配列か 16 進の文字列）、`delay_us`（今から何 µs 後に線に来たとするか。既定 0、最大 10,000,000） | `out`（ACIA が送り終えた MIDI OUT の byte の `us`・`byte` の列。古い順）、`now_us`、`dropped`、`pending_in`（DR-126）。§03 の下の「MIDI」 |
 
 `peek`・`poke` の空間：
 
@@ -70,6 +71,14 @@
 | `palette` | いま表示に使っているパレットの 16 語（読むだけ） |
 
 `peek`・`poke` はバスを通さないので、時刻も状態も変えない（ROM も書き換えられる。試験の道具）。`bus_read`・`bus_write` は CPU と同じバスサイクルを今の CPU の時刻で起こすので、I/O の副作用（FIFO を進める、W1C のビットを消す）が起き、バスエラーは記録に数える。
+
+MIDI（DR-126）[P]：
+
+- 時刻は電源を入れてからの µs（68000 のクロック ÷ 8）。`now_us` は今の時刻。
+- `in` の byte は、線に来た時刻（今＋`delay_us`）からあとの最初の ACIA のクロック（500 kHz）の刻みで、1 byte ずつ ACIA に入る。線の上では 1 byte が 320 µs（31.25 kbit/s、8N1）なので、続けて置いた byte は 320 µs ずつ遅れて届く。前に置いた byte より早い時刻にはならない（線の順は変えない）。置いた byte は `run` で進めたときに届く。まだ線にある byte の数が `pending_in`。
+- ACIA がマスターリセットの間（電源投入の直後。BIOS が設定するまで）に届いた byte は、実物と同じく捨てられる。BIOS は受けた byte を受信のリング（bios-abi.md §03）に入れる。
+- `out` は、ACIA が送り終えた byte と、その時刻（最後のストップビットの終わり）。取り出すまで 4,096 byte まで溜め、超えると古い方から捨てて `dropped`（電源投入からの合計）に数える。
+- 状態の保存には入れない（線の上の byte と溜めた送信は、保存・復元で消える）。
 
 ## 04　run の答え
 
@@ -161,6 +170,9 @@ DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読�
 | `fc85_audio(m, out, max_frames)` | 溜まった音を L・R の順の s16 で書き、組の数を返す（48 kHz、1 フレームに約 801 組。残りは次に回す）。取り出さないと 60 秒分まで溜め、古い方から捨てる |
 | `fc85_save_state`・`fc85_load_state` | 状態を保存して返す（`fc85_free_bytes` で返す）・戻す。形は印 `FC85ST01` と、`save_state` の JSON を deflate したもの。同じ版のエミュレータで読めることだけを約束する [P]（OI-103） |
 | `fc85_peek`・`fc85_poke` | メモリをバスを通さずに読む・書く。空間は `FC85_SPACE_*`（§03 の表と同じ順：CPU、VRAM、WAVE、DSP_PROG、TEMPORAL、CHAR_ROM、PALETTE） |
+| `fc85_midi_in(m, data, len, delay_us)` | MIDI IN の線に `len` byte を置く（今から `delay_us` µs 後に来たとする。§03 の「MIDI」。DR-126） |
+| `fc85_midi_out(m, out, time_us, cap)` | ACIA が送り終えた MIDI OUT の byte を古い順に最大 `cap` 個書き、数を返す。`time_us`（NULL でもよい）には送り終えた時刻（µs）。残りは次に回す |
+| `fc85_time_us(m)` | 仮想機の今の時刻（電源を入れてからの µs） |
 | `fc85_call(m, request)` | §02 の JSON の手順の要求を 1 行、同じ仮想機に送り、答えの行を返す（`fc85_free_string` で返す）。ブレークポイント、見張り、ベンド点、レジスタなど、ほかの手順はこちらで使う |
 | `fc85_abi_version`・`fc85_version`・`fc85_audio_rate`・`fc85_frame_rate`・`fc85_last_error` | ABI の版（今は 1）、エミュレータの版、48000、約 59.92、最後の誤りの文 |
 
@@ -186,13 +198,17 @@ ctx.putImageData(new ImageData(m.screenRGBA(AREA.VIEW), 320, 240), 0, 0);
 const pcm = m.audio();                           // Int16Array（L・R、48 kHz）
 const st = m.saveState(); m.loadState(st);
 m.call("regs");                                  // JSON の手順
+m.midiIn([0x90, 60, 100]);                       // MIDI IN の線へ（DR-126）
+const { bytes, us } = m.midiOut();               // 送り終えた MIDI OUT（Uint8Array、Float64Array の µs）
 ```
+
+- MIDI：`m.timeUs` が仮想機の時刻（µs）。`MidiAssembler`（`fc85emu.js` が出す）は MIDI OUT の byte の列を、ランニングステータスを開いた完全なメッセージに組み立てる（Web MIDI の `send` は完全なメッセージしか受けない）。SysEx は捨てる。
 
 - 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 - WebAssembly にはファイルがないので、`fc85_call` の手順のうち `path` を使うもの（`load`、`screenshot` の `path` など）は誤りになる。ROM はバイト列で渡す。
 - 速さ [V]：開発機の Chrome の Worker の中で 1 フレーム約 13〜18 ms（ネイティブの release は約 10 ms。DR-105、DR-107、DR-108）。wasm-opt の -O3 で約 1 割速くなる（振る舞いは同じ）。読み込んでから約 10 秒は、ブラウザが機械語を組み直す前で遅い。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）は実時間の 9 割台で、音が途切れる（OI-103）。
 - 試しの頁（DR-107）：仮想機は module の Web Worker（`worker.js`）で回し、頁の主のスレッドは釦と描画だけにする（OffscreenCanvas が使えれば描画も Worker）。音は AudioWorklet（`audio.js`）で鳴らし、進める速さは音の時計に合わせる（鳴っていない音が約 50〜167 ms になるようにフレームを進める。仮想機のフレームは約 59.92 Hz で、画面の 60 Hz とは合わせない）。音が鳴る前と AudioWorklet がないときは時刻に合わせる。実時間に追いつかない機械では実時間より遅く進み、音は途切れる（音の高さは変えない）。1 フレームより短い釦の押下も、次のフレームでは押したことにする。状態の行に、実時間の割合、仮想機に使った時間の割合、音の溜まり、途切れの数を出す。「速さを測る」は、今の場面（動かしている仮想機の状態を写す。まだ動かしていなければ電源投入）から、同じ ROM の別の仮想機を 240 フレーム止まらずに進めた 1 フレームの時間（DR-108）。
-- 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。カートリッジは「サンプル」の欄（`build.py` が、組んであるサンプル `sdk/samples/<名前>/build/<名前>.bin` を `build/carts/` に写し、見出しの題を一覧 `build/carts.json` に書く。サンプルだけを組み直したら `build.py --roms`。選び直すとその場で読み込み直す。DR-115）か、ファイルの欄で選ぶか、頁の URL に `?sample=<名前>`（例 `?sample=echo`）か `?cart=<URL>`（頁からの相対。例 `?cart=build/carts/game.bin`）を付ける。`?doc=0` で DOC の子基板を外す。釦はホストと同じ（矢印、Z・X・C、Enter）。ゲームパッド（Gamepad API の標準の配置）も読む：十字か左の棒、下の釦が A、右が B、左が C、START。つないだら一度釦を押す（DR-116）。「ベンド」の欄には仕様書 §11 のベンド点の命令を、ホストの `--bend` と同じ書き方で打つ（例 `mode bend`、`clock doc 4000000`）。Worker が JSON の手順の `bend`（§03）を C の ABI の `fc85_call` で呼び、答えの要約を頁に出す。読み込み直すと通常に戻る（DR-124）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールや Worker を読まないので `serve.py` を使う。
+- 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。カートリッジは「サンプル」の欄（`build.py` が、組んであるサンプル `sdk/samples/<名前>/build/<名前>.bin` を `build/carts/` に写し、見出しの題を一覧 `build/carts.json` に書く。サンプルだけを組み直したら `build.py --roms`。選び直すとその場で読み込み直す。DR-115）か、ファイルの欄で選ぶか、頁の URL に `?sample=<名前>`（例 `?sample=echo`）か `?cart=<URL>`（頁からの相対。例 `?cart=build/carts/game.bin`）を付ける。`?doc=0` で DOC の子基板を外す。釦はホストと同じ（矢印、Z・X・C、Enter）。ゲームパッド（Gamepad API の標準の配置）も読む：十字か左の棒、下の釦が A、右が B、左が C、START。つないだら一度釦を押す（DR-116）。「ベンド」の欄には仕様書 §11 のベンド点の命令を、ホストの `--bend` と同じ書き方で打つ（例 `mode bend`、`clock doc 4000000`）。Worker が JSON の手順の `bend`（§03）を C の ABI の `fc85_call` で呼び、答えの要約を頁に出す。読み込み直すと通常に戻る（DR-124）。「MIDI」の釦で Web MIDI を使い始め（ブラウザが許可を求める。SysEx は求めない）、MIDI IN（「すべて」か 1 つの装置か「なし」）と MIDI OUT（1 つの装置か「なし」）を選ぶ。IN は動かしている間だけ受け、Worker が次のフレームの頭で線に置く。OUT は Worker が完全なメッセージに組み立て、送り終えた時刻に、音と同じ先回り（鳴っていない音の長さ）を足した時刻で `MIDIOutput.send` に渡す（DR-126）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールや Worker を読まないので `serve.py` を使う。
 
 ### libretro のコア
 
@@ -205,5 +221,6 @@ m.call("regs");                                  // JSON の手順
 | 音 | 48 kHz のステレオ。選択肢 `fc85_doc`（DOC の子基板）と `fc85_audio_tap`（line・digital）は、リセットか読み直しで効く |
 | 状態 | 頭に長さ（4 byte）を付けた `pack_state` の形。`retro_serialize_size` は読み込んだときに、大きなメモリを擬似乱数で埋めて詰めた大きさに余裕を足して決め、ゲームの間は変えない（約 1 MB。中身は約 135 KB）[P] |
 | メモリ | Main RAM（128 KiB）を `RETRO_MEMORY_SYSTEM_RAM` で見せる。状態を戻しても、リセットしても同じ番地 |
+| MIDI | フロントエンドの MIDI の口（`RETRO_ENVIRONMENT_GET_MIDI_INTERFACE`）があれば使う：フレームの頭で、受けた byte（1 フレームに最大 1,024）を MIDI IN の線に置き、フレームの後で、ACIA が送り終えた byte を、前の byte からの間（µs。フレームの最初の 1 byte は 0）を付けて `write` し、送ったときだけ `flush` する（DR-126）。どの装置につなぐかはフロントエンドの設定 |
 | 守り | 中で panic したら、そのゲームを止めて記録に書き、フロントエンドは止めない |
-| まだないもの [O] | 電池で保つ RAM（本機にない）、チート、キーボード・MIDI、ベンド点の選択肢（`.bends` だけ）、実際のフロントエンドでの確かめ（OI-103） |
+| まだないもの [O] | 電池で保つ RAM（本機にない）、チート、キーボード、ベンド点の選択肢（`.bends` だけ）、実際のフロントエンドでの確かめ（OI-103） |

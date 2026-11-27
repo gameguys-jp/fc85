@@ -12,7 +12,7 @@
   build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジは、build.py が写した
   サンプル（build/carts.json の一覧。DR-115）から選ぶか、ファイルの欄で選ぶか、頁の URL に ?cart=<URL>
   （この頁からの相対。例 ?cart=build/carts/game.bin）か ?sample=<名前>（例 ?sample=echo）を付ける。
-  ?doc=0 で DOC の子基板を外す。
+  ?doc=0 で DOC の子基板を外す。MIDI の装置は Web MIDI で選ぶ（DR-126）。
   仮想機は Web Worker（worker.js）で回し、音は AudioWorklet（audio.js）で鳴らす。進める速さは音の時計に
   合わせる（DR-107）。この頁は釦と描画だけ（OffscreenCanvas が使えれば描画も Worker）。
   ライセンスは MIT（リポジトリの LICENSE）。
@@ -81,13 +81,20 @@
       <label>ベンド <input type="text" id="bend" size="28" placeholder="mode bend" spellcheck="false" autocomplete="off"></label>
       <button id="bendGo" disabled>実行</button>
     </div>
+    <div class="row">
+      <button id="midiOn">MIDI を使う</button>
+      <label>MIDI IN <select id="midiIn" disabled><option value="all">すべて</option><option value="">なし</option></select></label>
+      <label>MIDI OUT <select id="midiOut" disabled><option value="">なし</option></select></label>
+    </div>
     <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。
       ゲームパッドは、十字か左の棒、下の釦 = A、右 = B、左 = C、START（つないで釦を押すと読み始める）。
       サンプルを選び直すと、その場で読み込み直す。サンプルの使い方は sdk/samples/&lt;名前&gt;/README.md。
       「速さを測る」は、今の場面を写した別の仮想機を 240 フレーム止まらずに進めた 1 フレームの時間（実時間は約 16.7 ms）。
       読み込んでから十数秒は、ブラウザが機械語を組み直すので遅い。
       「ベンド」は仕様書 §11 のベンド点の命令で、ホストの --bend と同じ書き方（例 mode bend、clock doc 4000000。
-      使い方は sdk/samples/bend/README.md）。読み込み直すと通常に戻る。</p>
+      使い方は sdk/samples/bend/README.md）。読み込み直すと通常に戻る。
+      「MIDI を使う」で、ブラウザの Web MIDI の装置を選ぶ（ブラウザが許可を求める）。MIDI IN の byte は仮想機の
+      ACIA（31.25 kbit/s）に入り、ROM が送った MIDI OUT は、その時刻の音が鳴るときに送る（SysEx は送らない）。</p>
   </section>
 </main>
 <script type="module">
@@ -96,7 +103,7 @@ const canvas = $("screen");
 const KEYS = { ArrowUp: 0x01, ArrowDown: 0x02, ArrowLeft: 0x04, ArrowRight: 0x08,
                KeyZ: 0x10, KeyX: 0x20, KeyC: 0x40, Enter: 0x80 };
 
-let worker = null, info = null, running = false, pad = 0, saved = null, audio = null;
+let worker = null, info = null, running = false, pad = 0, saved = null, audio = null, midi = null;
 let ctx = null, pending = null;
 const roms = { boot: null, chars: null };
 const params = new URLSearchParams(location.search);
@@ -169,6 +176,7 @@ function onWorker(e) {
       let t = `フレーム ${d.frame}　${d.fps.toFixed(1)} fps（実時間の ${Math.round(d.speed * 100)}%）　` +
               `仮想機の時間 ${Math.round(d.load * 100)}%`;
       if (d.lead !== null) t += `　音の溜まり ${Math.round(d.lead)} ms（目標 ${Math.round(d.target)}）　途切れ ${d.underruns}`;
+      if (midi || d.midiIn || d.midiOut) t += `　MIDI 受 ${d.midiIn}・送 ${d.midiOut} byte`;
       s.textContent = t;
       s.classList.toggle("slow", d.speed < 0.97);
       break;
@@ -183,6 +191,18 @@ function onWorker(e) {
     case "bent":
       say(`ベンド：${d.summary}`);
       break;
+    case "midi": {
+      // MIDI OUT（DR-126）：Worker が付けた時刻（performance.timeOrigin からの ms）に送る
+      const id = $("midiOut").value;
+      const out = midi && id ? midi.outputs.get(id) : null;
+      if (!out) break;
+      for (const msg of d.msgs) {
+        if (msg.data[0] === 0xf0) continue;
+        try { out.send(msg.data, Math.max(0, msg.at - performance.timeOrigin)); }
+        catch (err) { say(`MIDI OUT に送れない：${err.message}`); }
+      }
+      break;
+    }
     case "bench":
       say(`速さ：${d.ms.toFixed(2)} ms/フレーム（${d.frames} フレーム。実時間は ${(1000 / info.frameRate).toFixed(2)} ms）`);
       $("bench").disabled = false;
@@ -290,6 +310,37 @@ $("bench").onclick = () => {
   say("速さを測っている…");
   worker.postMessage({ type: "bench", frames: 240 });
 };
+
+// MIDI（Web MIDI。DR-126）：IN の装置（すべてか 1 つ）の byte を Worker へ。OUT は "midi" の知らせで送る
+function onMidiMessage(e) {
+  if (worker && running) worker.postMessage({ type: "midi", bytes: Array.from(e.data) });
+}
+function bindMidiIn() {
+  const sel = $("midiIn").value;
+  for (const p of midi.inputs.values()) p.onmidimessage = sel === "all" || sel === p.id ? onMidiMessage : null;
+}
+function listMidi() {
+  const inSel = $("midiIn"), outSel = $("midiOut");
+  const keepIn = inSel.value, keepOut = outSel.value;
+  inSel.replaceChildren(new Option("すべて", "all"), new Option("なし", ""));
+  for (const p of midi.inputs.values()) inSel.add(new Option(p.name, p.id));
+  outSel.replaceChildren(new Option("なし", ""));
+  for (const p of midi.outputs.values()) outSel.add(new Option(p.name, p.id));
+  inSel.value = [...inSel.options].some((o) => o.value === keepIn) ? keepIn : "all";
+  outSel.value = [...outSel.options].some((o) => o.value === keepOut) ? keepOut : "";
+  bindMidiIn();
+}
+$("midiOn").onclick = async () => {
+  if (!navigator.requestMIDIAccess) { say("このブラウザには Web MIDI がない"); return; }
+  try { midi = await navigator.requestMIDIAccess({ sysex: false }); }
+  catch (e) { say(`MIDI を使えない：${e.message}`); return; }
+  midi.onstatechange = listMidi;
+  $("midiIn").disabled = $("midiOut").disabled = false;
+  $("midiOn").disabled = true;
+  listMidi();
+  say(`MIDI：IN ${midi.inputs.size} 個、OUT ${midi.outputs.size} 個`);
+};
+$("midiIn").onchange = bindMidiIn;
 
 // 入力：キーボード（画面を押してから）とゲームパッド（標準の配置。DR-116）の OR を PORT_A にする
 let keyPad = 0, gamePad = 0;

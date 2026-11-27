@@ -1,11 +1,15 @@
-//! MIDI の入出力（仕様書 §12 の host 層。DR-061）。
+//! MIDI の入出力（仕様書 §12 の host 層。DR-061、DR-126）。
 //!
 //! ホストの MIDI IN の byte を ACIA の受信線に流し、ACIA が送り終えた byte を MIDI OUT に出す。
 //! ACIA が通信速度（31.25 kbps）どおりに取り込むので、ホストは byte の並びだけを渡す。
 //! MIDI OUT の装置はメッセージ単位でしか送れないので、byte の列をメッセージに組み立てる。
+//! 送り終えた byte には仮想機の時刻が付くので（DR-126）、送信のスレッドがその間隔のまま送る
+//! （フレームを計算し終えた時刻を起点にするので、遅れは 1 フレームまで）。
 
 use std::collections::VecDeque;
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
@@ -32,8 +36,24 @@ pub fn list() {
 pub struct Midi {
     _input: Option<MidiInputConnection<()>>,
     received: Arc<Mutex<VecDeque<u8>>>,
-    output: Option<MidiOutputConnection>,
+    /// 送信のスレッドへ：送る時刻とメッセージ。
+    output: Option<Sender<(Instant, Vec<u8>)>>,
     out: Assembler,
+}
+
+/// 送信のスレッド：時刻まで待って送る（時刻の順に来る）。
+fn sender(mut conn: MidiOutputConnection) -> Sender<(Instant, Vec<u8>)> {
+    let (tx, rx) = channel::<(Instant, Vec<u8>)>();
+    std::thread::spawn(move || {
+        for (at, msg) in rx {
+            let now = Instant::now();
+            if at > now {
+                std::thread::sleep(at - now);
+            }
+            let _ = conn.send(&msg);
+        }
+    });
+    tx
 }
 
 impl Midi {
@@ -72,7 +92,7 @@ impl Midi {
         Self {
             _input: input,
             received,
-            output,
+            output: output.map(sender),
             out: Assembler::default(),
         }
     }
@@ -82,12 +102,16 @@ impl Midi {
         self.received.lock().unwrap().drain(..).collect()
     }
 
-    /// ACIA が送った byte を、メッセージにそろったものから送る。
-    pub fn send(&mut self, b: u8) {
-        if let Some(msg) = self.out.push(b)
-            && let Some(o) = &mut self.output
-        {
-            let _ = o.send(&msg);
+    /// ACIA が送り終えた byte（時刻は CPU クロック）を、メッセージにそろったものから送る。`base` の
+    /// クロックを今（`now`）として、byte の時刻との差だけ後に送る。
+    pub fn send(&mut self, sent: &[(u64, u8)], base: u64, now: Instant) {
+        for &(t, b) in sent {
+            if let Some(msg) = self.out.push(b)
+                && let Some(o) = &self.output
+            {
+                let at = now + Duration::from_nanos(t.saturating_sub(base) * 125);
+                let _ = o.send((at, msg));
+            }
         }
     }
 }

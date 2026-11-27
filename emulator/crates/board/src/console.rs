@@ -17,6 +17,8 @@
 //!   64 数えて BERR を出す。BERR を S0 から 65.5 クロックの立下りで認識し、サイクルは 67 クロックで終わる。
 //! - 割込み（DR-028）：要因をレベルにまとめ、74LS148 で IPL にする。応答はすべてオートベクタ（VPA）。
 
+use std::collections::VecDeque;
+
 use fc85_chips::hd6850::Hd6850;
 use fc85_chips::hd68000::{Bus, BusReply, Hd68000, IackReply, Size};
 use fc85_core::time::{PERIOD_2CLK, PERIOD_8M, PERIOD_21M, SLOT, Time};
@@ -150,7 +152,20 @@ pub struct System {
     /// Main RAM のリフレッシュのカウンタと保持の模型（`vclock`。追跡は Bend モードのときだけ）。
     #[serde(default)]
     pub main_dram: MainRamRefresh,
+    /// ホストの MIDI IN：線に来る時刻（CPU クロック）と byte。時刻の順。その時刻に ACIA の受信の線へ
+    /// 渡す（DR-126）。外の機器の側の待ちなので、保存には入れない。
+    #[serde(skip)]
+    midi_line: VecDeque<(u64, u8)>,
+    /// MIDI OUT：ACIA が送り終えた byte と、その時刻（CPU クロック）。ホストが取り出す。`MIDI_OUT_KEEP`
+    /// を超えたら古いものを捨てて数える。保存には入れない（DR-126）。
+    #[serde(skip)]
+    pub midi_out: VecDeque<(u64, u8)>,
+    #[serde(skip)]
+    pub midi_out_dropped: u64,
 }
+
+/// 取り出されない MIDI OUT の byte を溜める上限（31.25 kbit/s で約 1.3 秒）。
+pub const MIDI_OUT_KEEP: usize = 4096;
 
 impl Default for System {
     fn default() -> Self {
@@ -246,6 +261,9 @@ impl System {
             analog: Analog::new(),
             line_out: Vec::new(),
             main_dram: MainRamRefresh::new(),
+            midi_line: VecDeque::new(),
+            midi_out: VecDeque::new(),
+            midi_out_dropped: 0,
         }
     }
 
@@ -316,9 +334,78 @@ impl System {
         self.sync_time(clock * PERIOD_8M);
         let n = clock.saturating_sub(self.acia_clock) / 16;
         if n > 0 {
-            self.acia.clock(n as u32);
-            self.acia_clock += n * 16;
+            if self.midi_line.is_empty() {
+                self.clock_acia(n);
+            } else {
+                self.clock_acia_with_line(n);
+            }
         }
+    }
+
+    /// ACIA を `n` 周期（CPU の 16 クロックずつ）進め、送り終えた byte に時刻を付けて `midi_out` へ。
+    /// 送信の途中なら送り終えるところで区切るので、時刻は送り終えた周期のもの。
+    #[inline(always)]
+    fn clock_acia(&mut self, mut n: u64) {
+        loop {
+            let left = u64::from(self.acia.tx_left());
+            let k = if left > 0 && left < n { left } else { n };
+            self.acia.clock(k as u32);
+            self.acia_clock += k * 16;
+            n -= k;
+            if left > 0 && left <= k {
+                self.collect_sent();
+            }
+            if n == 0 {
+                return;
+            }
+        }
+    }
+
+    #[cold]
+    fn collect_sent(&mut self) {
+        while let Some(b) = self.acia.take_sent() {
+            if self.midi_out.len() >= MIDI_OUT_KEEP {
+                self.midi_out.pop_front();
+                self.midi_out_dropped += 1;
+            }
+            self.midi_out.push_back((self.acia_clock, b));
+        }
+    }
+
+    /// `clock_acia` と同じに進め、途中で時刻の来たホストの MIDI IN の byte を受信の線に渡す。
+    #[cold]
+    fn clock_acia_with_line(&mut self, mut n: u64) {
+        while let Some(&(t, b)) = self.midi_line.front() {
+            let k = t.saturating_sub(self.acia_clock).div_ceil(16);
+            if k > n {
+                break;
+            }
+            if k > 0 {
+                self.clock_acia(k);
+                n -= k;
+            }
+            self.acia.receive(b);
+            self.midi_line.pop_front();
+        }
+        if n > 0 {
+            self.clock_acia(n);
+        }
+    }
+
+    /// ホストの MIDI IN：`bytes` が CPU クロック `at` に線に来たとする（DR-126）。前に置いた byte より早い
+    /// 時刻は、その byte の時刻にそろえる（線の順は変えない）。ACIA は 1 byte ずつ通信の速さで受け取る。
+    pub fn midi_receive(&mut self, at: u64, bytes: &[u8]) {
+        let at = self
+            .midi_line
+            .back()
+            .map_or(at, |&(t, _)| at.max(t))
+            .max(self.acia_clock);
+        self.midi_line.extend(bytes.iter().map(|&b| (at, b)));
+    }
+
+    /// まだ受信の線に渡していないホストの MIDI IN の byte の数。
+    pub fn midi_line_pending(&self) -> usize {
+        self.midi_line.len()
     }
 
     // ------------------------------------------------------------------ 割込み

@@ -11,11 +11,15 @@
 //
 // 受ける知らせ（type）：init（wasm の URL、canvas）、audio（AudioWorklet への MessagePort）、boot（ROM、
 // DOC の子基板）、run（on）、input（pad）、reset、save、load（state）、bench（frames）、bend（cmd。仕様書 §11
-// のベンド点の命令を窓口の JSON の手順の bend で。DR-124）。
+// のベンド点の命令を窓口の JSON の手順の bend で。DR-124）、midi（bytes。MIDI IN。DR-126）。
 // 送る知らせ：ready、frame（canvas がないとき）、stat（1 秒ごと）、saved、loaded、bench、bent（summary、mode）、
-// error。
+// midi（msgs：MIDI OUT のメッセージと送る時刻）、error。
+//
+// MIDI（DR-126）：頁から来た MIDI IN の byte は、次のフレームの頭に ACIA の線に置く。ACIA が送り終えた MIDI OUT
+// の byte はメッセージに組み立て（ランニングステータスを開く）、送り終えた時刻の音が鳴るときに送るよう、時刻
+// （performance.timeOrigin からの ms）を付けて頁へ送る。音が鳴っていないときは、計算した時刻から。
 // ライセンスは MIT（リポジトリの LICENSE）。
-import { load, AREA, FLAGS } from "./fc85emu.js";
+import { load, AREA, FLAGS, MidiAssembler } from "./fc85emu.js";
 
 const W = 320;
 const H = 240;
@@ -47,6 +51,10 @@ let owed = 0;
 let statAt = 0;
 let statFrames = 0;
 let busy = 0;
+// MIDI：OUT のメッセージの組立てと、受けた・送った byte の数
+let midiAsm = new MidiAssembler();
+let midiIn = 0;
+let midiOut = 0;
 
 const post = (msg, transfer = []) => self.postMessage(msg, transfer);
 
@@ -76,10 +84,11 @@ function build() {
   flush();
 }
 
-/** AudioWorklet の溜まりを捨てる（リセット、状態を戻す、一時停止）。 */
+/** AudioWorklet の溜まりを捨てる（リセット、状態を戻す、一時停止）。MIDI OUT の組立ても初めから。 */
 function flush() {
   if (link) link.postMessage({ flush: true });
   consumed = produced;
+  midiAsm = new MidiAssembler();
 }
 
 function frame() {
@@ -91,7 +100,24 @@ function frame() {
     produced += pcm.length >> 1;
     link.postMessage({ pcm }, [pcm.buffer]);
   }
+  const mo = m.midiOut();
+  if (mo.bytes.length > 0) sendMidi(mo);
   statFrames += 1;
+}
+
+/** MIDI OUT をメッセージにし、送り終えた時刻の音が鳴る時刻を付けて頁へ。仮想機の今（timeUs）の音は、溜まり
+ *  （送ったがまだ鳴っていない音）の分だけ後に鳴る。 */
+function sendMidi(mo) {
+  midiOut += mo.bytes.length;
+  const now = m.timeUs;
+  const leadMs = link ? ((produced - consumed) / fc85.audioRate) * 1000 : 0;
+  const base = performance.timeOrigin + performance.now() + leadMs;
+  const msgs = [];
+  for (let i = 0; i < mo.bytes.length; i++) {
+    const data = midiAsm.push(mo.bytes[i]);
+    if (data) msgs.push({ data, at: base + (mo.us[i] - now) / 1000 });
+  }
+  if (msgs.length > 0) post({ type: "midi", msgs });
 }
 
 function present() {
@@ -147,6 +173,8 @@ function stat(t) {
     lead: link ? (queued / fc85.audioRate) * 1000 : null,
     target: link ? (lead / fc85.audioRate) * 1000 : null,
     underruns: link ? underruns : null,
+    midiIn,
+    midiOut,
   });
   statAt = t;
   statFrames = 0;
@@ -252,6 +280,12 @@ self.onmessage = async (e) => {
         setRunning(was);
         break;
       }
+      case "midi":
+        if (m) {
+          m.midiIn(d.bytes);
+          midiIn += d.bytes.length;
+        }
+        break;
       case "bend": {
         if (!m) throw new Error("仮想機がない");
         const r = m.call("bend", { cmd: d.cmd });

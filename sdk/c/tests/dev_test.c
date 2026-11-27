@@ -3,8 +3,8 @@
  *
  * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）→ 40 フレーム待つ →
  * HBlank の割込みで色 0 を替える（v_phase 4。その後 10 フレームはそのまま）→ 同じことを DIRECT で（v_phase 5）→
- * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）→ Temporal RAM（v_phase 8）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を
- * 分けて測り、v_phase 4・5 で画面を撮る。
+ * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）→ Temporal RAM（v_phase 8）→ MIDI（試験が送るのを待つ。v_phase 9）。
+ * 試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を分けて測り、v_phase 4・5 で画面を撮る。
  *
  * echo_dsp.h は試験が tests/echo.dsp から dspasm --c-array で作る。
  */
@@ -18,6 +18,7 @@
 #include "echo_dsp.h"
 #include "fabric.h"
 #include "fc85.h"
+#include "midi.h"
 #include "temporal.h"
 #include "video.h"
 
@@ -33,6 +34,7 @@ uint16_t r_video[6];
 uint16_t r_dsp[8];
 uint16_t r_dma[8];
 uint16_t r_tmp[10];
+uint16_t r_midi[14];
 
 /* ラスタの区切り（画面の y＝60 と 120 の辺りのラスタで比べる） */
 #define SPLIT1 (VIDEO_TOP_RASTER + 60U)
@@ -332,6 +334,28 @@ static void temporal_tests(void)
     v_phase = 8;
 }
 
+/* MIDI（DR-127）：試験が窓口の midi で送る byte（ランニングステータスとリアルタイムを含む）を受信のリングから
+ * 読んで組み立て、4 つのメッセージを r_midi に残し、ステータスを付け直して送り返す */
+static void midi_tests(void)
+{
+    midi_parser_t p;
+    midi_msg_t m;
+    unsigned n = 0;
+    midi_parser_init(&p);
+    while (n < 4) {
+        if (midi_read(&p, &m)) {
+            r_midi[3 * n] = m.status;
+            r_midi[3 * n + 1] = (uint16_t)(m.d1 << 8 | m.d2);
+            r_midi[3 * n + 2] = (uint16_t)(midi_is_note_on(&m) << 8 | midi_is_note_off(&m) << 4 | m.len);
+            midi_send_msg(&m);
+            n++;
+        }
+    }
+    r_midi[12] = midi_lost();
+    r_midi[13] = (uint16_t)midi_avail();
+    v_phase = 9;
+}
+
 int main(void)
 {
     acrtc_tests();
@@ -343,6 +367,7 @@ int main(void)
     dsp_tests();
     dma_tests();
     temporal_tests();
+    midi_tests();
     done = 0xC0DE;
     return 0;
 }

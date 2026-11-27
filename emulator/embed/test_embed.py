@@ -88,6 +88,9 @@ class Native:
             "fc85_last_error": ([], c.c_char_p),
             "fc85_frame_rate": ([], c.c_double),
             "fc85_abi_version": ([], c.c_uint32),
+            "fc85_time_us": ([c.c_void_p], c.c_uint64),
+            "fc85_midi_in": ([c.c_void_p, c.c_char_p, c.c_size_t, c.c_uint32], c.c_int32),
+            "fc85_midi_out": ([c.c_void_p, c.c_char_p, c.POINTER(c.c_uint64), c.c_size_t], c.c_int32),
         }
         for name, (args, res) in sig.items():
             f = getattr(lib, name)
@@ -126,6 +129,19 @@ class Native:
             if n < chunk:
                 return out
 
+    def midi_out(self):
+        """MIDI OUT の byte と時刻（µs）。"""
+        cap = 256
+        data = ctypes.create_string_buffer(cap)
+        times = (ctypes.c_uint64 * cap)()
+        out, us = [], []
+        while True:
+            n = self.check(self.lib.fc85_midi_out(self.m, data, times, cap), "fc85_midi_out")
+            out += list(data.raw[:n])
+            us += list(times[:n])
+            if n < cap:
+                return out, us
+
     def save_state(self):
         n = ctypes.c_size_t()
         p = self.check(self.lib.fc85_save_state(self.m, ctypes.byref(n)), "fc85_save_state")
@@ -143,6 +159,18 @@ class Native:
 
 def have_roms():
     return os.path.exists(BOOT) and os.path.exists(CHARS)
+
+
+def midi_echo_rom():
+    """ACIA に来た byte を送り返す小さな Boot ROM（check.mjs と同じ）。"""
+    rom = bytearray(b"\xff" * 0x10000)
+    rom[:8] = bytes([0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00])
+    code = [0x13FC, 0x0003, 0x0026, 0x0014, 0x13FC, 0x0015, 0x0026, 0x0014, 0x0839, 0x0000, 0x0026,
+            0x0014, 0x67F6, 0x1039, 0x0026, 0x0016, 0x0839, 0x0001, 0x0026, 0x0014, 0x67F6, 0x13C0,
+            0x0026, 0x0016, 0x60DE]
+    for i, w in enumerate(code):
+        rom[0x100 + 2 * i:0x102 + 2 * i] = w.to_bytes(2, "big")
+    return bytes(rom)
 
 
 @unittest.skipIf(shutil.which("cargo") is None, "cargo がない")
@@ -186,6 +214,24 @@ class EmbedTest(unittest.TestCase):
         n.check(n.lib.fc85_peek(n.m, 0, 0x100800, buf, 2), "fc85_peek")
         out["peek"] = list(buf.raw)
         out["pc"] = n.call("regs")["result"]["pc"]
+        # MIDI（DR-126）：BIOS は受けた byte を受信のリングに入れる。送り返す Boot ROM で、送り終えた時刻
+        msg = bytes([0x90, 60, 100])
+        n.check(n.lib.fc85_midi_in(n.m, msg, len(msg), 0), "fc85_midi_in")
+        n.check(n.lib.fc85_run_frames(n.m, 1), "fc85_run_frames")
+        buf = ctypes.create_string_buffer(12)
+        n.check(n.lib.fc85_peek(n.m, 0, 0x100612, buf, 12), "fc85_peek")
+        out["midi_ring"] = list(buf.raw)
+        out["midi_out_bios"] = len(n.midi_out()[0])
+        e = Native(n.lib)
+        e.create(midi_echo_rom(), b"")
+        e.check(e.lib.fc85_run_frames(e.m, 1), "fc85_run_frames")
+        t0 = e.lib.fc85_time_us(e.m)
+        msg = bytes([0x90, 64, 1, 0x80, 64, 0])
+        e.check(e.lib.fc85_midi_in(e.m, msg, len(msg), 0), "fc85_midi_in")
+        e.check(e.lib.fc85_run_frames(e.m, 1), "fc85_run_frames")
+        b, us = e.midi_out()
+        out["midi_echo"] = {"bytes": b, "us": [u - t0 for u in us]}
+        e.lib.fc85_free(e.m)
         # 頁の「ベンド」の欄（worker.js、DR-124）と同じ手順：bend で Bend モードに入り、誤った命令は error
         r = n.call("bend", {"cmd": "mode bend"})
         self.assertEqual(r["result"]["mode"], "bend", r)
@@ -202,6 +248,15 @@ class EmbedTest(unittest.TestCase):
         self.assertTrue(native["round_trip"], "状態を戻して同じ入力で進めた結果が違う（C の ABI）")
         self.assertEqual(native["frame"], 120)
         self.assertEqual(native["peek"], [0x12, 0x34])
+        ring = native["midi_ring"]
+        head, tail = ring[0] << 8 | ring[1], ring[2] << 8 | ring[3]
+        self.assertEqual((head - tail) % 64, 3, ring)
+        self.assertEqual([ring[4 + (tail + i) % 64] for i in range(3)], [0x90, 60, 100], ring)
+        self.assertEqual(native["midi_out_bios"], 0)
+        echo = native["midi_echo"]
+        self.assertEqual(echo["bytes"], [0x90, 64, 1, 0x80, 64, 0])
+        self.assertTrue(640 <= echo["us"][0] < 660, echo)
+        self.assertTrue(all(320 <= b - a < 330 for a, b in zip(echo["us"], echo["us"][1:])), echo)
         if shutil.which("node") is None:
             self.skipTest("Node がない（WebAssembly は確かめない）")
         if not build.has_wasm_target():
@@ -218,8 +273,11 @@ class EmbedTest(unittest.TestCase):
         self.assertIn("印", web["bad_state"])
         self.assertEqual(web["rgba_len"], 256 * 192 * 4)
         self.assertTrue(web["rgba_ok"], "fc85_screen_rgba が fc85_screen の並べ替えになっていない（WebAssembly）")
-        for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc"):
+        for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc", "midi_ring", "midi_out_bios",
+                  "midi_echo"):
             self.assertEqual(web[k], native[k], f"{k} が C の ABI と WebAssembly で違う")
+        self.assertEqual(web["midi_assembled"],
+                         [[0x90, 60, 100], [0xF8], [0x90, 62, 90], [0xC1, 5], [0xF0, 0x7E, 0xF7], [0xF2, 0x10, 0x20]])
 
     def test_samples_are_listed_for_the_page(self):
         """build.py が組んであるサンプルだけを carts/ に写し、題の順に carts.json に載せる（DR-115）。"""

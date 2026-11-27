@@ -238,6 +238,86 @@ fn writes_to_a_full_acrtc_fifo_are_counted_as_rule_warnings() {
     assert_eq!(r.acrtc_rule_warnings, 0);
 }
 
+/// ACIA に来た byte をそのまま送り返す Boot ROM（割込みは使わず、RDRF と TDRE を見る）。
+fn midi_echo_rom() -> Vec<u8> {
+    let mut boot = vec![0xFFu8; 0x10000];
+    let code: [u16; 26] = [
+        0x13FC, 0x0003, 0x0026, 0x0014, // MOVE.B #$03,MIDI_CTRL（マスタリセット）
+        0x13FC, 0x0015, 0x0026,
+        0x0014, // MOVE.B #$15,MIDI_CTRL（÷16、8N1、割込みなし）
+        0x0839, 0x0000, 0x0026, 0x0014, // 1: BTST #0,MIDI_STATUS（RDRF）
+        0x67F6, // BEQ.S 1
+        0x1039, 0x0026, 0x0016, // MOVE.B MIDI_DATA,D0
+        0x0839, 0x0001, 0x0026, 0x0014, // 2: BTST #1,MIDI_STATUS（TDRE）
+        0x67F6, // BEQ.S 2
+        0x13C0, 0x0026, 0x0016, // MOVE.B D0,MIDI_DATA
+        0x60DE, // BRA.S 1
+        0x4E71,
+    ];
+    boot[..8].copy_from_slice(&[0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);
+    for (i, w) in code.iter().enumerate() {
+        boot[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&w.to_be_bytes());
+    }
+    boot
+}
+
+#[test]
+fn midi_bytes_go_through_the_acia_with_their_times() {
+    // DR-126：MIDI IN の byte は ACIA が 320 µs ずつ受け、ROM が送り返す。送り終えた時刻が付く
+    let mut m = Machine::new(Config {
+        boot: Some(midi_echo_rom()),
+        ..Default::default()
+    })
+    .unwrap();
+    m.run_frames(1);
+    assert!(m.take_midi_out().is_empty());
+    let t0 = m.time_us();
+    m.midi_in(1000, &[0x90, 60, 100]);
+    m.run_frames(1);
+    let out = m.take_midi_out();
+    assert_eq!(
+        out.iter().map(|b| b.byte).collect::<Vec<_>>(),
+        [0x90, 60, 100]
+    );
+    // 線に来て 320 µs で受け、送り返して 320 µs で送り終える（ROM の手間は数 µs）
+    let first = out[0].us - t0;
+    assert!((1640..1660).contains(&first), "{first}");
+    for w in out.windows(2) {
+        let d = w[1].us - w[0].us;
+        assert!((320..330).contains(&d), "{d}");
+    }
+    assert!(out.iter().all(|b| b.us <= m.time_us()));
+    assert_eq!(m.midi_out_dropped(), 0);
+}
+
+#[test]
+fn the_json_midi_method_sends_and_takes_bytes() {
+    let mut s = Session::with_machine(
+        Machine::new(Config {
+            boot: Some(midi_echo_rom()),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    // 電源投入の直後は ACIA がマスタリセットの中で、線の byte を受け取らない。ROM が設定してから送る
+    call(&mut s, "run", json!({"frames": 1}));
+    let r = call(&mut s, "midi", json!({"in": [0xB0, 1, 64]}));
+    assert_eq!(r["out"], json!([]));
+    assert_eq!(r["pending_in"], 3);
+    call(&mut s, "run", json!({"frames": 1}));
+    let r = call(&mut s, "midi", json!({"in": "C005"}));
+    let bytes: Vec<u64> = r["out"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["byte"].as_u64().unwrap())
+        .collect();
+    assert_eq!(bytes, [0xB0, 1, 64]);
+    assert!(r["now_us"].as_u64().unwrap() >= r["out"][2]["us"].as_u64().unwrap());
+    assert!(s.call("midi", &json!({"in": [256]})).is_err());
+    assert!(s.call("midi", &json!({"in": {"a": 1}})).is_err());
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.root = Some(root());

@@ -26,14 +26,17 @@ SDK = os.path.normpath(os.path.join(HERE, ".."))
 C_DIR = os.path.join(SDK, "c")
 # 使わない関数はリンクで落ちる（-ffunction-sections と --gc-sections）
 RUNTIME = ["crt0.S", "bios.S", "runtime.S", "runtime64.c", "string.c", "acrtc.c", "fabric.c", "doc.c", "adpcm.c",
-           "video.c", "video_irq.S", "dsp.c", "temporal.c"]
+           "video.c", "video_irq.S", "dsp.c", "temporal.c", "midi.c", "midiparse.c"]
 LINKER_SCRIPT = "fc85.ld"
 CART_MAX = 0x100000
 
 CFLAGS = [
     # -fno-store-merging：GCC（11.4 で確かめた）は構造体の初期化などで隣の欄の定数の書込みをまとめ、奇数番地への
     # 長語の書込みにすることがある。68000 ではアドレスエラー（ベクタ 3）になる。-mstrict-align では止まらない（DR-106）
-    "-m68000", "-fno-store-merging", "-std=gnu11", "-g",
+    # -fdisable-tree-bswap：読出しも、tree-bswap の段が隣の byte の欄の読みを奇数番地からの語の読みにまとめることが
+    # ある（byte だけの構造体を (a << 8 | b) で読むなど）。-mstrict-align でも止まらないので、この段だけを止める
+    # （GCC 11.4 で確かめた。段を止めた知らせは _clean_stderr が落とす。DR-127）
+    "-m68000", "-fno-store-merging", "-fdisable-tree-bswap", "-std=gnu11", "-g",
     "-ffreestanding", "-nostdinc",
     "-fno-pic", "-fno-pie", "-fno-stack-protector", "-fno-delete-null-pointer-checks",
     "-fno-asynchronous-unwind-tables", "-fno-unwind-tables", "-fno-common",
@@ -58,9 +61,10 @@ def _wsl_base():
 
 
 def _clean_stderr(data):
-    """WSL が出す UTF-16 の注意（NUL が混じる行）を落とす。"""
+    """WSL が出す UTF-16 の注意（NUL が混じる行）と、CFLAGS の -fdisable-tree-bswap の知らせを落とす。"""
     text = data.decode("utf-8", "replace")
-    return "\n".join(line for line in text.splitlines() if "\x00" not in line).strip()
+    return "\n".join(line for line in text.splitlines()
+                     if "\x00" not in line and "note: disable pass tree-bswap" not in line).strip()
 
 
 class Toolchain:
@@ -124,7 +128,7 @@ class Toolchain:
         for argv, out in steps:
             argv = [self.include_dir() if a is GCC_INCLUDE else a for a in argv]
             r = subprocess.run(argv, capture_output=True)
-            err = r.stderr.decode("utf-8", "replace").strip()
+            err = _clean_stderr(r.stderr)
             if r.returncode != 0:
                 raise ToolchainError(err or f"{argv[0]}：終了コード {r.returncode}")
             if err:

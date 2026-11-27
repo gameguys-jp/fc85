@@ -1,6 +1,6 @@
 # C で ROM を書く
 
-**v0.8**  
+**v0.9**  
 2026年11月27日
 
 > fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
@@ -34,7 +34,7 @@ py -m unittest                                         # 試験（エミュレ�
 
 どれを使うかは `py sdk/tools/m68kgcc.py --which` で分かる。
 
-`m68k-linux-gnu` は Linux 向けの GCC だが、組立ての道具が 68000 の命令だけ（`-m68000`）、OS なし（`-ffreestanding`）、位置固定（`-fno-pie`）、スタック保護なしで呼ぶ。隣の欄への書込みをまとめる最適化も止める（`-fno-store-merging`）。GCC 11.4 は構造体の初期化で、奇数番地への長語の書込みを出すことがあり、68000 ではアドレスエラー（ベクタ 3）になる（`-mstrict-align` では止まらない。DR-106）[V]。GCC の実行時ライブラリ（libgcc）と C の標準ライブラリはつながない。Linux 向けの libgcc は 68020 向けに組まれていて、68000 にない命令（MULU.L、DIVU.L など）を含むため（逆アセンブルで確かめた）。
+`m68k-linux-gnu` は Linux 向けの GCC だが、組立ての道具が 68000 の命令だけ（`-m68000`）、OS なし（`-ffreestanding`）、位置固定（`-fno-pie`）、スタック保護なしで呼ぶ。隣の欄への書込みをまとめる最適化も止める（`-fno-store-merging`）。GCC 11.4 は構造体の初期化で、奇数番地への長語の書込みを出すことがあり、68000 ではアドレスエラー（ベクタ 3）になる（`-mstrict-align` では止まらない。DR-106）[V]。読出しも同じで、byte の欄を `(m.a << 8 | m.b)` のように組むと、tree-bswap の段が奇数番地からの語の読出しにまとめることがあるので、その段を止める（`-fdisable-tree-bswap`。止めた知らせは道具が落とす。`-mstrict-align` では止まらない。DR-127）[V]。GCC の実行時ライブラリ（libgcc）と C の標準ライブラリはつながない。Linux 向けの libgcc は 68020 向けに組まれていて、68000 にない命令（MULU.L、DIVU.L など）を含むため（逆アセンブルで確かめた）。
 
 ## 03　メモリと起動
 
@@ -66,7 +66,7 @@ FC85_CART("MY ROM          ");
 
 ## 05　C で使えるもの
 
-- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`、`video.h`、`dsp.h`、`temporal.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
+- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`、`video.h`、`dsp.h`、`temporal.h`、`midi.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
 - **string.h**：`memcpy`、`memmove`、`memset`、`memcmp`、`strlen`、`strcmp`、`strcpy`（`sdk/c/string.c`）。両方が偶数番地なら長語ずつ写す。Main RAM と Staging RAM だけに使う（MMIO の窓には幅と回数が決まらないので使わない）。
 - **整数**：32 bit の掛け算・割り算（`sdk/c/runtime.S`）と 64 bit（`long long`）のシフト・掛け算・割り算（`sdk/c/runtime64.c`）は、GCC が呼ぶ関数を SDK が持つ。名前は GCC の実行時ライブラリと同じで、中身はここで書いた。16×16 の掛け算と 32÷16 の割り算は 68000 の命令（MULU・DIVU）になる。64 bit の割り算は 1 bit ずつ引くので遅い。
 - **0 で割る**：DIVU の 0 除算の例外（ベクタ 5）になり、BIOS が赤い画面で止まる（`bios-abi.md` §03）。
@@ -119,7 +119,7 @@ C の ROM にアセンブラを混ぜるときは、GNU as の書き方の `.S`�
 
 ## 09　周辺の関数
 
-`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（DR-106）と `video.h`・`dsp.h`（DR-109）、`temporal.h`（DR-113）（中身は `sdk/c/` の同じ名前の .c。HBlank の割込みの入口は `video_irq.S`）[P]。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
+`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（DR-106）と `video.h`・`dsp.h`（DR-109）、`temporal.h`（DR-113）、`midi.h`（DR-127）（中身は `sdk/c/` の同じ名前の .c。HBlank の割込みの入口は `video_irq.S`、MIDI のメッセージの組立ては `midiparse.c`）[P]。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
 
 ```c
 #include "acrtc.h"
@@ -284,6 +284,27 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 - DSP のプログラムは dspasm で組み、`--c-array 名前` で C の見出しにする：`py sdk/dspasm/dspasm.py prog.dsp -o prog.h --c-array prog -I sdk/include` は `static const uint16_t prog[]` と語数 `prog_WORDS` を書く。`#include "prog.h"` して `dsp_load(prog, prog_WORDS, 1)`。
 - メールボックスの約束（コマンドと応答の意味）は ROM と DSP のプログラムで決める。DSP の側は `IN x,DSP_PA_MAILBOX` で読み、`OUT x,DSP_PA_RESPONSE` で答える（`sdk/include/dsp.inc`。試験の `sdk/c/tests/echo.dsp` が小さな例）。
 
+### MIDI（`midi.h`）
+
+| 関数 | すること | 返す値 |
+|---|---|---|
+| `midi_avail()` | 受信のリングにある byte の数 | 0〜63 |
+| `midi_getc()` | 受信のリングから 1 byte | byte。なければ −1 |
+| `midi_lost()` | リングが満杯で捨てた byte の数（BIOS の `bios_midi_lost`） | 数 |
+| `midi_tx_ready()` | ACIA の TDRE（送信データのレジスタが空き） | 1 か 0 |
+| `midi_putc(b)`・`midi_send(p, n)` | TDRE を待って 1 byte ずつ書く | なし |
+| `midi_send_msg(&m)` | メッセージ（ステータスとデータ `len` byte）を送る。ランニングステータスは使わない | なし |
+| `midi_parser_init(&p)` | 組立ての様子 `midi_parser_t` を初めにする | なし |
+| `midi_parse(&p, b, &m)` | 1 byte を足し、メッセージがそろえば `midi_msg_t`（`status`、`d1`、`d2`、`len`）に入れる | 1 か 0 |
+| `midi_read(&p, &m)` | リングから読んで組み立てる | そろえば 1、リングが空になれば 0 |
+| `midi_is_note_on(&m)`・`midi_is_note_off(&m)` | ノートオン・オフか（ベロシティ 0 のノートオンはオフ） | 1 か 0 |
+
+- 受信は BIOS がする：ACIA を受信の割込みつき（$95。31.25 kbit/s、8N1）で設定し、レベル 5 の割込み（ジャンプ表のベクタ 29）で受けた byte を受信のリング（`bios_midi_buf`、63 byte まで）に入れる（`bios-abi.md` §03）。`midi_getc` はリングの tail だけを書く（BIOS の処理は head だけを書く）ので、割込みを止めずに読める。リングは 1 フレームに約 52 byte（31.25 kbit/s の上限）までしか来ないので、毎フレーム読めばあふれない。
+- 送信は割込みを使わない。ACIA は送信データのレジスタとシフトレジスタの 2 段なので、続けて 2 byte までは待たずに書け、その後は 1 byte に 320 µs かかる。`midi_send_msg` の 3 byte のメッセージは最長約 0.64 ms 戻らない。たくさん送るなら、1 フレームに送る量を決めて分ける。
+- 組立て：ランニングステータスを開き、リアルタイム（$F8〜$FF）はほかのメッセージの途中に来ても、その場で 1 つのメッセージ（`len` 0）として返し、組立ては続ける。システムコモン（$F1〜$F7）はランニングステータスを消す。SysEx（$F0〜$F7）の中身は読み飛ばす。ステータスのないデータの byte は捨てる。
+- ベクタ 29 を自分の処理に替えるなら（`fc85_set_vector`）、BIOS のリングは埋まらないので、`midi_getc`・`midi_read` は使わず、ACIA を直接読む。
+- 試験（`sdk/c/test_devices.py`）は、窓口の `midi` の手順（`emulator-api.md` §03）で、ランニングステータス・リアルタイム・SysEx を混ぜた byte を MIDI IN に置き、組み立てたメッセージと、ステータスを付け直して送り返した byte を確かめる。
+
 ## 10　組立ての出力と調べ方
 
 `build.py` は `build/` に次を書く。
@@ -300,13 +321,13 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 
 ## 11　頼ってよいこと・いけないこと
 
-- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音・HBlank で替えた色の区切り・DSP のメールボックスの往復・ACRTC の DMA の読み書き・Temporal RAM の往復を確かめる）。
+- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音・HBlank で替えた色の区切り・DSP のメールボックスの往復・ACRTC の DMA の読み書き・Temporal RAM の往復・MIDI の受信と組立てと送信を確かめる）。
 - 頼ってはいけない：GCC が出す命令の並びと時間。GCC の版や最適化（`-Os`、`-O2`）で変わる。時間が要るところは `VIDEO_LINE` か `bios_frame` で測るか、アセンブラ（`.S`）で書く（`guarantees.md` §05）。
 - 確かめた GCC：Ubuntu 22.04 の `gcc-m68k-linux-gnu`（GCC 11.4）[V]。ほかの版と `m68k-elf` はまだ試していない。
 
 ## 12　まだないもの
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
-- 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。外の入出力（音声の入力、MIDI）はまだ扱わない。
+- 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。MIDI は v0.9 で足した（DR-127）。音声の入力はまだ扱わない（機械の側が決まっていない。OI-105）。
 - C で書いた、DSP と DOC の音楽を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

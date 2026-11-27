@@ -175,6 +175,12 @@ impl Hd6850 {
         self.sent.pop_front()
     }
 
+    /// 送信中の byte を送り終えるまでのクロック数（送っていなければ 0）。送り終えた時刻を知りたい
+    /// ボードが、`clock` をそこで区切るのに使う。
+    pub fn tx_left(&self) -> u32 {
+        self.tx_left
+    }
+
     /// 送受信のクロックを `n` 周期進める。
     pub fn clock(&mut self, mut n: u32) {
         while n > 0 {
