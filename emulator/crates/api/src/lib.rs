@@ -713,8 +713,7 @@ impl Machine {
             log.doc_rule_warnings - log0.doc_rule_warnings,
         );
         let acrtc1 = self.console.sys.ports.acrtc.acrtc.error_counts();
-        let acrtc_rule =
-            acrtc1.0.saturating_sub(acrtc0.0) + acrtc1.1.saturating_sub(acrtc0.1);
+        let acrtc_rule = acrtc1.0.saturating_sub(acrtc0.0) + acrtc1.1.saturating_sub(acrtc0.1);
         let (_, _, rgb) = self.screen(Area::Active);
         let cpu = &self.console.cpu;
         RunReport {
