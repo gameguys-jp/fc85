@@ -10,8 +10,10 @@
 // 画面は、渡された OffscreenCanvas があればここで描き、なければ RGBA を主のスレッドへ送る。
 //
 // 受ける知らせ（type）：init（wasm の URL、canvas）、audio（AudioWorklet への MessagePort）、boot（ROM、
-// DOC の子基板）、run（on）、input（pad）、reset、save、load（state）、bench（frames）。
-// 送る知らせ：ready、frame（canvas がないとき）、stat（1 秒ごと）、saved、loaded、bench、error。
+// DOC の子基板）、run（on）、input（pad）、reset、save、load（state）、bench（frames）、bend（cmd。仕様書 §11
+// のベンド点の命令を窓口の JSON の手順の bend で。DR-124）。
+// 送る知らせ：ready、frame（canvas がないとき）、stat（1 秒ごと）、saved、loaded、bench、bent（summary、mode）、
+// error。
 // ライセンスは MIT（リポジトリの LICENSE）。
 import { load, AREA, FLAGS } from "./fc85emu.js";
 
@@ -248,6 +250,13 @@ self.onmessage = async (e) => {
         const ms = bench(d.frames);
         post({ type: "bench", ms, frames: d.frames });
         setRunning(was);
+        break;
+      }
+      case "bend": {
+        if (!m) throw new Error("仮想機がない");
+        const r = m.call("bend", { cmd: d.cmd });
+        if (r.error) throw new Error(r.error.message ?? JSON.stringify(r.error));
+        post({ type: "bent", summary: r.result.summary, mode: r.result.mode });
         break;
       }
     }

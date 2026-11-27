@@ -1231,3 +1231,13 @@
 | 理由 | DR-076 (4) で、DOC の割込みを使うアプリはベクタ 28 の項目を書き換えて自分で受けると決めていて、その処理は要求を取るために 0xE0 を読むほかない。DR-030 のコールバックは BIOS にない。BIOS の呼出しを足すと BIOS の版 3 になり、ROM の約束（bios-abi.md）が増えるわりに、手順は 2 回の MOVE.B と待ちだけで済む。エミュレータの動き（0xE2 は前の結果を返して変換を始める。chips の es5503.rs）は変えない |
 | 却下した案 | 案 (b) BIOS に A/D 変換の呼出しを足す：版 3 が要り、A/D の入力が決まっていない（OI-105）うちに呼出しの形を決めることになる |
 | 影響 | docs/spec/hardware.md §05、docs/spec/registers.toml（と生成物の registers.md・fc85.inc・fc85.h・regmap.rs）、sdk/docs/guarantees.md §03、sdk/docs/bios-abi.md §03、OI-097、OI-105 |
+
+## DR-124　Web の試しの頁にベンド点の命令の欄を置く
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。WebAssembly の試しの頁（emulator/embed/index.html）に「ベンド」の欄を置き、仕様書 §11 のベンド点の命令（ホストの `--bend` と同じ書き方）を、動かしている仮想機に送る。Worker（worker.js）は窓口の JSON の手順の `bend` を C の ABI の `fc85_call` で呼び、要約（`summary`）を頁に出す。誤った命令は「できない」と出して仮想機は続ける。読み込み直す（始める、サンプルを選び直す）と新しい仮想機になり通常モードに戻る。エミュレータと C の ABI は変えない |
+| 理由 | 本機の独自の映像・音響の表現の多くは Bend モードとベンド点にある（DR-065）。Web の頁はサンプルを選んで動かせる（DR-115）が、SAMPLE 5 などのベンド点の試験信号を Web で崩して聞く・見る手段がなかった。JSON の手順にはもとから `bend` があり、WebAssembly でも `fc85_call` で呼べるので、頁と Worker の数十行で足りる。確かめたこと [V]：Chrome で SAMPLE 5 を動かし、`mode bend` と `clock doc 4000000` を送って要約が「Bend モード、DOC 4000000 Hz」になり、誤った命令で「できない」と出て実時間の 100% のまま進んだ。test_embed.py が C の ABI で同じ手順（`bend` と、誤った命令の error と、`info` の `mode`）を試す |
+| 却下した案 | 主なベンド点ごとに釦や摘みを置く：ベンド点の命令はまだ増えていて（仕様書 §11）、頁の作りを命令に合わせ続けることになる。命令の欄なら、ホストの `--bend` と README の例をそのまま使える |
+| 影響 | emulator/embed（index.html、worker.js、test_embed.py）、sdk/docs/emulator-api.md §08 |

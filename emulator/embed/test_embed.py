@@ -133,8 +133,8 @@ class Native:
         self.lib.fc85_free_bytes(p, n.value)
         return data
 
-    def call(self, method):
-        req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method}).encode()
+    def call(self, method, params=None):
+        req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
         p = self.check(self.lib.fc85_call(self.m, req), "fc85_call")
         s = ctypes.string_at(p).decode("utf-8")
         self.lib.fc85_free_string(p)
@@ -186,6 +186,11 @@ class EmbedTest(unittest.TestCase):
         n.check(n.lib.fc85_peek(n.m, 0, 0x100800, buf, 2), "fc85_peek")
         out["peek"] = list(buf.raw)
         out["pc"] = n.call("regs")["result"]["pc"]
+        # 頁の「ベンド」の欄（worker.js、DR-124）と同じ手順：bend で Bend モードに入り、誤った命令は error
+        r = n.call("bend", {"cmd": "mode bend"})
+        self.assertEqual(r["result"]["mode"], "bend", r)
+        self.assertIn("error", n.call("bend", {"cmd": "no-such-point 1"}))
+        self.assertEqual(n.call("info")["result"]["mode"], "bend")
         self.assertEqual(n.lib.fc85_load_state(n.m, b"\x01\x02\x03", 3), -1)
         self.assertIn("印", n.lib.fc85_last_error().decode("utf-8"))
         n.lib.fc85_free(n.m)
