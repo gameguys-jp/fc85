@@ -303,6 +303,7 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 - 送信は割込みを使わない。ACIA は送信データのレジスタとシフトレジスタの 2 段なので、続けて 2 byte までは待たずに書け、その後は 1 byte に 320 µs かかる。`midi_send_msg` の 3 byte のメッセージは最長約 0.64 ms 戻らない。たくさん送るなら、1 フレームに送る量を決めて分ける。
 - 組立て：ランニングステータスを開き、リアルタイム（$F8〜$FF）はほかのメッセージの途中に来ても、その場で 1 つのメッセージ（`len` 0）として返し、組立ては続ける。システムコモン（$F1〜$F7）はランニングステータスを消す。SysEx（$F0〜$F7）の中身は読み飛ばす。ステータスのないデータの byte は捨てる。
 - ベクタ 29 を自分の処理に替えるなら（`fc85_set_vector`）、BIOS のリングは埋まらないので、`midi_getc`・`midi_read` は使わず、ACIA を直接読む。
+- C で書いた手本は SAMPLE 9（`sdk/samples/midi`。MIDI IN のノートを DOC の 8 声で鳴らし、THRU とパッドの音を MIDI OUT に送る。DR-128）。
 - 試験（`sdk/c/test_devices.py`）は、窓口の `midi` の手順（`emulator-api.md` §03）で、ランニングステータス・リアルタイム・SysEx を混ぜた byte を MIDI IN に置き、組み立てたメッセージと、ステータスを付け直して送り返した byte を確かめる。
 
 ## 10　組立ての出力と調べ方
@@ -329,5 +330,5 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
 - 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。MIDI は v0.9 で足した（DR-127）。音声の入力はまだ扱わない（機械の側が決まっていない。OI-105）。
-- C で書いた、DSP と DOC の音楽を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を足した。
+- C で書いた、DSP の音を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を、v0.7 で ACRTC の DMA と Temporal RAM の残像の SAMPLE 8（`sdk/samples/echo`、DR-114）を、v0.9 で MIDI で弾く DOC のシンセの SAMPLE 9（`sdk/samples/midi`、DR-128）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。
