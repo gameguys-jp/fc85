@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.13**  
+**v0.14**  
 2026年11月27日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)、[DR-085](../decisions.md)、[OI-082](../open-issues.md)、[OI-083](../open-issues.md)、[OI-084](../open-issues.md)、[DR-088](../decisions.md)、[DR-089](../decisions.md)、[DR-090](../decisions.md)、[OI-087](../open-issues.md)、[OI-088](../open-issues.md)、[OI-089](../open-issues.md)、[DR-091](../decisions.md)、[OI-090](../open-issues.md)、[DR-098](../decisions.md)、[OI-092](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)、[DR-085](../decisions.md)、[OI-082](../open-issues.md)、[OI-083](../open-issues.md)、[OI-084](../open-issues.md)、[DR-088](../decisions.md)、[DR-089](../decisions.md)、[DR-090](../decisions.md)、[OI-087](../open-issues.md)、[OI-088](../open-issues.md)、[OI-089](../open-issues.md)、[DR-091](../decisions.md)、[OI-090](../open-issues.md)、[DR-098](../decisions.md)、[OI-092](../open-issues.md)、[DR-099](../decisions.md)、[OI-093](../open-issues.md)
 
 ## 01　前提と範囲
 
@@ -744,6 +744,7 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 | 8、10〜15 | U57（74LS245）で拡張の端子とつなぐ。番地は PA、準備は XRDY、ある・なしは /PRES | 映像入力基板、拡張 |
 
 - 67401 を 4 個並べた 16 bit の FIFO は、IR と OR を 4 個の AND にする（U53–U55、74LS21。[review-digital.md](../parts/review-digital.md) 付録 A.1）。port 5 の 2 個の AND はつなぎのゲートで作る。
+- port 3・4 の FIFO（67401×8）と、U51–U52、U53–U54（port 3・4 の AND。U55 は本体 DAC の FIFO）は、DSP 子基板に載せる（DR-099、[board.md](board.md) §03）。コネクタを渡るのは、FD の 16 本、port 3 の SI と IR、port 4 の SO と OR、U51–U52 の /OE、port 3・4 の PORT_RESET。コネクタとソケットの負荷と配線の延びが、67401 の SI・SO の幅とデータの準備（11 の 2）に足りるかは OI-093 [V]。
 
 ## 09　部品表
 
@@ -813,8 +814,8 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 | ポートの側 | U48–U49 | 74LS377 | 2 | port 2：DOC への番地のラッチ（16 MHz、/EN ＝ LDQ。DR-050、DR-089、DR-091） |
 | ポートの側 | U50 | 74LS377 | 1 | port 2：書込みのデータのラッチ（LCLK、/EN ＝ P2R。DR-050、DR-089） |
 | ポートの側 | U58 | 74LS374 | 1 | port 2：読出しの値のラッチ（DR-050） |
-| ポートの側 | U51–U52 | 74LS244 | 2 | port 4：FIFO の出力をバスへ（67401 は出力を切れない） |
-| ポートの側 | U53–U55 | 74LS21 | 3 | 67401 を 4 個並べた FIFO の IR・OR の AND |
+| ポートの側 | U51–U52 | 74LS244 | 2 | port 4：FIFO の出力をバスへ（67401 は出力を切れない）。DSP 子基板に載せる（DR-099） |
+| ポートの側 | U53–U55 | 74LS21 | 3 | 67401 を 4 個並べた FIFO の IR・OR の AND（U53 は port 3、U54 は port 4、U55 は本体 DAC の FIFO）。U53–U54 は DSP 子基板に載せる（DR-099） |
 | ポートの側 | U56 | 74LS245 | 1 | port 6・7：Temporal RAM とのデータ |
 | ポートの側 | U57 | 74LS245 | 1 | port 8、10〜15：拡張の端子とのデータ |
 | **合計** | | | **127** | PAL 35（24 ピン 22、20 ピン 13）、TTL と PROM 92。ほかに 67401×14 |
@@ -835,6 +836,7 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 - DR-088・DR-089 で式を書き終え、124 個になった。PAL が 3 個（DPA、OPA、OPB）、TTL が 1 個（SYN1 の 74ALS74）増え、HDEC0 は 20 ピンから 24 ピンへ、P2A は 16R4A-2 から 16R6A-2 へ替わった。FLAG の FF と SOK・CD のゲートは PAL に入り、LG・F4・RDY2 のゲートが加わって、つなぎ（U62–U63）の数は変わらない [P]。時間の予算（03）の直し方によっては、さらに 2〜3 個増える（OI-087）[V]。
 - DR-091 で時間の予算（03）を閉じ、129 個になった。TTL が 5 個増えた：A バスの 0 の検出（U65–U66 の 74S02、U67 の 74S30）、A ファイルの語の bit 0 の選択（U64、74S157）、打切りと /AWE の OR（U68、74S32）。PAL の数は変わらず、AFC0 は 20 ピンから 24 ピン（PAL20R6A）へ、AFC1 は PAL16R8A、P1A・P2A・HACK は A-2 品から A 品へ替わった。SL0–SL1 は 74ALS534 にした（数は変わらない）。P2A が q1 の縁で見る OP の中身は、P1A・P2A の空いた登録の出力に写した [P]。OI-087 の見積り（2〜3 個）より多いのは、AFC0 の中で語の bit 0 を組み合わせると登録の帰還で遅れる（74S157 を足した）のと、打切りと /AWE に 16 MHz の相のゲートが要ったため。
 - DR-098 で CPU の側の要求を同期化し、127 個になった。要求の FF の 4 個（U37、U59 の 74LS74、U60–U61 の 74LS175）を、チャネルごとの REQ0–REQ1（PAL16R6A-2）の 2 個に替え、HACK を PAL16R4A から PAL16R8A にした。要求の登録は 1 チャネルに 5 個（STRQ、STPQ、WDQ、WEQ、WMQ）で、2 チャネルの 10 個は PAL 1 個（登録は最大 8 個）に入らないので、チャネルごとに 1 個にした。入力は CAP、CTRL・STATUS の解読、ID の 4 本、BUSY の 8 本 [P]。
+- DR-099 で、数は変えず、port 3・4 の FIFO（67401×8）と U51–U54 を DSP 子基板に載せた（[board.md](board.md) §03）。B に残るのは 123 個と 67401×6。
 - 74LS534（U7–U8）は、1985年以前の TI・Motorola・National の資料に見つからない（74ALS534 はある。[PAL.md](../parts/PAL.md) の付記）。74LS374 と反転の組か 74ALS534 にするかは [V]（OI-050）。SL0–SL1 は DR-091 で 74ALS534 にした（tSU 10 が要る）。
 - 数の大半は、レジスタ（74LS374・173・174 が 30 個）、緩衝器（74LS240・244・245 が 19 個）、A ファイルの経路（20 個）で、PAL にまとめても減らない。PAL をさらに増やして TTL を減らす手当て（board.md §09 の ①）の余地は小さい。
 - 部品の出典：PAL20L8A・20R8A・20R6A・20R4A は MMI の 1985年のデータブック p.5-31 [D MMI85]、PAL16L8・16R4・16R8 の A 品と半電力の A-2 品（電源電流 最大 90 mA）は 1983年の PAL ハンドブック [D MMIPAL83]、63S281A（256×8、3 ステート、20 ピン）は同じデータブック p.3-17 [D MMI85]。74S189、74LS670、74LS534、74S283 は 1985年に日立の品があったかを確かめていない [V]（OI-050）。DR-091 で足した 74S02・74S30・74S32・74S157 は TI の 1985年の本 [D TITTL85V2]、74ALS534 は TI の 1984年の本 [D TITTL84V1]（PAL.md の付記）。74ALS534 が日立の HD74ALS（1984年の早見表で 16 品種。早見表に品種の一覧はない）に入るかは確かめられない [V]。
@@ -860,6 +862,8 @@ DR-088・DR-089 で 4 個増えた（124 個。24 ピンの PAL 2 個、20 ピ�
 DR-091 で 5 個増えた（129 個。74S157・74S02×2・74S30・74S32。AFC0 は 20 ピンから 24 ピンへ）。Data Fabric は中央で約 34 cm²（4 層の係数 0.85 で約 29 cm²）増える。B 基板は、この節の数え方で約 1,180 cm²（枠の約 109%）、board.md の数え方で約 1,208 cm²（枠の約 112%）になり、中央の見積りで約 130 cm² あふれる。2 枚の合計は約 2,190 cm²（枠の約 101%）で、約 30 cm² あふれる。+5 V の電流は、TTL の 5 個で典型 約 125 mA・最大 約 210 mA（74S157 50・78、74S02 22・37、74S30 4・8、74S32 28・50 mA。TITTL85V2 の ICCH と ICCL の平均）、A-2 品から A 品への 3 個と AFC0 で最大 約 300 mA（典型 約 210 mA）、Data Fabric は 67401 を含めて典型 約 8.9 A、最大 約 13.5 A になる。74ALS534 は 74LS534 より少し減るが、数えていない [V]。手当ては board.md §09 と OI-082 [P]。
 
 DR-098 で 2 個減った（127 個。20 ピンの PAL 2 個を足し、74LS74×2・74LS175×2 を除いた。HACK は 16R4A から 16R8A で、ピンの数と電流は同じ）。Data Fabric は中央で約 13 cm²（4 層の係数 0.85 で約 11 cm²）減る。B 基板は board.md の数え方で約 1,197 cm²（枠の約 111%）、2 枚の合計は約 2,178 cm²（枠の約 101%）。+5 V の電流は、REQ0–REQ1（A-2 品、1 個 最大 90 mA、典型 約 63 mA）で増え、74LS74（1 個 典型 4、最大 8 mA）と 74LS175（典型 11、最大 18 mA）で減り、典型 約 +0.1 A、最大 約 +0.13 A。Data Fabric は 67401 を含めて典型 約 9.0 A、最大 約 13.6 A（PAL 35 個で典型 約 4.4 A、最大 約 6.4 A）。手当ては board.md §09 と OI-082 [P]。
+
+DR-099 で、DSP のブロック（board.md §02 の DSP の行、両面で約 170 cm²）と、port 3・4 の FIFO（67401×8）、U51–U54 を DSP 子基板（約 180×140 mm、4 層）に載せた。B から両面で約 249 cm²（4 層の係数 0.85 で約 212 cm²）が移り、子基板のコネクタと取付けの穴で約 20 cm² 増える。B 基板は board.md の数え方で約 1,006 cm²（枠の約 93%）、係数 0.8〜0.9 で約 948〜1,064 cm²（約 88〜98%）、2 枚の合計は約 1,987 cm²（枠の約 92%）になる。Data Fabric の電流は変わらない。67401×8 の典型 約 0.8 A、最大 約 1.6 A は、B からコネクタで DSP 子基板へ送る。決定は DR-099、残る確かめは OI-093 [P]。
 
 board.md v0.4 の見積り（約 840 cm²）より約 16 cm² 小さい。B 基板（4 層、外形 400×270 mm＝1,080 cm²）は次のとおり。B のほかのブロック（Temporal RAM、DSP、ADPCM・本体 DAC・音声クロック）は board.md §02 の値で、両面基板で約 425 cm²。
 
