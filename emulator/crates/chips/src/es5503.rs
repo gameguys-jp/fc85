@@ -486,6 +486,18 @@ impl Es5503 {
     pub fn volume(&self, n: usize) -> u8 {
         self.osc[n].vol
     }
+    /// 周波数のレジスタ（0x00＋n と 0x20＋n の 16 bit）。
+    pub fn freq(&self, n: usize) -> u16 {
+        self.osc[n].freq
+    }
+    /// 波形の表の頭のレジスタ（0x80＋n）。
+    pub fn wave_ptr(&self, n: usize) -> u8 {
+        self.osc[n].ptr
+    }
+    /// 表の大きさのレジスタ（0xC0＋n：BS、T、R）。
+    pub fn wave_size(&self, n: usize) -> u8 {
+        self.osc[n].size
+    }
     /// 次のリフレッシュの行。
     pub fn refresh_row(&self) -> u8 {
         self.refresh_row

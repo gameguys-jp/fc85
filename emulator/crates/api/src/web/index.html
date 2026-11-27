@@ -44,6 +44,14 @@
   pre { margin: 0; font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; }
   #msg { color: var(--warn); min-height: 1.5em; }
   .help { color: var(--muted); font-size: 12px; }
+  .osc { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+  .osc i { display: block; font: 10px/1 ui-monospace, Consolas, monospace; font-style: normal;
+    text-align: center; padding: 4px 0; border-radius: 3px; border: 1px solid var(--line);
+    color: var(--muted); position: relative; overflow: hidden; }
+  .osc i.off { opacity: .35; }
+  .osc i b { position: absolute; left: 0; bottom: 0; width: 100%; background: var(--accent);
+    opacity: .45; height: 0; }
+  .osc i.on { color: var(--ink); border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -92,6 +100,10 @@
         <span>ACRTC</span><span><div class="bar"><i id="b-acrtc"></i></div></span>
         <span>Fabric</span><span><div class="bar"><i id="b-fabric"></i></div></span>
       </div>
+    </section>
+    <section>
+      <h2>DOC のオシレータ（枠は鳴っている、帯は音量）</h2>
+      <div class="osc" id="osc"></div>
     </section>
     <section>
       <h2>ベンド点</h2>
@@ -164,6 +176,27 @@ function play(b64) {
 
 function bar(id, v) { $(id).style.width = Math.round(Math.max(0, Math.min(1, v)) * 100) + "%"; }
 
+// 32 のオシレータのます。有効でないもの（N 以上）は薄く
+const oscCells = [];
+for (let i = 0; i < 32; i++) {
+  const c = document.createElement("i");
+  c.textContent = i;
+  c.appendChild(document.createElement("b"));
+  $("osc").appendChild(c);
+  oscCells.push(c);
+}
+function showDoc(doc) {
+  const list = doc ? doc.oscillators : [];
+  oscCells.forEach((c, i) => {
+    const o = list[i];
+    c.className = !o ? "off" : o.on ? "on" : "";
+    c.lastChild.style.height = o && o.on ? Math.round(o.vol / 255 * 100) + "%" : "0";
+    c.title = o ? "osc " + i + (o.on ? " 鳴っている" : " 止まっている") + "\n周波数 " + hex(o.freq, 4) +
+      "  音量 " + o.vol + "\n表の頭 " + hex(o.wave_ptr, 2) + "  大きさ " + hex(o.wave_size, 2) +
+      "  制御 " + hex(o.control, 2) : "osc " + i + "（有効でない）";
+  });
+}
+
 function show(rep, mode) {
   $("frame").textContent = rep.frame;
   $("pc").textContent = hex(rep.pc, 6) + (rep.pc_label ? "  " + rep.pc_label : "");
@@ -195,7 +228,7 @@ async function frame(n) {
   try {
     const r = await fetch("/frame", { method: "POST", body: JSON.stringify({ pad: st.pad, frames: n }) }).then((r) => r.json());
     if (r.error) throw new Error(r.error);
-    draw(r.png); play(r.pcm); show(r.report, r.mode);
+    draw(r.png); play(r.pcm); show(r.report, r.mode); showDoc(r.doc);
     st.fpsN += r.report.frames_run;
     st.sinceRegs += n;
     if (st.sinceRegs >= 20 || !st.running) { st.sinceRegs = 0; regs(); }

@@ -21,6 +21,7 @@ use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console, MAIN_RAM_BYTES};
 use fc85_board::fabric::{CHANNELS, Phase};
 use fc85_board::tv::Tv;
 use fc85_board::video::{RASTER_H, RASTER_W};
+use fc85_chips::es5503::OSCILLATORS;
 use fc85_chips::hd68000::{Bus, BusReply, RunState, Size};
 use fc85_core::time::PERIOD_21M;
 use serde::Serialize;
@@ -159,6 +160,48 @@ pub struct RunOptions {
     pub run_when_halted: bool,
     /// 待ちのループの番地の範囲 [from, to)。ここの命令の時間を CPU の空きとして数える（STOP の間も空き）。
     pub idle_pc: Vec<(u32, u32)>,
+    /// DOC のオシレータが鳴り始め・止まったときを記録する（`RunReport::voices`）。
+    pub voices: bool,
+}
+
+/// DOC の今の様子（`Machine::doc`）。
+#[derive(Clone, Debug, Serialize)]
+pub struct DocState {
+    /// 有効なオシレータの数 N（0xE1 のレジスタから）。
+    pub enabled: u8,
+    pub oscillators: Vec<Oscillator>,
+}
+
+/// 1 つのオシレータのレジスタ（読んでも DOC は変わらない）。
+#[derive(Clone, Debug, Serialize)]
+pub struct Oscillator {
+    /// 制御のレジスタの停止ビットが 0。
+    pub on: bool,
+    pub freq: u16,
+    pub vol: u8,
+    pub wave_ptr: u8,
+    pub wave_size: u8,
+    pub control: u8,
+}
+
+/// DOC のオシレータの発音の記録の上限（1 回の `run`）。
+pub const MAX_VOICE_EVENTS: usize = 2000;
+
+/// DOC のオシレータが鳴り始めたか止まった出来事。基板を追いつかせる区切り（64 クロック＝8 µs）ごとに、
+/// 有効なオシレータ（0〜N−1）の制御のレジスタの停止ビットを見る [P]。
+#[derive(Clone, Debug, Serialize)]
+pub struct VoiceEvent {
+    pub frame: u64,
+    pub cpu_clock: u64,
+    pub osc: u8,
+    /// true は鳴り始め（停止ビットが 0 になった）、false は止まった。
+    pub on: bool,
+    /// 周波数（16 bit）、音量、波形の表の頭、表の大きさ（BS・T・R）、制御（モード、IE、チャネル）のレジスタ。
+    pub freq: u16,
+    pub vol: u8,
+    pub wave_ptr: u8,
+    pub wave_size: u8,
+    pub control: u8,
 }
 
 /// 1 フレームの予算（割合 0〜1）。CPU は STOP と `idle_pc` の間を空きとして数える。
@@ -252,6 +295,15 @@ pub struct RunReport {
     pub screen_hash: String,
     /// テレビの模型の状態（同期と色が取れているか）。
     pub tv: String,
+    /// DOC の発音の記録（`RunOptions::voices`。上限 `MAX_VOICE_EVENTS`）と、上限で捨てた数。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voices: Option<Vec<VoiceEvent>>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub voices_dropped: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -281,6 +333,10 @@ pub struct Machine {
     audio: Vec<(i16, i16)>,
     /// ブレークポイントで止まった番地。次の `run` の最初の 1 命令は止めない。
     resume_pc: Option<u32>,
+    /// 発音の記録：前に見たときに鳴っていたオシレータ（bit n）、記録、捨てた数。
+    voice_on: u32,
+    voice_log: Vec<VoiceEvent>,
+    voice_dropped: u64,
 }
 
 fn state_name(s: RunState) -> &'static str {
@@ -352,7 +408,77 @@ impl Machine {
             pic: Vec::new(),
             audio: Vec::new(),
             resume_pc: None,
+            voice_on: 0,
+            voice_log: Vec::new(),
+            voice_dropped: 0,
         })
+    }
+
+    /// 鳴っている DOC のオシレータ（bit n）。子基板がなければ 0。
+    fn voices_now(&self) -> u32 {
+        let sys = &self.console.sys;
+        if !sys.ports.doc {
+            return 0;
+        }
+        let doc = &sys.ports.doc_board.doc;
+        let n = usize::from(doc.enabled()).min(OSCILLATORS);
+        (0..n)
+            .filter(|&i| doc.control(i) & 1 == 0)
+            .fold(0, |m, i| m | 1 << i)
+    }
+
+    /// DOC の今の様子：有効なオシレータの数と、各オシレータのレジスタ。子基板がなければ None。
+    pub fn doc(&self) -> Option<DocState> {
+        let sys = &self.console.sys;
+        if !sys.ports.doc {
+            return None;
+        }
+        let doc = &sys.ports.doc_board.doc;
+        let n = usize::from(doc.enabled()).min(OSCILLATORS);
+        Some(DocState {
+            enabled: n as u8,
+            oscillators: (0..n)
+                .map(|i| Oscillator {
+                    on: doc.control(i) & 1 == 0,
+                    freq: doc.freq(i),
+                    vol: doc.volume(i),
+                    wave_ptr: doc.wave_ptr(i),
+                    wave_size: doc.wave_size(i),
+                    control: doc.control(i),
+                })
+                .collect(),
+        })
+    }
+
+    /// 鳴り始め・止まったオシレータを記録する。
+    fn watch_voices(&mut self) {
+        let now = self.voices_now();
+        let changed = now ^ self.voice_on;
+        if changed == 0 {
+            return;
+        }
+        let doc = &self.console.sys.ports.doc_board.doc;
+        for i in 0..OSCILLATORS {
+            if changed & (1 << i) == 0 {
+                continue;
+            }
+            if self.voice_log.len() >= MAX_VOICE_EVENTS {
+                self.voice_dropped += 1;
+                continue;
+            }
+            self.voice_log.push(VoiceEvent {
+                frame: self.console.sys.ports.acrtc.video.frames,
+                cpu_clock: self.console.cpu.clock,
+                osc: i as u8,
+                on: now & (1 << i) != 0,
+                freq: doc.freq(i),
+                vol: doc.volume(i),
+                wave_ptr: doc.wave_ptr(i),
+                wave_size: doc.wave_size(i),
+                control: doc.control(i),
+            });
+        }
+        self.voice_on = now;
     }
 
     /// 同じ ROM と設定で電源を入れ直す（ラベルは残す）。
@@ -403,6 +529,11 @@ impl Machine {
     /// フレームを進める。止める条件に当たれば途中で返す。
     pub fn run(&mut self, o: &RunOptions) -> RunReport {
         let log0 = self.console.sys.log.clone();
+        if o.voices {
+            self.voice_on = self.voices_now();
+            self.voice_log.clear();
+            self.voice_dropped = 0;
+        }
         let mut acc = AudioAcc::default();
         let mut budget = Budget::default();
         let (mut total, mut idle, mut acrtc, mut fabric) = (0u64, 0u64, 0u64, 0u64);
@@ -472,6 +603,8 @@ impl Machine {
             audio,
             screen_hash: format!("{:016x}", encode::fnv1a(&rgb)),
             tv: self.tv.status(&self.console.sys).summary(),
+            voices: o.voices.then(|| std::mem::take(&mut self.voice_log)),
+            voices_dropped: self.voice_dropped,
         }
     }
 
@@ -485,7 +618,11 @@ impl Machine {
         let p21 = c.sys.ports.acrtc.video_period();
         let slow = p21 == 0 || p21 > 2 * PERIOD_21M;
         let errors = c.sys.log.bus_errors;
-        while c.sys.ports.acrtc.video.frames == frame {
+        loop {
+            let c = &mut self.console;
+            if c.sys.ports.acrtc.video.frames != frame {
+                break;
+            }
             let limit = if c.sys.ports.acrtc.acrtc.display_running() && !slow {
                 start + 2 * FRAME
             } else {
@@ -528,8 +665,11 @@ impl Machine {
                 }
             }
             c.sys.sync(chunk);
+            if o.voices {
+                self.watch_voices();
+            }
         }
-        f.total = c.cpu.clock - start;
+        f.total = self.console.cpu.clock - start;
         (None, f)
     }
 

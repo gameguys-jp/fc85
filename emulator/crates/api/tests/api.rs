@@ -65,6 +65,41 @@ fn run_ends_in_the_same_state_as_the_host_frame_loop() {
 }
 
 #[test]
+fn the_voice_log_sees_oscillators_start_and_stop_without_changing_the_run() {
+    let Some(mut cfg) = config() else { return };
+    let Some(cart) = rom("sdk/samples/patches/build/patches.bin") else {
+        eprintln!("sdk/samples/patches/build/patches.bin がないので飛ばす");
+        return;
+    };
+    cfg.cart = Some(cart);
+    let mut a = Machine::new(cfg.clone()).unwrap();
+    let mut b = Machine::new(cfg).unwrap();
+    // 100 フレーム目に右（次の音色）を押すと、鳴っている音が止まる
+    let o = RunOptions {
+        frames: 120,
+        input: vec![(100, 0x08), (110, 0)],
+        ..Default::default()
+    };
+    let ra = a.run(&RunOptions {
+        voices: true,
+        ..o.clone()
+    });
+    let rb = b.run(&o);
+    assert!(rb.voices.is_none());
+    assert!(a.console == b.console, "記録を取ると状態が変わる");
+    let v = ra.voices.unwrap();
+    // 最初の音（0 と 1 のオシレータの組）が鳴り始め、右を押したときに止まる
+    let on: Vec<_> = v.iter().filter(|e| e.on).map(|e| e.osc).collect();
+    let off: Vec<_> = v.iter().filter(|e| !e.on).map(|e| e.osc).collect();
+    assert_eq!((&on[..2], &off[..2]), (&[0, 1][..], &[0, 1][..]));
+    let first = &v[0];
+    assert!(first.freq > 0 && first.vol > 0 && first.control & 1 == 0);
+    let stop = v.iter().find(|e| !e.on).unwrap();
+    assert!(stop.control & 1 == 1 && stop.frame > first.frame);
+    assert!(v.windows(2).all(|w| w[0].cpu_clock <= w[1].cpu_clock));
+}
+
+#[test]
 fn a_breakpoint_stops_before_the_instruction_and_run_resumes_past_it() {
     let Some(cfg) = config() else { return };
     let mut probe = Machine::new(cfg.clone()).unwrap();

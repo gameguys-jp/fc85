@@ -157,6 +157,7 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value, String> {
         "png": encode::base64(&png),
         "pcm": encode::base64(&raw),
         "mode": m.mode(),
+        "doc": m.doc(),
     }))
 }
 

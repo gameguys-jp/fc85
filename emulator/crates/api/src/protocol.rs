@@ -186,7 +186,8 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
                 "break": {"type": "array", "items": addr, "description": "この番地の命令の前で止める"},
                 "idle": {"type": "array", "description": "待ちのループ。番地か [from, to)。ここの時間を CPU の空きとして数える"},
                 "stop_on_bus_error": {"type": "boolean", "default": false},
-                "run_when_halted": {"type": "boolean", "default": false}
+                "run_when_halted": {"type": "boolean", "default": false},
+                "voices": {"type": "boolean", "default": false, "description": "DOC のオシレータが鳴り始め・止まったときを記録して voices で返す（8 µs ごとに停止ビットを見る。最大 2000 件）"}
             }}),
         ),
         (
@@ -197,6 +198,11 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
         (
             "regs",
             "68000 のレジスタ、状態、クロック、フレーム",
+            json!({"type": "object", "properties": {}}),
+        ),
+        (
+            "doc",
+            "DOC（ES5503）の今の様子：有効なオシレータの数と、各オシレータの鳴っているか・周波数・音量・波形の表の頭と大きさ・制御のレジスタ。子基板がなければ null。読んでも DOC は変わらない",
             json!({"type": "object", "properties": {}}),
         ),
         (
@@ -416,6 +422,7 @@ impl Session {
         }
         o.stop_on_bus_error = opt_bool(p, "stop_on_bus_error")?.unwrap_or(false);
         o.run_when_halted = opt_bool(p, "run_when_halted")?.unwrap_or(false);
+        o.voices = opt_bool(p, "voices")?.unwrap_or(false);
         let r = self.machine()?.run(&o);
         serde_json::to_value(r).map_err(|e| e.to_string())
     }
@@ -528,6 +535,7 @@ impl Session {
                 serde_json::to_value(self.machine()?.step(n)).map_err(|e| e.to_string())?
             }
             "regs" => serde_json::to_value(self.machine()?.regs()).map_err(|e| e.to_string())?,
+            "doc" => serde_json::to_value(self.machine()?.doc()).map_err(|e| e.to_string())?,
             "screenshot" => return self.screenshot(p),
             "audio" => self.audio(p)?,
             "peek" => self.peek(p)?,

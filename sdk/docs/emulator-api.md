@@ -40,9 +40,10 @@
 | `methods` | なし | 手順の一覧と、引数の JSON Schema |
 | `load` | `cart`、`boot`、`char`（道）、`listing`（足して読むリスト）、`doc`（子基板。既定 true）、`bends`（ベンド点の命令の列）、`audio_tap`（`line`・`digital`） | 電源を入れ直し、`info` と、読んだリスト。カートリッジと Boot ROM の横の `.lst` は自動で読む |
 | `reset` | なし | 同じ ROM と設定で電源を入れ直す（ラベルは残す） |
-| `run` | `frames`（既定 1、最大 36,000）、`pad`（PORT_A を最初から）、`input`（台本 `[[フレーム, 値], …]`。フレームはこの実行の何フレーム目か。次の行まで保つ）、`port_b`、`break`（番地の列。その命令の前で止める）、`idle`（待ちのループ。番地か `[from, to)` の列）、`stop_on_bus_error`、`run_when_halted` | §04 |
+| `run` | `frames`（既定 1、最大 36,000）、`pad`（PORT_A を最初から）、`input`（台本 `[[フレーム, 値], …]`。フレームはこの実行の何フレーム目か。次の行まで保つ）、`port_b`、`break`（番地の列。その命令の前で止める）、`idle`（待ちのループ。番地か `[from, to)` の列）、`stop_on_bus_error`、`run_when_halted`、`voices`（DOC の発音の記録。§04） | §04 |
 | `step` | `count`（既定 1） | 命令を実行し、`regs` と同じ形 |
 | `regs` | なし | `d`、`a`（A7 は今の SP）、`usp`、`ssp`、`sr`、`pc`、`pc_label`、`state`（running・stopped・halted）、`clock`、`frame` |
+| `doc` | なし | DOC の今の様子：`enabled`（有効なオシレータの数 N）と `oscillators`（0〜N−1 の `on`、`freq`、`vol`、`wave_ptr`、`wave_size`、`control`）。子基板がなければ null。読んでも DOC は変わらない |
 | `screenshot` | `path`、`area`（`active`：表示の 256×192、`view`：320×240、`raster`：342×262）、`scale`（1〜8。既定は `path` があれば 1、なければ 2） | `width`、`height`、`hash`、`frame`。`path` があれば PNG を書き、なければ PNG を答えに付ける |
 | `audio` | `path`（WAV）、`keep` | 溜めた音（最大 60 秒。超えると古い方を捨てる）の `samples`、`seconds`、`peak`（L・R）、`rms`。`path` があれば 48 kHz・16 bit・ステレオの WAV に書く。`keep` が false なら取り出した分を捨てる |
 | `peek` | `space`、`addr`、`len`（最大 65,536）、`words` | `hex`（大文字の 16 進）。`words` なら big-endian の語の列も |
@@ -80,6 +81,9 @@
 | `audio` | この実行の音の `samples`、`seconds`、`peak`、`rms` |
 | `screen_hash` | 表示の範囲（256×192）の画素の FNV-1a（64 bit）。同じ画面かを比べる（暗号の強さはない） |
 | `tv` | テレビの模型の状態（同期と色が取れているか。映像のクロックのベンド点） |
+| `voices`、`voices_dropped` | `voices` を付けたときだけ。DOC のオシレータが鳴り始めた・止まった出来事の列（`frame`、`cpu_clock`、`osc`、`on`、そのときの `freq`、`vol`、`wave_ptr`、`wave_size`、`control`）。最大 2,000 件で、超えた数は `voices_dropped` |
+
+発音の記録の見方 [P]：基板を CPU に追いつかせる区切り（64 クロック＝8 µs）ごとに、有効なオシレータの制御のレジスタの停止ビットを見て、変わったものを記録する。8 µs より短く鳴って止まった音と、止めずにレジスタだけ替えた音（同じオシレータで音程を変える）は出来事にならない。記録を取っても仮想機の状態は変わらない（試験で確かめている）。
 
 予算の数え方 [P]：
 
@@ -118,11 +122,11 @@ cargo run --release -p fc85-api -- --http --cart ../sdk/samples/game/build/game.
 | 項目 | 内容 |
 |---|---|
 | 操作 | 矢印・Z（A）・X（B）・C（C）・Enter（START）が釦（ホストの `fc85` と同じ）。動かす・止める、1 フレーム、リセット、音（ブラウザの決まりで、押してから鳴る）、画面の保存（PNG）、カートリッジを読む、状態の保存と復元（枠 `gui`）、Bend モード、ベンド点の命令 |
-| 見るもの | フレーム、速さ、PC とラベル、モード、バスエラー（数と最後の番地）、テレビの模型の状態、1 フレームの予算（CPU・ACRTC・Fabric）、68000 のレジスタ（20 フレームごと） |
+| 見るもの | フレーム、速さ、PC とラベル、モード、バスエラー（数と最後の番地）、テレビの模型の状態、1 フレームの予算（CPU・ACRTC・Fabric）、DOC の 32 のオシレータ（鳴っているか、音量。ますに指を置くとレジスタ）、68000 のレジスタ（20 フレームごと） |
 | 速さ | ページが時刻から進めるフレームの数を決め、1 回に最大 3 フレームを頼む。遅れが 6 フレームを超えたら飛ばす。音はブラウザの WebAudio に 0.06 秒先から並べ、0.3 秒より先にたまったら捨てる（ホストの安全層と同じく、仮想機は変えない） |
-| 口 | `GET /`（ページ。プログラムに埋め込み）、`POST /api`（本文は `{"method", "params"}`。答えは §02 と同じ）、`POST /frame`（GUI の 1 歩。本文は `{"pad", "frames"}`。`run` の答え、表示の範囲の PNG、溜まった音（16 bit・ステレオ・リトルエンディアン）を base64 で返す） |
+| 口 | `GET /`（ページ。プログラムに埋め込み）、`POST /api`（本文は `{"method", "params"}`。答えは §02 と同じ）、`POST /frame`（GUI の 1 歩。本文は `{"pad", "frames"}`。`run` の答え、表示の範囲の PNG、溜まった音（16 bit・ステレオ・リトルエンディアン）を base64 で返し、`mode` と `doc`（`doc` の手順と同じ）を添える） |
 | 守り | 手元の番地（127.0.0.1 か ::1）でだけ待つ。Host の見出しが待っている口の名前（127.0.0.1・localhost・[::1]）でなければ 403、Origin が付いていて同じ口でなければ 403（ほかのサイトのページや、DNS の付け替えから使われないように）。`/api` はファイルを読み書きする手順（`load`、`screenshot` の `path` など）も通すので、手元の人だけが使う前提 |
 
 ## 07　これから足すもの
 
-DR-092 (5) のうち、この版にないもの [O]：DOC の発音の記録（どのオシレータがいつ鳴ったか）、記録（trace）とラベル、メモリの見張り（書いたら止める）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前、C の ABI・WebAssembly・libretro（DR-092 (4)）。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。
+DR-092 (5) のうち、この版にないもの [O]：記録（trace）とラベル、メモリの見張り（書いたら止める）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前、C の ABI・WebAssembly・libretro（DR-092 (4)）。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。
