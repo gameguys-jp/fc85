@@ -79,6 +79,8 @@ uint64_t fc85_frame(fc85_t *m);
 
 /* 画面（0x00RRGGBB、左上から行ごと。戻り値は画素の数）と音（L・R の s16。戻り値は組の数） */
 int32_t fc85_screen(fc85_t *m, int32_t area, uint32_t *out, size_t out_len);
+/* 同じ画面を R・G・B・A（A は 255）の byte の順で（ブラウザの ImageData の形）。out_len は byte の数 */
+int32_t fc85_screen_rgba(fc85_t *m, int32_t area, uint8_t *out, size_t out_len);
 int32_t fc85_audio(fc85_t *m, int16_t *out, size_t max_frames);
 
 /* 状態。fc85_save_state の領域は fc85_free_bytes で返す */

@@ -139,19 +139,15 @@ class Machine {
     return new Uint32Array(this.x.memory.buffer, this.pic, n).slice();
   }
 
-  /** 画面を RGBA（ImageData の形）で。out を渡せばそこに書く。 */
+  /** 画面を RGBA（ImageData の形）で。out を渡せばそこに書く。並べ替えは WebAssembly の中（fc85_screen_rgba）。 */
   screenRGBA(area = AREA.VIEW, out = null) {
-    const n = this.check(this.x.fc85_screen(this.ptr, area, this.pic, MAX_PIXELS), "fc85_screen");
-    const src = new Uint32Array(this.x.memory.buffer, this.pic, n);
-    const dst = out ?? new Uint8ClampedArray(n * 4);
-    for (let i = 0, j = 0; i < n; i++, j += 4) {
-      const p = src[i];
-      dst[j] = p >>> 16;
-      dst[j + 1] = (p >>> 8) & 0xff;
-      dst[j + 2] = p & 0xff;
-      dst[j + 3] = 255;
+    const n = this.check(this.x.fc85_screen_rgba(this.ptr, area, this.pic, MAX_PIXELS * 4), "fc85_screen_rgba");
+    const src = new Uint8ClampedArray(this.x.memory.buffer, this.pic, 4 * n);
+    if (out) {
+      out.set(src);
+      return out;
     }
-    return dst;
+    return src.slice();
   }
 
   /** 溜まった音をすべて取り出す（Int16Array、L・R の順）。 */

@@ -266,7 +266,12 @@ impl DspPort {
                 return;
             }
             let p = self.clk.period();
-            let k = (end - 1 - next) / p + 1;
+            // スロット（250 ns）の中の CLKOUT（200 ns）は 1 つか 2 つ。割り算は WebAssembly では重いので避ける
+            let k = match end - next {
+                d if d <= p => 1,
+                d if d <= 2 * p => 2,
+                _ => (end - 1 - next) / p + 1,
+            };
             let last = next + (k - 1) * p;
             self.cycles += k;
             self.dsp.set_int(!self.io.command);

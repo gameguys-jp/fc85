@@ -24,6 +24,11 @@ const out = {
 };
 const rgba = m.screenRGBA(AREA.ACTIVE);
 out.rgba_len = rgba.length;
+// RGBA（fc85_screen_rgba）は 0x00RRGGBB（fc85_screen）を並べ替えたもの
+const xrgb = m.screenXRGB(AREA.ACTIVE);
+out.rgba_ok = xrgb.every((p, i) =>
+  rgba[4 * i] === p >>> 16 && rgba[4 * i + 1] === ((p >>> 8) & 0xff) &&
+  rgba[4 * i + 2] === (p & 0xff) && rgba[4 * i + 3] === 255);
 
 // 状態：保存して進め、戻して同じ入力で進めると同じ
 const st = m.saveState();

@@ -73,6 +73,7 @@ class Native:
             "fc85_run_frames": ([c.c_void_p, c.c_uint32], c.c_int32),
             "fc85_frame": ([c.c_void_p], c.c_uint64),
             "fc85_screen": ([c.c_void_p, c.c_int32, c.POINTER(c.c_uint32), c.c_size_t], c.c_int32),
+            "fc85_screen_rgba": ([c.c_void_p, c.c_int32, c.c_char_p, c.c_size_t], c.c_int32),
             "fc85_screen_width": ([c.c_int32], c.c_uint32),
             "fc85_screen_height": ([c.c_int32], c.c_uint32),
             "fc85_audio": ([c.c_void_p, c.POINTER(c.c_int16), c.c_size_t], c.c_int32),
@@ -106,6 +107,13 @@ class Native:
         buf = (ctypes.c_uint32 * n)()
         self.check(self.lib.fc85_screen(self.m, area, buf, n), "fc85_screen")
         return bytes(buf)
+
+    def screen_rgba(self, area, size=None):
+        """fc85_screen_rgba の戻り値と、書かれた byte 列（size は渡す領域の大きさ。既定は画面の分）。"""
+        n = self.lib.fc85_screen_width(area) * self.lib.fc85_screen_height(area)
+        size = 4 * n if size is None else size
+        buf = ctypes.create_string_buffer(size)
+        return self.lib.fc85_screen_rgba(self.m, area, buf, size), buf.raw
 
     def audio(self):
         out = b""
@@ -152,6 +160,14 @@ class EmbedTest(unittest.TestCase):
             "screen": fnv(n.screen(VIEW)),
             "audio": fnv(n.audio()),
         }
+        # RGBA は 0x00RRGGBB（リトルエンディアンの u32 の byte は B・G・R・0）を並べ替えたもの
+        xrgb = n.screen(VIEW)
+        want = bytearray()
+        for i in range(0, len(xrgb), 4):
+            want += bytes([xrgb[i + 2], xrgb[i + 1], xrgb[i], 255])
+        self.assertEqual(n.screen_rgba(VIEW), (320 * 240, bytes(want)))
+        r, _ = n.screen_rgba(VIEW, len(want) - 1)
+        self.assertEqual(r, -1, "fc85_screen_rgba が足りない領域を誤りにしない")
         st = n.save_state()
         out["state_len"] = len(st)
 
@@ -195,6 +211,7 @@ class EmbedTest(unittest.TestCase):
         self.assertEqual(web["bios_version"], [0, 2])
         self.assertIn("印", web["bad_state"])
         self.assertEqual(web["rgba_len"], 256 * 192 * 4)
+        self.assertTrue(web["rgba_ok"], "fc85_screen_rgba が fc85_screen の並べ替えになっていない（WebAssembly）")
         for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc"):
             self.assertEqual(web[k], native[k], f"{k} が C の ABI と WebAssembly で違う")
 
@@ -265,6 +282,7 @@ int use(void)
     r += fc85_run_frames(m, 1);
     r += (int32_t)fc85_frame(m);
     r += fc85_screen(m, FC85_AREA_ACTIVE, px, 1);
+    r += fc85_screen_rgba(m, FC85_AREA_VIEW, b, sizeof b);
     r += fc85_audio(m, pcm, 1);
     st = fc85_save_state(m, &n);
     r += fc85_load_state(m, st, n);

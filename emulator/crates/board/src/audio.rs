@@ -89,7 +89,12 @@ impl AudioClock {
             return 0;
         }
         let p = self.clk.period();
-        let k = (end - 1 - next) / p + 1;
+        // 384 kHz の周期はスロットより長く、ふつうは 1 つ（割り算は WebAssembly では重いので避ける）
+        let k = if end - next <= p {
+            1
+        } else {
+            (end - 1 - next) / p + 1
+        };
         if u64::from(self.count) + k < u64::from(self.divisor()) {
             self.count += k as u32;
             self.high = self.high.saturating_sub(k.min(255) as u8);

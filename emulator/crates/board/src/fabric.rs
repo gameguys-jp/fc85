@@ -917,10 +917,9 @@ impl Fabric {
 
     // ------------------------------------------------------------------ スロット
 
-    /// 何もしていない：どのチャネルも止まっていて、要素もアクセスも CPU の要求も残っていない。このスロットの
-    /// 判断は何も決めず（候補も変わらない）、残るのはポートの側とトリガの同期化だけ。
+    /// 要素もアクセスも CPU の要求も残っていない。
     #[inline]
-    fn quiet(&self) -> bool {
+    fn nothing_in_flight(&self) -> bool {
         self.host_effects.is_empty()
             && self.abort.is_none()
             && self.active.is_none()
@@ -929,15 +928,55 @@ impl Fabric {
             && self.tail.is_none()
             && self.hreq.is_none()
             && self.host_rd.is_none()
-            && self.ch.iter().all(|c| c.phase == Phase::Idle)
+    }
+
+    /// 何も決まらないスロットの頭の判断（DR-107）：`nothing_in_flight` で、候補のチャネルが止まっているか、
+    /// 打ち切りの後か、要素を始めない（許可がない、準備ができていない、S のスロットを待つ、満杯・空の
+    /// 信号の次のスロット）。このとき `decide` が変えるのは STALL だけなので、ここで同じように決めて
+    /// `Some` を返す（チャネルがどれも止まっていれば `Some(true)`）。再設定を待つ候補と、要素を始める候補は
+    /// `None`（`decide` に任せる）。
+    #[inline]
+    fn decide_nothing(&mut self, next_s: bool) -> Option<bool> {
+        if !self.nothing_in_flight() {
+            return None;
+        }
+        if self.ch.iter().all(|c| c.phase == Phase::Idle) {
+            return Some(true);
+        }
+        let ready = self.rdy_s && self.rdy_d;
+        let flag_block = self.prev_flag;
+        let ch = &mut self.ch[self.dbch as usize];
+        match ch.phase {
+            Phase::Idle => Some(false),
+            Phase::Reload(_) => None,
+            Phase::Run if ch.no_more => Some(false),
+            Phase::Run => {
+                let armed = ch.is_armed();
+                let start = armed && ready && (!s_only(ch.regs.src) || next_s) && !flag_block;
+                if start {
+                    return None;
+                }
+                ch.stall = armed && !ready;
+                Some(false)
+            }
+        }
     }
 
     /// 1 スロット進める。
     pub fn step_slot<P: Ports + ?Sized>(&mut self, ports: &mut P) -> SlotRecord {
-        if self.quiet() {
-            // 下の手順で、何もしていないときに残るもの（同じ状態になる）
-            let s = self.slot.is_multiple_of(2);
+        let s = self.slot.is_multiple_of(2);
+        if let Some(quiet) = self.decide_nothing(!s) {
+            // 下の手順で、何も決まらないときに残るもの（同じ状態になる）：候補の入れ替え、ポートの側、
+            // RDY の取込み、トリガの同期化。チャネルがどれも止まっていれば、候補は変わらず RDY も取らない
+            let candidate = self.dbch;
+            if !quiet {
+                self.dbch = self.next_candidate(s);
+            }
             ports.run_slot(None);
+            let c = self.dbch as usize;
+            if !quiet && self.ch[c].phase == Phase::Run {
+                self.sample_rdy(c, ports);
+            }
             self.prev_flag = false;
             let trig = self.trig_in | ports.trigger_levels();
             for c in &mut self.ch {
@@ -946,7 +985,7 @@ impl Fabric {
             let rec = SlotRecord {
                 slot: self.slot,
                 s,
-                candidate: self.dbch,
+                candidate,
                 aop: Aop::None,
                 decision: Decision::None,
                 access: None,
@@ -962,7 +1001,6 @@ impl Fabric {
             ports.abort_access(p);
         }
         let doc = ports.doc_present();
-        let s = self.slot.is_multiple_of(2);
         let next_s = !s;
 
         // 1. 頭：このスロットのアクセス
@@ -985,20 +1023,7 @@ impl Fabric {
         if self.elem.is_none()
             && (self.ch[c as usize].phase == Phase::Run || aop == Aop::Reload(c, 2))
         {
-            let regs = self.ch[c as usize].regs;
-            let lines = ports.ready_lines();
-            let r = rdy(
-                regs.src as u32,
-                regs.dst as u32,
-                lines,
-                lines,
-                lines,
-                lines & 1 << 11 != 0,
-                self.rdy_s,
-                self.rdy_d,
-            );
-            self.rdy_s = r.srdy;
-            self.rdy_d = r.drdy;
+            self.sample_rdy(c as usize, ports);
         }
 
         // 3. アクセス
@@ -1103,6 +1128,25 @@ impl Fabric {
         };
         self.slot += 1;
         rec
+    }
+
+    /// RDY の PAL が、候補 `c` の準備の信号を取り込む（スロットの中ほど）。
+    #[inline(always)]
+    fn sample_rdy<P: Ports + ?Sized>(&mut self, c: usize, ports: &P) {
+        let regs = self.ch[c].regs;
+        let lines = ports.ready_lines();
+        let r = rdy(
+            regs.src as u32,
+            regs.dst as u32,
+            lines,
+            lines,
+            lines,
+            lines & 1 << 11 != 0,
+            self.rdy_s,
+            self.rdy_d,
+        );
+        self.rdy_s = r.srdy;
+        self.rdy_d = r.drdy;
     }
 
     /// 決めたアクセスを、このスロットで始める形にする（番地は PS・PD、データは IL の変換）。FORMAT は

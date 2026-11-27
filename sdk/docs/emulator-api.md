@@ -145,7 +145,7 @@ DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読�
 | 口 | 置き場所 | 組み方 |
 |---|---|---|
 | C の ABI | crate `fc85-capi`（`emulator/crates/capi`）。見出し `emulator/crates/capi/include/fc85emu.h`（ROM の中で使う `fc85.h` とは別物） | `emulator/` で `cargo build --release -p fc85-capi`（か `py emulator/embed/build.py --native`）。`target/release/` に共有ライブラリ（`fc85emu.dll`・`libfc85emu.so`・`libfc85emu.dylib`）と静的なライブラリ（`fc85emu.lib`・`libfc85emu.a`） |
-| WebAssembly | 同じ crate を wasm32-unknown-unknown に組む。糊 `emulator/embed/fc85emu.js`、試しの頁 `emulator/embed/index.html` | `py emulator/embed/build.py`（`emulator/embed/build/fc85emu.wasm`。Rust の `wasm32-unknown-unknown` の target が要る）。頁は `py emulator/embed/serve.py` で配り、http://127.0.0.1:8000/ を開く |
+| WebAssembly | 同じ crate を wasm32-unknown-unknown に組む。糊 `emulator/embed/fc85emu.js`、試しの頁 `emulator/embed/index.html`（Web Worker `worker.js`、AudioWorklet `audio.js`。DR-107） | `py emulator/embed/build.py`（`emulator/embed/build/fc85emu.wasm`。Rust の `wasm32-unknown-unknown` の target が要る）。頁は `py emulator/embed/serve.py` で配り、http://127.0.0.1:8000/ を開く |
 | libretro | crate `fc85-libretro`（`emulator/crates/libretro`） | `cargo build --release -p fc85-libretro`（か `build.py --libretro`）。`fc85_libretro.dll`・`.so`・`.dylib` をフロントエンド（RetroArch など）のコアのフォルダに置く |
 
 ### C の ABI
@@ -157,6 +157,7 @@ DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読�
 | `fc85_set_input(m, port_a, port_b)` | PORT_A・PORT_B（`FC85_PAD_*` の OR。上 $01、下 $02、左 $04、右 $08、A $10、B $20、C $40、START $80） |
 | `fc85_run_frames(m, n)`・`fc85_frame` | n フレーム進める。電源投入からのフレームの数 |
 | `fc85_screen(m, area, out, out_len)` | 画面を 0x00RRGGBB で左上から行ごとに書き、画素の数を返す。`area` は `FC85_AREA_ACTIVE`（256×192）・`VIEW`（320×240）・`RASTER`（342×262）。大きさは `fc85_screen_width`・`fc85_screen_height` |
+| `fc85_screen_rgba(m, area, out, out_len)` | 同じ画面を R・G・B・A（A は 255）の byte の順で書く（ブラウザの ImageData の形）。`out_len` は byte の数（画素の数の 4 倍以上）。画素の数を返す（DR-107） |
 | `fc85_audio(m, out, max_frames)` | 溜まった音を L・R の順の s16 で書き、組の数を返す（48 kHz、1 フレームに約 801 組。残りは次に回す）。取り出さないと 60 秒分まで溜め、古い方から捨てる |
 | `fc85_save_state`・`fc85_load_state` | 状態を保存して返す（`fc85_free_bytes` で返す）・戻す。形は印 `FC85ST01` と、`save_state` の JSON を deflate したもの。同じ版のエミュレータで読めることだけを約束する [P]（OI-103） |
 | `fc85_peek`・`fc85_poke` | メモリをバスを通さずに読む・書く。空間は `FC85_SPACE_*`（§03 の表と同じ順：CPU、VRAM、WAVE、DSP_PROG、TEMPORAL、CHAR_ROM、PALETTE） |
@@ -189,8 +190,9 @@ m.call("regs");                                  // JSON の手順
 
 - 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 - WebAssembly にはファイルがないので、`fc85_call` の手順のうち `path` を使うもの（`load`、`screenshot` の `path` など）は誤りになる。ROM はバイト列で渡す。
-- 速さ [V]：開発機の Chrome で 1 フレーム約 15〜20 ms（ネイティブの release は約 10 ms。DR-105）。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）はまだ届かない（OI-103）。試しの頁は、遅い機械では 1 回に 2 フレームまで進め、実時間より遅く動く。
-- 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。釦はホストと同じ（矢印、Z・X・C、Enter）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールを読まないので `serve.py` を使う。
+- 速さ [V]：開発機の Chrome の Worker の中で 1 フレーム約 15〜19 ms（ネイティブの release は約 10 ms。DR-105、DR-107）。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）は実時間の約 9 割で、音が途切れる（OI-103）。
+- 試しの頁（DR-107）：仮想機は module の Web Worker（`worker.js`）で回し、頁の主のスレッドは釦と描画だけにする（OffscreenCanvas が使えれば描画も Worker）。音は AudioWorklet（`audio.js`）で鳴らし、進める速さは音の時計に合わせる（鳴っていない音が約 50〜167 ms になるようにフレームを進める。仮想機のフレームは約 59.92 Hz で、画面の 60 Hz とは合わせない）。音が鳴る前と AudioWorklet がないときは時刻に合わせる。実時間に追いつかない機械では実時間より遅く進み、音は途切れる（音の高さは変えない）。1 フレームより短い釦の押下も、次のフレームでは押したことにする。状態の行に、実時間の割合、仮想機に使った時間の割合、音の溜まり、途切れの数を出す。「速さを測る」は、同じ ROM の別の仮想機を電源投入から 240 フレーム止まらずに進めた 1 フレームの時間。
+- 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。カートリッジは欄で選ぶか、頁の URL に `?cart=<URL>`（頁からの相対。例 `?cart=build/game.bin`）を付ける。`?doc=0` で DOC の子基板を外す。釦はホストと同じ（矢印、Z・X・C、Enter）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールや Worker を読まないので `serve.py` を使う。
 
 ### libretro のコア
 

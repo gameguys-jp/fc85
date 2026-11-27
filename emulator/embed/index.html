@@ -9,7 +9,10 @@
   しては開けない（WebAssembly を fetch で読む）ので、静的に配る：
     py emulator/embed/build.py     # build/fc85emu.wasm と Boot ROM・文字 ROM を置く
     py emulator/embed/serve.py     # http://127.0.0.1:8000/ を開く（.js・.wasm の MIME を正しく返す）
-  build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジも欄で選ぶ。
+  build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジも欄で選ぶか、頁の URL に
+  ?cart=<URL>（この頁からの相対。例 ?cart=build/game.bin）を付ける。?doc=0 で DOC の子基板を外す。
+  仮想機は Web Worker（worker.js）で回し、音は AudioWorklet（audio.js）で鳴らす。進める速さは音の時計に
+  合わせる（DR-107）。この頁は釦と描画だけ（OffscreenCanvas が使えれば描画も Worker）。
   ライセンスは MIT（リポジトリの LICENSE）。
 -->
 <style>
@@ -36,19 +39,21 @@
     padding: 10px 12px; margin-top: 12px; }
   .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
   label { display: inline-flex; gap: 6px; align-items: center; }
+  input[type=file] { max-width: 100%; }
   button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px;
     background: var(--bg); color: var(--ink); cursor: pointer; }
   button:hover { border-color: var(--accent); }
   button:disabled { opacity: .5; cursor: default; }
   #msg { color: var(--warn); min-height: 1.5em; }
   .help, #stat { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #stat.slow { color: var(--warn); }
 </style>
 </head>
 <body>
 <main>
   <h1>fc85 WebAssembly</h1>
   <div class="screen"><canvas id="screen" width="320" height="240" tabindex="0"></canvas></div>
-  <div id="msg"></div>
+  <div id="msg" role="status"></div>
   <div id="stat"></div>
   <section>
     <div class="row">
@@ -57,6 +62,7 @@
       <button id="reset" disabled>リセット</button>
       <button id="save" disabled>状態を保存</button>
       <button id="load" disabled>状態を戻す</button>
+      <button id="bench" disabled>速さを測る</button>
     </div>
     <div class="row">
       <label>Boot ROM <input type="file" id="boot" accept=".bin"></label>
@@ -66,22 +72,21 @@
       <label>カートリッジ <input type="file" id="cart" accept=".bin"></label>
       <label><input type="checkbox" id="doc" checked> DOC の子基板</label>
     </div>
-    <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。</p>
+    <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。
+      「速さを測る」は、同じ ROM の別の仮想機を電源投入から 240 フレーム止まらずに進めた 1 フレームの時間（実時間は約 16.7 ms）。</p>
   </section>
 </main>
 <script type="module">
-import { load, AREA, FLAGS } from "./fc85emu.js";
-
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
-const ctx = canvas.getContext("2d");
-const image = ctx.createImageData(320, 240);
 const KEYS = { ArrowUp: 0x01, ArrowDown: 0x02, ArrowLeft: 0x04, ArrowRight: 0x08,
                KeyZ: 0x10, KeyX: 0x20, KeyC: 0x40, Enter: 0x80 };
 
-let fc85 = null, m = null, running = false, pad = 0, saved = null;
-let audio = null, nextTime = 0, last = 0, owed = 0, frames = 0, statAt = 0;
-const roms = { boot: null, chars: null, cart: null };
+let worker = null, info = null, running = false, pad = 0, saved = null, audio = null;
+let ctx = null, pending = null;
+const roms = { boot: null, chars: null };
+const params = new URLSearchParams(location.search);
+if (params.get("doc") === "0") $("doc").checked = false;
 
 const say = (s) => { $("msg").textContent = s; };
 
@@ -97,91 +102,157 @@ async function fileBytes(input) {
   return f ? new Uint8Array(await f.arrayBuffer()) : null;
 }
 
-function build() {
-  if (m) m.free();
-  m = fc85.create({ boot: roms.boot, chars: roms.chars, flags: $("doc").checked ? 0 : FLAGS.NO_DOC });
-  if (roms.cart) m.loadCart(roms.cart);
-  saved = null;
-  if (!roms.boot) say("Boot ROM がない（68000 はすぐ止まる）。欄で選ぶ");
+/** Worker を作り、WebAssembly を読ませる。描画は OffscreenCanvas が使えれば Worker に渡す。 */
+function startWorker() {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+    w.onerror = (e) => reject(new Error(e.message || "Worker を読めない（module の Worker が要る）"));
+    w.onmessage = (e) => {
+      if (e.data.type === "ready") { w.onmessage = onWorker; resolve([w, e.data]); }
+      else if (e.data.type === "error") reject(new Error(e.data.message));
+    };
+    let offscreen = null;
+    if (canvas.transferControlToOffscreen) offscreen = canvas.transferControlToOffscreen();
+    else ctx = canvas.getContext("2d");
+    const msg = { type: "init", wasm: "build/fc85emu.wasm", base: location.href, canvas: offscreen };
+    w.postMessage(msg, offscreen ? [offscreen] : []);
+  });
 }
 
-function play(pcm) {
-  if (!audio || pcm.length === 0) return;
-  const n = pcm.length / 2;
-  const buf = audio.createBuffer(2, n, fc85.audioRate);
-  const l = buf.getChannelData(0), r = buf.getChannelData(1);
-  for (let i = 0; i < n; i++) { l[i] = pcm[2 * i] / 32768; r[i] = pcm[2 * i + 1] / 32768; }
-  const now = audio.currentTime;
-  if (nextTime < now + 0.03 || nextTime > now + 0.25) nextTime = now + 0.05;   // 遅れ・溜まりすぎは詰め直す
-  const src = audio.createBufferSource();
-  src.buffer = buf;
-  src.connect(audio.destination);
-  src.start(nextTime);
-  nextTime += buf.duration;
+/** 音：AudioWorklet を作り、Worker と MessagePort でつなぐ。音が鳴り始めるまで（自動再生の制限で止まって
+ *  いる間も）Worker は時刻に合わせて進め、鳴り始めたら音の時計に移る。AudioWorklet がなければ音なし。 */
+async function startAudio() {
+  if (!window.AudioWorkletNode) throw new Error("AudioWorklet がない");
+  let ac;
+  try { ac = new AudioContext({ sampleRate: info.audioRate, latencyHint: "interactive" }); }
+  catch { ac = new AudioContext({ latencyHint: "interactive" }); }
+  await ac.audioWorklet.addModule(new URL("./audio.js", import.meta.url));
+  const node = new AudioWorkletNode(ac, "fc85-out", {
+    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { sourceRate: info.audioRate } });
+  node.connect(ac.destination);
+  let linked = false;
+  const link = () => {
+    if (linked || ac.state !== "running") return;
+    linked = true;
+    const ch = new MessageChannel();
+    node.port.postMessage({ link: ch.port1 }, [ch.port1]);
+    worker.postMessage({ type: "audio", link: ch.port2 }, [ch.port2]);
+  };
+  ac.addEventListener("statechange", link);
+  ac.resume().then(link, () => {});
+  link();
+  return ac;
 }
 
-function tick(t) {
-  if (!running) return;
-  // 遅い機械では 1 回に 2 フレームまで（実時間より遅く進む。頁を固めない）
-  owed = Math.min(owed + (t - last) / 1000 * fc85.frameRate, 2);
-  last = t;
-  try {
-    let n = 0;
-    while (owed >= 1) { owed -= 1; n++; }
-    if (n > 0) {
-      m.setInput(pad);
-      m.runFrames(n);
-      frames += n;
-      m.screenRGBA(AREA.VIEW, image.data);
-      ctx.putImageData(image, 0, 0);
-      play(m.audio());
+function onWorker(e) {
+  const d = e.data;
+  switch (d.type) {
+    case "frame":
+      pending = d.px;
+      break;
+    case "stat": {
+      const s = $("stat");
+      let t = `フレーム ${d.frame}　${d.fps.toFixed(1)} fps（実時間の ${Math.round(d.speed * 100)}%）　` +
+              `仮想機の時間 ${Math.round(d.load * 100)}%`;
+      if (d.lead !== null) t += `　音の溜まり ${Math.round(d.lead)} ms（目標 ${Math.round(d.target)}）　途切れ ${d.underruns}`;
+      s.textContent = t;
+      s.classList.toggle("slow", d.speed < 0.97);
+      break;
     }
-  } catch (e) {
-    running = false;
-    say(`止まった：${e.message}（読み込み直す）`);
-    return;
+    case "saved":
+      saved = d.state;
+      say(`保存した（${saved.length} byte）`);
+      break;
+    case "loaded":
+      say("状態を戻した");
+      break;
+    case "bench":
+      say(`速さ：${d.ms.toFixed(2)} ms/フレーム（${d.frames} フレーム。実時間は ${(1000 / info.frameRate).toFixed(2)} ms）`);
+      $("bench").disabled = false;
+      break;
+    case "error":
+      if (d.fatal) {
+        running = false;
+        setButtons(false);
+        say(`止まった：${d.message}（「始める」で読み込み直す）`);
+      } else {
+        say(`できない：${d.message}`);
+      }
+      $("bench").disabled = !roms.boot && !roms.chars;
+      break;
   }
-  if (t - statAt > 1000) {
-    $("stat").textContent = `フレーム ${m.frame}　${(frames * 1000 / (t - statAt)).toFixed(1)} fps`;
-    frames = 0; statAt = t;
+}
+
+function draw() {
+  if (pending) {
+    ctx.putImageData(new ImageData(pending, 320, 240), 0, 0);
+    pending = null;
   }
-  requestAnimationFrame(tick);
+  requestAnimationFrame(draw);
+}
+
+function setButtons(on) {
+  for (const id of ["pause", "reset", "save", "load", "bench"]) $(id).disabled = !on;
+  $("pause").textContent = "一時停止";
 }
 
 $("start").onclick = async () => {
   say("");
+  $("start").disabled = true;
   try {
-    if (!fc85) fc85 = await load("build/fc85emu.wasm");
+    if (!worker) {
+      [worker, info] = await startWorker();
+      if (ctx) requestAnimationFrame(draw);
+      try { audio = await startAudio(); }
+      catch (e) { say(`音なしで動かす：${e.message}`); }
+    } else if (audio) {
+      await audio.resume();
+    }
     roms.boot = (await fileBytes($("boot"))) ?? roms.boot ?? (await fetchBytes("build/boot.bin"));
     roms.chars = (await fileBytes($("chars"))) ?? roms.chars ?? (await fetchBytes("build/char.bin"));
-    roms.cart = await fileBytes($("cart"));
-    build();
+    let cart = await fileBytes($("cart"));
+    if (!cart && params.get("cart")) {
+      cart = await fetchBytes(new URL(params.get("cart"), location.href));
+      if (!cart) throw new Error(`カートリッジを読めない：${params.get("cart")}`);
+    }
+    worker.postMessage({ type: "boot", boot: roms.boot, chars: roms.chars, cart, doc: $("doc").checked });
+    if (!roms.boot) say("Boot ROM がない（68000 はすぐ止まる）。欄で選ぶ");
+    saved = null;
+    worker.postMessage({ type: "run", on: true });
+    running = true;
+    setButtons(true);
+    canvas.focus();
   } catch (e) {
     say(`始められない：${e.message}（py emulator/embed/build.py で組む）`);
-    return;
+  } finally {
+    $("start").disabled = false;
   }
-  audio ??= new AudioContext();
-  await audio.resume();
-  for (const id of ["pause", "reset", "save", "load"]) $(id).disabled = false;
-  running = true; last = statAt = performance.now(); owed = 0;
-  canvas.focus();
-  requestAnimationFrame(tick);
 };
 $("pause").onclick = () => {
   running = !running;
+  worker.postMessage({ type: "run", on: running });
   $("pause").textContent = running ? "一時停止" : "続ける";
-  if (running) { last = performance.now(); requestAnimationFrame(tick); }
 };
-$("reset").onclick = () => m && m.reset();
-$("save").onclick = () => { if (m) { saved = m.saveState(); say(`保存した（${saved.length} byte）`); } };
-$("load").onclick = () => { if (m && saved) m.loadState(saved); };
+$("reset").onclick = () => worker.postMessage({ type: "reset" });
+$("save").onclick = () => worker.postMessage({ type: "save" });
+$("load").onclick = () => { if (saved) worker.postMessage({ type: "load", state: saved }); };
+$("bench").onclick = () => {
+  $("bench").disabled = true;
+  say("速さを測っている…");
+  worker.postMessage({ type: "bench", frames: 240 });
+};
+
+function sendPad(next) {
+  if (next !== pad && worker) worker.postMessage({ type: "input", pad: next });
+  pad = next;
+}
 canvas.addEventListener("keydown", (e) => {
-  if (e.code in KEYS) { pad |= KEYS[e.code]; e.preventDefault(); }
+  if (e.code in KEYS) { sendPad(pad | KEYS[e.code]); e.preventDefault(); }
 });
 canvas.addEventListener("keyup", (e) => {
-  if (e.code in KEYS) { pad &= ~KEYS[e.code]; e.preventDefault(); }
+  if (e.code in KEYS) { sendPad(pad & ~KEYS[e.code]); e.preventDefault(); }
 });
-canvas.addEventListener("blur", () => { pad = 0; });
+canvas.addEventListener("blur", () => sendPad(0));
 </script>
 </body>
 </html>

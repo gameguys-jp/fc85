@@ -308,6 +308,44 @@ pub unsafe extern "C" fn fc85_screen(
     })
 }
 
+/// 画面を R・G・B・A（A は 255）の byte の順で out に書く（ブラウザの ImageData の形。DR-107）。書いた画素の
+/// 数（幅×高さ）か -1。
+///
+/// # Safety
+/// `m` は生きている仮想機。out は out_len byte を書ける。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fc85_screen_rgba(
+    m: *mut Fc85,
+    area_id: i32,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    guard(-1, || {
+        let a = area(area_id)?;
+        // SAFETY: 上の約束
+        let h = unsafe { handle(m) }?;
+        let mut pic = std::mem::take(&mut h.pic);
+        let (w, hh) = h.machine()?.screen_xrgb(a, &mut pic);
+        let n = w * hh;
+        let r = if out.is_null() || out_len < 4 * n {
+            Err(format!(
+                "画面は {w}×{hh}＝{n} 画素で {} byte（out_len は {out_len}）",
+                4 * n
+            ))
+        } else {
+            // SAFETY: 上の約束（out は out_len ≥ 4n byte）
+            let dst = unsafe { std::slice::from_raw_parts_mut(out, 4 * n) };
+            for (d, &p) in dst.chunks_exact_mut(4).zip(&pic) {
+                let [_, r, g, b] = p.to_be_bytes();
+                d.copy_from_slice(&[r, g, b, 255]);
+            }
+            Ok(n as i32)
+        };
+        h.pic = pic;
+        r
+    })
+}
+
 /// 溜まった音を out に L・R の順の s16 で書き、取り出す。書いた組の数（max_frames まで）。残りは次に回す。
 ///
 /// # Safety
