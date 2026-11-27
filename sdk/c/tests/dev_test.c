@@ -3,8 +3,8 @@
  *
  * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）→ 40 フレーム待つ →
  * HBlank の割込みで色 0 を替える（v_phase 4。その後 10 フレームはそのまま）→ 同じことを DIRECT で（v_phase 5）→
- * DSP（v_phase 6）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を分けて測り、v_phase 4・5 で
- * 画面を撮る。
+ * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を
+ * 分けて測り、v_phase 4・5 で画面を撮る。
  *
  * echo_dsp.h は試験が tests/echo.dsp から dspasm --c-array で作る。
  */
@@ -30,6 +30,7 @@ uint16_t r_adpcm[6];
 uint16_t r_doc[8];
 uint16_t r_video[6];
 uint16_t r_dsp[8];
+uint16_t r_dma[8];
 
 /* ラスタの区切り（画面の y＝60 と 120 の辺りのラスタで比べる） */
 #define SPLIT1 (VIDEO_TOP_RASTER + 60U)
@@ -46,6 +47,7 @@ enum {
     STAGE_COPY = 0x2100,
     STAGE_WORDS = 0x2200,
     STAGE_XOR = 0x2300,
+    STAGE_DMA = 0x2400,
     STAGE_WAVE = 0x3000,
     STAGE_ADPCM = 0x4000,
 };
@@ -248,6 +250,43 @@ static void dsp_tests(void)
     v_phase = 6;
 }
 
+/* ACRTC の DMA（DR-112）：色 1〜4 の 4 画素ずつの帯（x＝32〜47、y＝120〜123）を DRD で Staging RAM に読み、
+ * 下（x＝64〜79、y＝130〜133）に DMOD の EOR で書く。下地は 0 なので同じ絵になる */
+static void dma_tests(void)
+{
+    for (unsigned i = 0; i < 4; i++) {
+        acrtc_color(i + 1);
+        acrtc_fill((int)(32 + 4 * i), 120, (int)(35 + 4 * i), 123, ACRTC_OPM_REP);
+    }
+    r_dma[0] = (uint16_t)acrtc_dma(1);
+    r_dma[1] = (uint16_t)acrtc_read_rect(ACRTC_WORD_ADDR(32, 120), 4, 4);
+    struct fab_xfer x = {
+        .src = PORT_ACRTC,
+        .dst = PORT_STAGING,
+        .dst_addr = STAGE_DMA,
+        .count = 16,
+        .dst_step = 2,
+        .format = FMT_16_16,
+        .trigger = TRG_NOW,
+    };
+    r_dma[2] = (uint16_t)fab_run(0, &x);
+    r_dma[3] = (uint16_t)acrtc_write_rect(ACRTC_WORD_ADDR(64, 130), 4, 4, ACRTC_DMOD | ACRTC_OPM_EOR);
+    struct fab_xfer y = {
+        .src = PORT_STAGING,
+        .dst = PORT_ACRTC,
+        .src_addr = STAGE_DMA,
+        .count = 16,
+        .src_step = 2,
+        .format = FMT_16_16,
+        .trigger = TRG_NOW,
+    };
+    r_dma[4] = (uint16_t)fab_run(0, &y);
+    r_dma[5] = (uint16_t)(acrtc_read_reg(ACRTC_CCR) & ACRTC_CCR_DDM);
+    r_dma[6] = (uint16_t)acrtc_dma(0);
+    r_dma[7] = (uint16_t)(acrtc_read_reg(ACRTC_CCR) & ACRTC_CCR_DDM);
+    v_phase = 7;
+}
+
 int main(void)
 {
     acrtc_tests();
@@ -257,6 +296,7 @@ int main(void)
     wait_frames(40);
     video_tests();
     dsp_tests();
+    dma_tests();
     done = 0xC0DE;
     return 0;
 }

@@ -139,3 +139,40 @@ int acrtc_circle(int x, int y, unsigned r, unsigned op)
                            (uint16_t)r};
     return acrtc_send(w, 5);
 }
+
+int acrtc_dma(int on)
+{
+    if (!acrtc_wait())
+        return 0;
+    uint16_t ccr = acrtc_read_reg(ACRTC_CCR);
+    ccr = on ? (uint16_t)(ccr | ACRTC_CCR_DDM) : (uint16_t)(ccr & ~ACRTC_CCR_DDM);
+    acrtc_write_reg(ACRTC_CCR, ccr);
+    return 1;
+}
+
+int acrtc_rwp(uint32_t addr)
+{
+    /* RWPH：DN（基本画面＝1）<< 14 と語番地の bit 19–12。RWPL：bit 11–0 << 4（Boot ROM の字の描画と同じ） */
+    const uint16_t w[4] = {ACRTC_WPR | ACRTC_P_RWPH, (uint16_t)(0x4000U | ((addr >> 12) & 0xFFU)),
+                           ACRTC_WPR | ACRTC_P_RWPL, (uint16_t)((addr & 0x0FFFU) << 4)};
+    return acrtc_send(w, 4);
+}
+
+/* RWP を addr にして、cmd を AX＝words−1（右へ）、AY＝−(rows−1)（下へ）で送る */
+static int rect(uint32_t addr, unsigned words, unsigned rows, uint16_t cmd)
+{
+    if (words == 0 || rows == 0 || !acrtc_rwp(addr))
+        return 0;
+    const uint16_t w[3] = {cmd, (uint16_t)(words - 1), (uint16_t)-(int)(rows - 1)};
+    return acrtc_send(w, 3);
+}
+
+int acrtc_read_rect(uint32_t addr, unsigned words, unsigned rows)
+{
+    return rect(addr, words, rows, ACRTC_DRD);
+}
+
+int acrtc_write_rect(uint32_t addr, unsigned words, unsigned rows, uint16_t cmd)
+{
+    return rect(addr, words, rows, cmd);
+}

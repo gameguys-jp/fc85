@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109）の試験。
+"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109。ACRTC の DMA。DR-112）の試験。
 `py -m unittest discover -s sdk/c` で走る。
 
 1. GCC があれば、試験の ROM（tests/dev_test.c）を組み、逆アセンブルを見る：周辺の関数は I/O の窓に読み書き
@@ -10,7 +10,7 @@
    点を描かない・AFRCT は両端を含む（HD63484.md）、Fabric の変換（AND MASK → XOR。仕様書 §06）、
    ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。HBlank の割込みで替えた色 0 の
    区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を
-   dspasm --c-array で C の見出しにする）。
+   dspasm --c-array で C の見出しにする）、ACRTC の DMA（DRD で Staging RAM へ、DMOD の EOR で VRAM へ。DR-112）。
 """
 
 import os
@@ -216,6 +216,7 @@ class TestDeviceHelpers(unittest.TestCase):
             emu.call("run", frames=2, stop_on_bus_error=True)
             direct = png_rows(emu.screenshot())
             to_phase(6)
+            to_phase(7)
             emu.call("run", frames=2, stop_on_bus_error=True)
             self.assertEqual(peek("bios_exc_vector", 2)[0], 0, "例外で止まった")
             self.assertEqual(peek("done", 2)[0], 0xC0DE, "終わりまで来ていない")
@@ -246,6 +247,17 @@ class TestDeviceHelpers(unittest.TestCase):
                 self.assertEqual([px(138, 128), px(118, 128), px(128, 118), px(128, 138), px(128, 128)],
                                  [9, 9, 9, 9, 0], "円")
                 self.assertEqual([px(x, 100) for x in range(199, 205)], [0, 3, 3, 3, 3, 0], "打ち切りの後の塗り")
+
+            with self.subTest("ACRTC の DMA"):
+                d = peek("r_dma", 2, 8)
+                self.assertEqual(d, [1, 1, 2, 1, 2, 0x2000, 1, 0], "DDM を立て、DRD と DMOD を Fabric で運び、下ろす")
+                band = [0x1111, 0x2222, 0x3333, 0x4444] * 4
+                self.assertEqual(peek(STAGING + 0x2400, 2, 16), band, "DRD で読んだ語（行ごとに左から）")
+                self.assertEqual([vram[y * 64 + 16 + i] for y in range(130, 134) for i in range(4)], band,
+                                 "DMOD の EOR で書いた語")
+                self.assertEqual([vram[129 * 64 + 16 + i] for i in range(4)] + [vram[134 * 64 + 16 + i]
+                                                                                for i in range(4)],
+                                 [0] * 8, "矩形の外は書かない")
 
             with self.subTest("Fabric"):
                 f = peek("r_fab", 2, 4)

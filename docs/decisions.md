@@ -1111,3 +1111,13 @@
 | 理由 | ユーザーの方針（本機特有の映像・音響の効果が得られること、完成度）と DR-092（ROM は複数の人がエージェントで書く。C の縛りなし）。ほかのサンプルはアセンブラで、C から本機の表現を使う手本がなかった。HBlank でパレットを替える表現は本機の映像の柱で、DR-109 の関数だけで書ける。測った値 [V]（エミュレータ）：DIRECT では、帯の境がラスタ 8k−1 の x＝199〜212 の辺りに来る（割り込まれた命令で数ドット動く）。像は 2254 byte。割込みの手間は 1 フレームに 23 回で、主ループは毎フレーム回る |
 | 却下した案 | SAMPLE 6（showcase）を C で書き直す：DSP の立体や漢字まで含み大きい。今回は C の関数の手本として小さく始める。毎ラインの割込み（`video_hblank(hook, -1)`）で 1 ラインごとに色を替える：割込みの入口・C の関数・BIOS の処理で 1 ラインの CPU の時間（約 500 クロック）の大半を使う。帯を 8 ラスタにした。DSP と DOC の音楽、ACRTC の描画の C のサンプル：次の 1 本に回す（c.md §12 に残す） |
 | 影響 | sdk/samples/raster（新規：main.c、build.py、test_build.py、README.md）、sdk/docs/c.md v0.4（§09、§12）、sdk/template（AGENTS.md v0.5、c/main.c）、sdk/c/test_devices.py（説明の折返し）、CLAUDE.md、README.md |
+
+## DR-112　C から ACRTC の矩形を読み書きし、Data Fabric の port 1 で運ぶ関数
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。c.md §12 の「ACRTC の DMA（port 1）での描画」[O] を、`acrtc.h` に関数を足して閉じる [P]。`acrtc_dma(on)`（ACRTC の仕事が終わるのを待ってから CCR の DDM を立てる・下ろす。CCR のほかのビットは保つ）、`acrtc_rwp(addr)`（RWP を基本画面の語番地に。RWPH＝$4000｜bit 19–12、RWPL＝bit 11–0 << 4。Boot ROM の字の描画と同じ）、`acrtc_read_rect(addr, words, rows)`（DRD）、`acrtc_write_rect(addr, words, rows, cmd)`（DWT か DMOD｜演算）。矩形は AX＝words−1（右へ）、AY＝−(rows−1)（下へ）で、SAMPLE 3 の TEMPORAL FEEDBACK と同じ形。語番地のマクロ `ACRTC_WORD_ADDR(x, y)`（y×64＋x/4）。データは、DDM なら Fabric のチャネル（`fab_run`）で port 1 から（へ）、DDM＝0 なら FIFO（`acrtc_get`・`acrtc_send`）で運ぶ。DDM の間は BIOS の字の呼出しを使わない（BIOS は DWT を FIFO で書く。bios-abi.md §06）と、見出しと c.md に書く。Temporal RAM のポインタと制御をまとめる関数は作らず（レジスタの書込みだけ）、c.md に手順を書いて §12 に残す。試験：`dev_test.c` に段を足し、色 1〜4 の帯を DRD で Staging RAM に読み、DMOD の EOR で別の場所に書いて、Staging RAM と VRAM を確かめる |
+| 理由 | ユーザーの方針（本機特有の効果を得られること）。Temporal RAM の残像・帰還（SAMPLE 3）は、ACRTC の矩形を Fabric で Temporal RAM と行き来させる形で、C から使うには DDM と RWP と DRD・DWT・DMOD の語の並びを毎回書く必要があった。確かめたこと [V]（エミュレータ）：DRD の 16 語は行ごとに左から $1111・$2222・$3333・$4444、DMOD の EOR で書いた矩形は同じ語で、矩形の外の行は 0。`fab_run` は 2 回とも DONE、DDM は立てた後 $2000、下ろした後 0 |
+| 却下した案 | DRD・DWT と Fabric の転送をまとめた 1 つの関数（`acrtc_dma_copy` など）：転送の相手（Staging RAM、Temporal RAM、DSP）と FORMAT・SHIFT・MASK の組合せが多く、`fab_xfer` を渡すだけになる。DDM を関数の中で自動で立て下ろしする：1 フレームに何回も運ぶとき（SAMPLE 3 は 4〜6 回）に、毎回 ACRTC の終わりを待つことになる |
+| 影響 | sdk/c（acrtc.c、include/acrtc.h、tests/dev_test.c、test_devices.py）、sdk/docs/c.md v0.5（§09 の ACRTC、§11、§12）。あわせて doc.rs の説明を回路の文書にそろえた（U48–U50 の 74LS377 と取る縁。OI-089 (3)。host_abort の時間切れは DR-079 で DTACK。差は OI-104） |

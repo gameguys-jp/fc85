@@ -52,4 +52,25 @@ int acrtc_fill(int x0, int y0, int x1, int y1, unsigned op);
 /* 中心 (x, y)、半径 r の円 */
 int acrtc_circle(int x, int y, unsigned r, unsigned op);
 
+/* ---- 矩形の読み書きと DMA（Data Fabric の port 1。DR-112）
+ *
+ * CCR の DDM を立てると、DRD・DWT・DMOD のデータは FIFO を通らず、Fabric の port 1 で運ぶ（DMA）。手順は
+ * SAMPLE 3（sdk/samples/patches、TEMPORAL FEEDBACK）と同じ：acrtc_dma(1) → acrtc_read_rect か acrtc_write_rect
+ * → Fabric のチャネルで port 1 から（へ）words×rows 語（fabric.h の fab_run）→ acrtc_dma(0)。
+ * DDM の間は、BIOS の字を描く呼出し（bios_puts・bios_put_hex など）を使わない（BIOS は DWT のデータを FIFO で
+ * 書く。bios-abi.md §06）。DDM＝0 なら、データは FIFO で読み書きする（acrtc_get・acrtc_send）。 */
+
+/* 基本画面（DN＝1）の画素 (x, y) を含む語の番地（1 行 64 語、1 語に 4 画素。BIOS の画面。bios-abi.md §06） */
+#define ACRTC_WORD_ADDR(x, y) ((uint32_t)(y) * 64U + (uint32_t)(x) / 4U)
+
+/* CCR の DDM を立てる（on）か下ろす。ACRTC の仕事が終わるのを待ってから書く（DDM は実行を始めたときの値で
+ * 決まる）。CCR のほかのビットは保つ */
+int acrtc_dma(int on);
+/* RWP（読み書きの番地）を基本画面の語番地 addr にする */
+int acrtc_rwp(uint32_t addr);
+/* 語番地 addr から、横 words 語・縦 rows 行（下へ）を読む DRD を送る。データは words×rows 語 */
+int acrtc_read_rect(uint32_t addr, unsigned words, unsigned rows);
+/* 同じ形の矩形に書く。cmd は ACRTC_DWT か、ACRTC_DMOD | 演算（ACRTC_OPM_*） */
+int acrtc_write_rect(uint32_t addr, unsigned words, unsigned rows, uint16_t cmd);
+
 #endif
