@@ -1,6 +1,6 @@
 # C で ROM を書く
 
-**v0.5**  
+**v0.6**  
 2026年11月27日
 
 > fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
@@ -66,7 +66,7 @@ FC85_CART("MY ROM          ");
 
 ## 05　C で使えるもの
 
-- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`、`video.h`、`dsp.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
+- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`、`video.h`、`dsp.h`、`temporal.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
 - **string.h**：`memcpy`、`memmove`、`memset`、`memcmp`、`strlen`、`strcmp`、`strcpy`（`sdk/c/string.c`）。両方が偶数番地なら長語ずつ写す。Main RAM と Staging RAM だけに使う（MMIO の窓には幅と回数が決まらないので使わない）。
 - **整数**：32 bit の掛け算・割り算（`sdk/c/runtime.S`）と 64 bit（`long long`）のシフト・掛け算・割り算（`sdk/c/runtime64.c`）は、GCC が呼ぶ関数を SDK が持つ。名前は GCC の実行時ライブラリと同じで、中身はここで書いた。16×16 の掛け算と 32÷16 の割り算は 68000 の命令（MULU・DIVU）になる。64 bit の割り算は 1 bit ずつ引くので遅い。
 - **0 で割る**：DIVU の 0 除算の例外（ベクタ 5）になり、BIOS が赤い画面で止まる（`bios-abi.md` §03）。
@@ -119,7 +119,7 @@ C の ROM にアセンブラを混ぜるときは、GNU as の書き方の `.S`�
 
 ## 09　周辺の関数
 
-`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（DR-106）と `video.h`・`dsp.h`（DR-109）（中身は `sdk/c/` の同じ名前の .c。HBlank の割込みの入口は `video_irq.S`）[P]。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
+`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（DR-106）と `video.h`・`dsp.h`（DR-109）、`temporal.h`（DR-113）（中身は `sdk/c/` の同じ名前の .c。HBlank の割込みの入口は `video_irq.S`）[P]。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
 
 ```c
 #include "acrtc.h"
@@ -160,7 +160,7 @@ adpcm_play(0x4000, sizeof s_shot, ADPCM_CTL_8K);  /* 鳴らす。毎フレーム
 - Data Fabric の port 1 で DMA している間は呼ばない（§03 の 8）。
 - 図形の関数は、BIOS が入口で残す描画の状態（ORG が画面の左上、パターン RAM が 0、MASK が $FFFF。`bios-abi.md` §06）を前提にする。座標は画面座標（x は右、y は下）で、関数が AMOVE と論理座標の y の符号を扱う。`op` はコマンドの下位 8 bit（演算 `ACRTC_OPM_*`、色の選び `ACRTC_COL_*`、領域の指定）で、0 は「置き換え、パターンの色（パターン RAM が 0 なら CL0）」。終わりを待たないので、続けて描くならそのまま次を呼ぶ。
 - 矩形の読み書きと DMA（DR-112）：CCR の DDM を立てると、DRD・DWT・DMOD のデータは FIFO を通らず、Data Fabric の port 1 で運ぶ。手順は SAMPLE 3（`sdk/samples/patches` の TEMPORAL FEEDBACK）と同じで、`acrtc_dma(1)` → `acrtc_read_rect` か `acrtc_write_rect` → Fabric のチャネルで port 1 から（へ）words×rows 語（`fab_run`。FORMAT は 16 bit の `FMT_16_16` など）→ `acrtc_dma(0)`。語番地は `ACRTC_WORD_ADDR(x, y)`（1 行 64 語、1 語に 4 画素で左の画素が下位）。語は行ごとに左から並ぶ。DDM の間は BIOS の字の呼出し（`bios_puts`・`bios_put_hex` など）を使わない（BIOS は DWT のデータを FIFO で書く。`bios-abi.md` §06）。DDM＝0 なら、データは `acrtc_get`・`acrtc_send` で読み書きする。
-- Temporal RAM（port 6 に書き、port 7 から読む）に絵を残すのも同じ形で、Fabric の相手を `PORT_TEMPORAL_W`・`PORT_TEMPORAL_R` にし、ポインタと制御は `fc85.h` の `REG_TEMPORAL_*` と `TMP_*` で書く（SAMPLE 3、DR-067）。
+- Temporal RAM（port 6 に書き、port 7 から読む）に絵を残すのも同じ形で、Fabric の相手を `PORT_TEMPORAL_W`・`PORT_TEMPORAL_R` にし、ポインタと制御は `temporal.h`（下）で扱う（SAMPLE 3、DR-067）。Temporal RAM は 8 bit なので、ACRTC の語は `FMT_16_8_HI`・`FMT_16_8_LO` で byte にして書き、`FMT_8_16` と SHIFT で語に戻す。
 
 ```c
 acrtc_dma(1);
@@ -252,6 +252,22 @@ video_hblank(split, VIDEO_TOP_RASTER + 60);
 
 C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの帯、DIRECT の入切、DOC の音。DR-111）。
 
+### Temporal RAM（`temporal.h`）
+
+| 関数 | すること | 返す値 |
+|---|---|---|
+| `tmp_reset(mode)` | 両方のポインタと印を 0 にし、モードを mode にする（`TMP_SYNC`・`TMP_RSYNC`・`TMP_HOLD` の OR） | なし |
+| `tmp_mode(mode)` | モードだけを替える（ポインタと印はそのまま） | なし |
+| `tmp_get_mode()` | 今のモード | ビット |
+| `tmp_seek(wptr, rptr)` | ポインタを置く | なし |
+| `tmp_wptr()`・`tmp_rptr()`・`tmp_dist()` | 書込み・読出しのポインタ、WPTR−RPTR（遅延の byte 数） | 値 |
+| `tmp_flags()` | 印（`TMP_EQUAL`・`TMP_OVERRUN`・`TMP_UNDERRUN`） | ビット |
+| `tmp_clear_flags()` | OVERRUN・UNDERRUN を消す（モードはそのまま） | なし |
+
+- Temporal RAM は 64 KiB の 8 bit の SRAM。ポインタは byte 番地で、Fabric が 1 要素を運ぶたびに 1 進み、64 KiB で回る。遅延は DIST で、読み書きの速さの差は Fabric のチャネルの速さで作る（DR-067）。
+- 追越しは止めず、印だけを立てる：書込みで WPTR＝RPTR になったら OVERRUN、読出しで一致したら UNDERRUN。ずれた履歴を混ぜる表現（Temporal feedback）のために、わざと起こしてもよい。書いていない番地は電源投入時の中身（決まらない）を読む。
+- CTRL の書込みはモードを毎回決め直す（CLEAR は 1 回の動作、OVERRUN・UNDERRUN は W1C）。関数は値を作って 1 回で書く。`TMP_SYNC` は VBlank の始まりで両方のポインタを、`TMP_RSYNC` は読出しのポインタだけを 0 にし（書いた 1 フィールドを毎フィールド繰り返す）、`TMP_HOLD` は書込みを止める（ポインタは進む。フィールドの保持）。
+
 ### DSP（`dsp.h`）
 
 | 関数 | すること | 返す値 |
@@ -283,13 +299,13 @@ C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの�
 
 ## 11　頼ってよいこと・いけないこと
 
-- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音・HBlank で替えた色の区切り・DSP のメールボックスの往復・ACRTC の DMA の読み書きを確かめる）。
+- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音・HBlank で替えた色の区切り・DSP のメールボックスの往復・ACRTC の DMA の読み書き・Temporal RAM の往復を確かめる）。
 - 頼ってはいけない：GCC が出す命令の並びと時間。GCC の版や最適化（`-Os`、`-O2`）で変わる。時間が要るところは `VIDEO_LINE` か `bios_frame` で測るか、アセンブラ（`.S`）で書く（`guarantees.md` §05）。
 - 確かめた GCC：Ubuntu 22.04 の `gcc-m68k-linux-gnu`（GCC 11.4）[V]。ほかの版と `m68k-elf` はまだ試していない。
 
 ## 12　まだないもの
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
-- Temporal RAM のポインタと制御をまとめた関数 [O]。今は `fc85.h` のレジスタと `fabric.h` で書き、サンプル（`sdk/samples/patches`、アセンブラ）を手本にする。パレットと HBlank の割込み・DIRECT、DSP の関数は v0.3 で（§09、DR-109）、ACRTC の矩形の読み書きと DMA は v0.5 で足した（§09、DR-112）。
+- 周辺の関数は §09 でひととおりそろった（パレットと HBlank の割込み・DIRECT、DSP は v0.3、DR-109。ACRTC の矩形の読み書きと DMA は v0.5、DR-112。Temporal RAM は v0.6、DR-113）。Capture RAM（port 8）は機械の側が [O]（仕様書 §05）なので、関数もない。外の入出力（音声の入力、MIDI）はまだ扱わない。
 - C で書いた、DSP・DOC の音楽・ACRTC の描画を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

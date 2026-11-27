@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109。ACRTC の DMA。DR-112）の試験。
+"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109。ACRTC の DMA。DR-112。
+temporal.h。DR-113）の試験。
 `py -m unittest discover -s sdk/c` で走る。
 
 1. GCC があれば、試験の ROM（tests/dev_test.c）を組み、逆アセンブルを見る：周辺の関数は I/O の窓に読み書き
@@ -10,7 +11,8 @@
    点を描かない・AFRCT は両端を含む（HD63484.md）、Fabric の変換（AND MASK → XOR。仕様書 §06）、
    ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。HBlank の割込みで替えた色 0 の
    区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を
-   dspasm --c-array で C の見出しにする）、ACRTC の DMA（DRD で Staging RAM へ、DMOD の EOR で VRAM へ。DR-112）。
+   dspasm --c-array で C の見出しにする）、ACRTC の DMA（DRD で Staging RAM へ、DMOD の EOR で VRAM へ。DR-112）、
+   Temporal RAM の往復とポインタ・印（DR-113）。
 """
 
 import os
@@ -27,7 +29,7 @@ sys.path.insert(0, os.path.join(ROOT, "sdk", "dspasm"))
 import dspasm  # noqa: E402
 import m68kgcc  # noqa: E402
 
-DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c", "video.c", "dsp.c"]
+DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c", "video.c", "dsp.c", "temporal.c"]
 IO = (0x200000, 0x300000)            # I/O の窓（registers.md）
 STAGING = 0x120000
 FRAME_HZ = 59.92
@@ -217,6 +219,7 @@ class TestDeviceHelpers(unittest.TestCase):
             direct = png_rows(emu.screenshot())
             to_phase(6)
             to_phase(7)
+            to_phase(8)
             emu.call("run", frames=2, stop_on_bus_error=True)
             self.assertEqual(peek("bios_exc_vector", 2)[0], 0, "例外で止まった")
             self.assertEqual(peek("done", 2)[0], 0xC0DE, "終わりまで来ていない")
@@ -258,6 +261,17 @@ class TestDeviceHelpers(unittest.TestCase):
                 self.assertEqual([vram[129 * 64 + 16 + i] for i in range(4)] + [vram[134 * 64 + 16 + i]
                                                                                 for i in range(4)],
                                  [0] * 8, "矩形の外は書かない")
+
+            with self.subTest("Temporal RAM"):
+                t = peek("r_tmp", 2, 10)
+                equal, under, hold = 0x10, 0x200, 0x08
+                self.assertEqual(t[:2], [0, equal], "CLEAR で両方のポインタが 0、WPTR＝RPTR")
+                self.assertEqual(t[2:4], [2, 16], "16 byte を書くと DIST は 16（追越しなし）")
+                self.assertEqual(t[4:6], [2, equal | under], "読み戻して RPTR が WPTR に追いつくと UNDERRUN")
+                self.assertEqual(t[6:9], [hold, equal, hold], "モードは保ったまま、印だけを消す")
+                self.assertEqual(t[9], 0, "CLEAR はモードも決め直す")
+                pat = [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xA9, 0xBA, 0xCB, 0xDC, 0xED, 0xFE, 0x0F]
+                self.assertEqual(peek(STAGING + 0x2600, 1, 16), pat, "port 7 から同じ並びで読める")
 
             with self.subTest("Fabric"):
                 f = peek("r_fab", 2, 4)

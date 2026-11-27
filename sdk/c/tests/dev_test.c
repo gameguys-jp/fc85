@@ -3,7 +3,7 @@
  *
  * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）→ 40 フレーム待つ →
  * HBlank の割込みで色 0 を替える（v_phase 4。その後 10 フレームはそのまま）→ 同じことを DIRECT で（v_phase 5）→
- * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を
+ * DSP（v_phase 6）→ ACRTC の DMA（v_phase 7）→ Temporal RAM（v_phase 8）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を
  * 分けて測り、v_phase 4・5 で画面を撮る。
  *
  * echo_dsp.h は試験が tests/echo.dsp から dspasm --c-array で作る。
@@ -18,6 +18,7 @@
 #include "echo_dsp.h"
 #include "fabric.h"
 #include "fc85.h"
+#include "temporal.h"
 #include "video.h"
 
 FC85_CART("C DEVICE TEST   ");
@@ -31,6 +32,7 @@ uint16_t r_doc[8];
 uint16_t r_video[6];
 uint16_t r_dsp[8];
 uint16_t r_dma[8];
+uint16_t r_tmp[10];
 
 /* ラスタの区切り（画面の y＝60 と 120 の辺りのラスタで比べる） */
 #define SPLIT1 (VIDEO_TOP_RASTER + 60U)
@@ -48,6 +50,8 @@ enum {
     STAGE_WORDS = 0x2200,
     STAGE_XOR = 0x2300,
     STAGE_DMA = 0x2400,
+    STAGE_TMP = 0x2500,
+    STAGE_TMP_BACK = 0x2600,
     STAGE_WAVE = 0x3000,
     STAGE_ADPCM = 0x4000,
 };
@@ -287,6 +291,47 @@ static void dma_tests(void)
     v_phase = 7;
 }
 
+/* Temporal RAM（DR-113）：16 byte を port 6 に書き、port 7 から Staging RAM に読み戻す。ポインタ、遅延、印 */
+static void temporal_tests(void)
+{
+    static const uint8_t pat[16] = {0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87,
+                                    0x98, 0xA9, 0xBA, 0xCB, 0xDC, 0xED, 0xFE, 0x0F};
+    fab_to_staging(STAGE_TMP, pat, sizeof pat);
+    tmp_reset(0);
+    r_tmp[0] = (uint16_t)(tmp_wptr() | tmp_rptr());
+    r_tmp[1] = tmp_flags();
+    struct fab_xfer x = {
+        .src = PORT_STAGING,
+        .dst = PORT_TEMPORAL_W,
+        .src_addr = STAGE_TMP,
+        .count = sizeof pat,
+        .src_step = 1,
+        .format = FMT_8_8,
+        .trigger = TRG_NOW,
+    };
+    r_tmp[2] = (uint16_t)fab_run(0, &x);
+    r_tmp[3] = tmp_dist();
+    struct fab_xfer y = {
+        .src = PORT_TEMPORAL_R,
+        .dst = PORT_STAGING,
+        .dst_addr = STAGE_TMP_BACK,
+        .count = sizeof pat,
+        .dst_step = 1,
+        .format = FMT_8_8,
+        .trigger = TRG_NOW,
+    };
+    r_tmp[4] = (uint16_t)fab_run(0, &y);
+    r_tmp[5] = tmp_flags();
+    tmp_mode(TMP_HOLD);
+    r_tmp[6] = tmp_get_mode();
+    tmp_clear_flags();
+    r_tmp[7] = tmp_flags();
+    r_tmp[8] = tmp_get_mode();
+    tmp_reset(0);
+    r_tmp[9] = (uint16_t)(tmp_get_mode() | tmp_wptr() | tmp_rptr());
+    v_phase = 8;
+}
+
 int main(void)
 {
     acrtc_tests();
@@ -297,6 +342,7 @@ int main(void)
     video_tests();
     dsp_tests();
     dma_tests();
+    temporal_tests();
     done = 0xC0DE;
     return 0;
 }

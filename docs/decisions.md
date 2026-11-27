@@ -1121,3 +1121,13 @@
 | 理由 | ユーザーの方針（本機特有の効果を得られること）。Temporal RAM の残像・帰還（SAMPLE 3）は、ACRTC の矩形を Fabric で Temporal RAM と行き来させる形で、C から使うには DDM と RWP と DRD・DWT・DMOD の語の並びを毎回書く必要があった。確かめたこと [V]（エミュレータ）：DRD の 16 語は行ごとに左から $1111・$2222・$3333・$4444、DMOD の EOR で書いた矩形は同じ語で、矩形の外の行は 0。`fab_run` は 2 回とも DONE、DDM は立てた後 $2000、下ろした後 0 |
 | 却下した案 | DRD・DWT と Fabric の転送をまとめた 1 つの関数（`acrtc_dma_copy` など）：転送の相手（Staging RAM、Temporal RAM、DSP）と FORMAT・SHIFT・MASK の組合せが多く、`fab_xfer` を渡すだけになる。DDM を関数の中で自動で立て下ろしする：1 フレームに何回も運ぶとき（SAMPLE 3 は 4〜6 回）に、毎回 ACRTC の終わりを待つことになる |
 | 影響 | sdk/c（acrtc.c、include/acrtc.h、tests/dev_test.c、test_devices.py）、sdk/docs/c.md v0.5（§09 の ACRTC、§11、§12）。あわせて doc.rs の説明を回路の文書にそろえた（U48–U50 の 74LS377 と取る縁。OI-089 (3)。host_abort の時間切れは DR-079 で DTACK。差は OI-104） |
+
+## DR-113　C から Temporal RAM のポインタと制御を使う関数
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。DR-112 で c.md §12 に残した「Temporal RAM のポインタと制御をまとめた関数」を、`sdk/c/include/temporal.h`・`sdk/c/temporal.c` で足す [P]。`tmp_reset(mode)`（CTRL に CLEAR｜mode。両方のポインタと印を 0 にし、モードを決め直す）、`tmp_mode(mode)`（CTRL に mode だけ。W1C のビットに 0 を書くので印は残る）、`tmp_get_mode()`、`tmp_seek(wptr, rptr)`、`tmp_flags()`（EQUAL・OVERRUN・UNDERRUN）、`tmp_clear_flags()`（今のモード｜OVERRUN｜UNDERRUN を書く）と、読むだけの `tmp_wptr`・`tmp_rptr`・`tmp_dist`。CTRL の書込みがモード（SYNC・RSYNC・HOLD）を毎回決め直すこと（エミュレータの console.rs と同じ）を見出しに書き、関数は値を作ってから 1 回で書く。組立ての道具の実行時の関数に `temporal.c` を足す。試験：`dev_test.c` に段を足し、Staging RAM の 16 byte を port 6 に書いて port 7 から読み戻し、ポインタ・DIST・印・モードを確かめる。c.md §09 に表と説明、§12 を「周辺の関数はひととおりそろった」にする |
+| 理由 | ユーザーの方針（本機特有の効果）。Temporal RAM の残像・帰還・遅延は本機の映像と音の表現の柱で、CTRL の書き方（モードを毎回決め直す、W1C）を知らずに書くと、印を消すつもりでモードを落としたり、モードを替えるつもりで印を消したりする。確かめたこと [V]（エミュレータ）：CLEAR の後はポインタ 0 で EQUAL、16 byte を書くと DIST 16 で印なし、読み戻すと EQUAL｜UNDERRUN、HOLD にしてから印を消すと HOLD は残り EQUAL だけ、CLEAR でモードも 0、読み戻した 16 byte は書いた並びと同じ |
+| 却下した案 | 見出しの static inline だけにする：試験の逆アセンブルの見張り（I/O の窓に読み書き一体の命令がないこと）は `sdk/c` の .c だけを見るので、関数にして見張りに入れる。CTRL を読んで書き戻す形の「モードを替える」：読んだ値の OVERRUN・UNDERRUN を書き戻すと W1C で消える |
+| 影響 | sdk/c（temporal.c・include/temporal.h（新規）、tests/dev_test.c、test_devices.py）、sdk/tools/m68kgcc.py、sdk/docs/c.md v0.6（§05、§09、§11、§12）、CLAUDE.md、ひな形の AGENTS.md と main.c |

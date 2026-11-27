@@ -26,7 +26,7 @@ SDK = os.path.normpath(os.path.join(HERE, ".."))
 C_DIR = os.path.join(SDK, "c")
 # 使わない関数はリンクで落ちる（-ffunction-sections と --gc-sections）
 RUNTIME = ["crt0.S", "bios.S", "runtime.S", "runtime64.c", "string.c", "acrtc.c", "fabric.c", "doc.c", "adpcm.c",
-           "video.c", "video_irq.S", "dsp.c"]
+           "video.c", "video_irq.S", "dsp.c", "temporal.c"]
 LINKER_SCRIPT = "fc85.ld"
 CART_MAX = 0x100000
 
