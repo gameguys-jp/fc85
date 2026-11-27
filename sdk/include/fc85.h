@@ -289,11 +289,11 @@
 
 #define ADPCM_CTRL             0x230000UL     /* bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み */
 #define REG_ADPCM_CTRL         FC85_IO16(ADPCM_CTRL)
-#define ADPCM_STATUS           0x230002UL     /* bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄ */
+#define ADPCM_STATUS           0x230002UL     /* bit 6–0 FIFO の byte 数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄ */
 #define REG_ADPCM_STATUS       FC85_IO16(ADPCM_STATUS)
 #define DAC_CTRL               0x230010UL     /* bit 0 DIRECT。DOC の子基板があるときはバスエラー */
 #define REG_DAC_CTRL           FC85_IO16(DAC_CTRL)
-#define DAC_STATUS             0x230012UL     /* bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C） */
+#define DAC_STATUS             0x230012UL     /* bit 6–0 FIFO の語数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C） */
 #define REG_DAC_STATUS         FC85_IO16(DAC_STATUS)
 #define DAC_DATA               0x230014UL     /* DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央） */
 #define REG_DAC_DATA           FC85_IO16(DAC_DATA)

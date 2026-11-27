@@ -687,7 +687,7 @@ addr = 0x230002
 bits = 16
 access = "r"
 w1c = 0x0100
-doc = "bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄"
+doc = "bit 6–0 FIFO の byte 数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄"
 
 [[block.reg]]
 name = "DAC_CTRL"
@@ -704,7 +704,7 @@ bits = 16
 access = "r"
 w1c = 0x0100
 when = "no_doc"
-doc = "bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C）"
+doc = "bit 6–0 FIFO の語数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）"
 
 [[block.reg]]
 name = "DAC_DATA"

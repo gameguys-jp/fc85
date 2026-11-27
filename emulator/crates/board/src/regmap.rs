@@ -581,11 +581,11 @@ pub const DSP_PROGRAM_WORDS: u32 = 4096;
 
 /// bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み
 pub const ADPCM_CTRL: u32 = 0x230000;
-/// bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄
+/// bit 6–0 FIFO の byte 数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄
 pub const ADPCM_STATUS: u32 = 0x230002;
 /// bit 0 DIRECT。DOC の子基板があるときはバスエラー
 pub const DAC_CTRL: u32 = 0x230010;
-/// bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C）
+/// bit 6–0 FIFO の語数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）
 pub const DAC_STATUS: u32 = 0x230012;
 /// DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央）
 pub const DAC_DATA: u32 = 0x230014;

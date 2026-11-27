@@ -261,9 +261,9 @@ DSP_PROGRAM_WORDS EQU   4096
 ; ------------------------------------------------------------------ ADPCM bridge と本体 DAC（§05、DR-017、DR-019、DR-053）[P]
 
 ADPCM_CTRL      EQU     $230000         ; bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み
-ADPCM_STATUS    EQU     $230002         ; bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄
+ADPCM_STATUS    EQU     $230002         ; bit 6–0 FIFO の byte 数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄
 DAC_CTRL        EQU     $230010         ; bit 0 DIRECT。DOC の子基板があるときはバスエラー
-DAC_STATUS      EQU     $230012         ; bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C）
+DAC_STATUS      EQU     $230012         ; bit 6–0 FIFO の語数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）
 DAC_DATA        EQU     $230014         ; DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央）
 
 ; 本体 DAC の CTRL と DATA

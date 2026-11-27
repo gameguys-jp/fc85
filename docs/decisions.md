@@ -1171,3 +1171,23 @@
 | 理由 | ROM を書く人とエージェントが bios.inc・bios.h の注釈を読んで、内部の変数に頼ったり、DOC の割込みの数え方を見落としたりしないため。測った値（[V]、エミュレータ）：`load`（`doc` false）の直後から 3 フレームの音で、最初の 139 標本が −16384（デジタルの和）、LINE OUT でも 140 標本が −4000 より下 |
 | 却下した案 | 内部の変数を bios.inc・bios.h から消す：BIOS 自身（bios.s）が bios.inc の名前を使い、bios.h は試験が bios.inc と突き合わせるので、名前は残して印を付ける。偏りを BIOS で短くする：BIOS の起動の順（§02）を変えることになり、OI-061（ラッチの回路）の決め方による |
 | 影響 | sdk/include/bios.inc、sdk/c/include/bios.h（注釈だけ。番地と組み立てた ROM は変わらない）、sdk/docs/bios-abi.md v0.3（§06、§11）、docs/impl/emulator.md、OI-099 |
+
+## DR-118　ADPCM と本体 DAC の STATUS の残量は bit 6–0（OI-095）
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。ADPCM_STATUS と DAC_STATUS の残量を、DR-053 のとおり bit 6–0 とし、bit 7 は 0 と書く [P]。ADPCM は FIFO の byte 数、本体 DAC は FIFO の語数で、どちらも 0〜64。registers.toml の注釈（「bit 7–0」）を直し、生成物（fc85.inc、fc85.h、regmap.rs、registers.md）を作り直す。値（`ADPCM_ST_COUNT`＝$007F など）と機械の動きは変えない |
+| 理由 | どちらの FIFO も 67401（64 語）で、残量は 64（$40）が最大なので 7 bit に入る。エミュレータ（console.rs の ADPCM bridge）も FIFO の数をそのまま bit 6–0 に出し、bit 7 は立たない [V]。DR-100 で表へ写したとき注釈の「bit 7–0」が残り、DR-053 と食い違っていた |
+| 却下した案 | bit 7 に意味（満杯など）を持たせる：満杯は残量 64 で分かり、緩衝器のビットを増やす理由がない |
+| 影響 | docs/spec/registers.toml と生成物（sdk/include/fc85.inc・fc85.h、emulator/crates/board/src/regmap.rs、docs/spec/registers.md）、OI-095 |
+
+## DR-119　実装の文書にだけあったソフトから見える動きを仕様書に写す（OI-101）
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。OI-101 の 3 つを、今のエミュレータの動きのまま仕様書に約束として写す。(1) §06：Data Fabric の START は STATUS の DONE・ERROR・MISS を変えない（W1C でだけ消える）[P]。(2) §07 のソフトの約束：ACRTC の書込みの FIFO は 8 語なので、SR の WFE を見たら 8 語を続けて書ける [D]（台帳 HD63484.md の FIFO の項、U85 p.7・p.14・p.62）。(3) §05：ADPCM の半分空きの割込みは、許可していれば FIFO の残りが 32 byte 以下の間ずっと出るレベルで、33 byte 以上にするか許可を落とすと消える [P]。機械とエミュレータの動きは変えない |
+| 理由 | BIOS（DR-094 (5) の 8 語の書込み）とサンプル・C の関数（`fab_run` が START の前に印を消す）が頼っている動きが、実装の文書（impl/emulator.md）にしかなかった。ROM を書く人は仕様書と保証の手引きを読むので、頼ってよいものは仕様書に書く。(1) は回路のとおりで、fabric.md の CHS の式（`/DONEN := /DONEN*/WDQ + …`）は、DONE を保つ項を W1C の書込み（WDQ）でだけ外し、START の要求（STRQ）は入らない [P]。(3) は 67401 の半分の印（HF）と同じくレベルで、割込みを受けた処理が書き足せば自然に消える。(2) は IC の仕様そのもの [D] |
+| 却下した案 | 約束しない（実装の文書だけに残す）：BIOS とサンプルがすでに頼っていて、エミュレータの試験（`adpcm_half_empty_irq_is_a_level` など）も確かめている。(3) を「半分空いた瞬間の 1 回」の縁にする：受けた処理が FIFO を満たしきれないと、次の割込みが来ずに止まる |
+| 影響 | docs/spec/hardware.md（§05、§06、§07）、docs/impl/emulator.md §03、OI-101 |

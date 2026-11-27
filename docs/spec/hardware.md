@@ -105,7 +105,7 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 200000–200003 | ACRTC host | +0 AR(write)/STATUS(read)、+2 DATA |
 | 210000–2101FF | DOC registers | native reg n → base+2n、上位byte。子基板がないときはバスエラー [P]（DR-019） |
 | 220000–22001F | DSP bridge | mailbox / FIFO / control / status。+0 CTRL（RESET、BIOSEL、IRQ_EN）、+2 STATUS、+4 MAILBOX、+6 RESPONSE [P]（DR-053）。CTRLにRESET、BIOSEL[1:0] [P]（DR-029）。BIOSELの拍は、拍の立上りで立ちDSPが状態ポートを読むと消えるラッチ [P]（DR-049）。STATUSにUNDERRUN／OVERRUN（W1C）[P]（DR-017） |
-| 230000–23001F | ADPCM bridge | FIFO / clock / reset。+0 CTRL（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）、+2 STATUS（残量、UNDERRUN、半分空き）[P]（DR-053）。STATUSのbit 10はV̄C̄K̄のピンのレベル。RESETを外すのは、V̄C̄K̄の立下りから16 µs（取込み）より後、次の立上りの前にする（MSM5205のRESETはV̄C̄K̄に同期するので、立上りと取込みの間に外すとRESETの前のニブルが1つ復号される）[P]（DR-096）。FIFOの残量、半分空きの割込み、UNDERRUN（W1C）[P]（DR-017）。230010–23001Fは本体DAC（子基板がないとき）のCTRL／STATUS／DATA [P]（DR-019）。CTRLのDIRECTでCPUがDATAを直接DACに出す [P]（DR-053） |
+| 230000–23001F | ADPCM bridge | FIFO / clock / reset。+0 CTRL（RESET、S1、S2、ニブルの順、置換しない、半分空きの割込み）、+2 STATUS（残量、UNDERRUN、半分空き）[P]（DR-053）。STATUSのbit 10はV̄C̄K̄のピンのレベル。RESETを外すのは、V̄C̄K̄の立下りから16 µs（取込み）より後、次の立上りの前にする（MSM5205のRESETはV̄C̄K̄に同期するので、立上りと取込みの間に外すとRESETの前のニブルが1つ復号される）[P]（DR-096）。FIFOの残量、半分空きの割込み、UNDERRUN（W1C）[P]（DR-017）。半分空きの割込みは、CTRLで許可していれば、FIFOの残りが32 byte以下の間ずっと出るレベルで、書き足して33 byte以上にするか許可を落とすと消える [P]（DR-119）。230010–23001Fは本体DAC（子基板がないとき）のCTRL／STATUS／DATA [P]（DR-019）。CTRLのDIRECTでCPUがDATAを直接DACに出す [P]（DR-053） |
 | 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態。+0 WPTR、+2 RPTR、+4 CTRL（ポインタの初期化、VBlankでの同期の初期化、読出しだけの同期、書込みの保持、ポインタの一致と追越しの印）、+6 DIST。240020–はCapture [O] [P]（DR-053、DR-067） |
 | 250000–250FFF | Data Fabric | DMA・IRQ・経路・bend |
 | 260000–2600FF | Controller / MIDI / matrix | 入力・ACIA・クロック・マトリクス |
@@ -172,7 +172,7 @@ ACRTCとのDMAは1語ごとのサイクルスチールとし、各語の間でCP
 | 14 / 16 | MASK / XOR | データ変換（FORMATとSHIFT）の後に AND → XOR（16-bit）。初期値 FFFF / 0000（リセットでは変わらない。電源投入後にBIOSが書く。エミュレータは電源投入時にこの値にする）[P]（DR-046） |
 | 18 | SHIFT | signed 5-bit（-16〜15）、論理シフト。正は左、負は右で、空いたbitは0。FORMAT 4は上位byteを下位へ移してからシフトする。出力幅で切捨て [P]（DR-046） |
 | 1A | TRIGGER | 0=即時、1=VBlank、2=HBlank、3=audio tick（音声クロック8 MHz÷N）、4=external trigger（拡張端子のEXTRIG、§09と共通）、5=ADPCM V̄C̄K̄。いずれも2段FFで同期化し、立上りで1件だけ保留する。保留中に来た分は捨て、取りこぼしをSTATUSに記録 [P]（DR-018）。bit 2–0が発生源、bit 3がEACH：0はトリガ1回で1ブロック（COUNT個）、1はトリガ1回で1要素。bit 4がLOOP、bit 5がIRQ_EN。STARTで保留を消す。発生源6・7は予約で、トリガは来ない [P]（DR-046） |
-| 1C / 1E | CTRL / STATUS | CTRL（書込み専用）：bit 0 START、bit 1 STOP（どちらも1を書くと実行。同時ならSTOP。動作中のSTARTは無視）。LOOPとIRQ_ENはTRIGGERのbit 4・5。STATUS：bit 0 BUSY、bit 1 DONE、bit 2 STALL（読出し元が空か書込み先が満杯で待つ）、bit 3 ERROR、bit 4 MISS（トリガの取りこぼし）、bit 5 WAIT（トリガ待ち）。DONE・ERROR・MISSはW1C。割込みはIRQ_EN∧(DONE∨ERROR)で、2チャネルのORをレベル3へ [P]（DR-046、DR-028）。仕様書v0.2のCTRLにあったLOOP・IRQ_ENをTRIGGERへ移した（DR-046） |
+| 1C / 1E | CTRL / STATUS | CTRL（書込み専用）：bit 0 START、bit 1 STOP（どちらも1を書くと実行。同時ならSTOP。動作中のSTARTは無視）。LOOPとIRQ_ENはTRIGGERのbit 4・5。STATUS：bit 0 BUSY、bit 1 DONE、bit 2 STALL（読出し元が空か書込み先が満杯で待つ）、bit 3 ERROR、bit 4 MISS（トリガの取りこぼし）、bit 5 WAIT（トリガ待ち）。DONE・ERROR・MISSはW1C。STARTはDONE・ERROR・MISSを変えない（W1Cでだけ消える。前の転送の印はSTARTの前に消す）[P]（DR-119）。割込みはIRQ_EN∧(DONE∨ERROR)で、2チャネルのORをレベル3へ [P]（DR-046、DR-028）。仕様書v0.2のCTRLにあったLOOP・IRQ_ENをTRIGGERへ移した（DR-046） |
 | 20–2A | 予約 | 後続版の2D転送・アドレス変換等 |
 
 0x250100 PORT_RESET（書込み専用。bit nに1を書くとport nのFIFO・ポインタを初期化）、0x250102 AUDIO_N（音声クロックのN、12-bit [P]（DR-018））、0x250104 MODULES（読出し専用。実装されているモジュール：bit 2 DOC子基板、bit 8 映像入力、bit 10 音声入力、bit 11〜15 拡張）[P]（DR-019、DR-046）。チャネル2・3の窓、各チャネルの0x20〜0x3E、0x250106以降はバスエラー [P]（DR-046）。実装されていないポートをSTARTするとERROR [P]（DR-019）。初期のベンディングは8/16-bitデータ変換、RAM低位アドレスマスク・XOR、逐次ポインタリセット。アドレス変換はエミュレータの拡張設定として開始し、実機レジスタ割当は次版で定義する。
@@ -251,6 +251,7 @@ ACRTCの機能のうち、文字画面とブロックカーソル（文字発生
 
 ソフトの約束 [P]（DR-096）：
 - ACRTCのFIFOは、SRのWFR（書ける）・RFR（読める）を見てから読み書きする。満杯のFIFOへの書込みと空のFIFOからの読出しの結果は保証しない（エミュレータは書込みを捨て、読出しは0を返す）。68000からACRTCへのアクセスの待ち（2〜4ウェイト）の数に頼らない。実チップの待ちの増え方と満杯・空のときの動きは確かめていない [V]（OI-047）。
+- 書込みのFIFOは8語（16バイト）なので、WFE（空）を見たら8語を続けて書ける [D]（台帳 HD63484.md のFIFOの項）。BIOSはこの書き方をする [P]（DR-094、DR-119）。
 - WSS＝0のウィンドウの絵は、DISP2より1表示サイクル（4ドット）右に出て、ウィンドウの右の背景の1語が隠れる [V]。DISP2にそろえるときは、HWSを1小さくし、ウィンドウの左の1語を捨てる。基本画面で横のズームを使うと、同じラスタのウィンドウも横に伸びる（HZはラスタ全体の属性）[P]（DR-069）。
 
 HD63484の1984年資料にある直線描画速度は8 MHz時に1画素0.5 µs級。本機の2CLK 5.369 MHzでは比例して約0.75 µsになる [D]（[2]の値からの計算、[15] §3.3）。全画面描画を60 Hzで更新する性能は保証されない。ローカルコピー、部分更新、低頻度の効果を活用する [2]。

@@ -378,9 +378,9 @@
 | 名前 | 番地 | 幅 | アクセス | W1C | 読むと | 条件 | 内容 |
 |---|---|---|---|---|---|---|---|
 | `ADPCM_CTRL` | 0x230000 | 16 | rw |  |  |  | bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み |
-| `ADPCM_STATUS` | 0x230002 | 16 | r | 0x0100 |  |  | bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄ |
+| `ADPCM_STATUS` | 0x230002 | 16 | r | 0x0100 |  |  | bit 6–0 FIFO の byte 数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄ |
 | `DAC_CTRL` | 0x230010 | 16 | rw |  |  | no_doc | bit 0 DIRECT。DOC の子基板があるときはバスエラー |
-| `DAC_STATUS` | 0x230012 | 16 | r | 0x0100 |  | no_doc | bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C） |
+| `DAC_STATUS` | 0x230012 | 16 | r | 0x0100 |  | no_doc | bit 6–0 FIFO の語数（0〜64）、bit 7 は 0、bit 8 UNDERRUN（W1C） |
 | `DAC_DATA` | 0x230014 | 16 | rw |  |  | no_doc | DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央） |
 
 ### 本体 DAC の CTRL と DATA
