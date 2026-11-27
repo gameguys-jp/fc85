@@ -1,6 +1,6 @@
 # C で ROM を書く
 
-**v0.3**  
+**v0.4**  
 2026年11月27日
 
 > fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
@@ -235,6 +235,8 @@ bios_vbl_hook = top;                              /* VBlank で青に戻す */
 video_hblank(split, VIDEO_TOP_RASTER + 60);
 ```
 
+C で書いた手本は SAMPLE 7（`sdk/samples/raster`。8 ラスタごとの帯、DIRECT の入切、DOC の音。DR-111）。
+
 ### DSP（`dsp.h`）
 
 | 関数 | すること | 返す値 |
@@ -274,5 +276,5 @@ video_hblank(split, VIDEO_TOP_RASTER + 60);
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
 - Temporal RAM、ACRTC の DMA（port 1）での描画を C から使う関数 [O]。今は `fc85.h` のレジスタと `fabric.h` で書き、サンプル（`sdk/samples/patches`、アセンブラ）を手本にする。パレットと HBlank の割込み・DIRECT、DSP の関数は v0.3 で足した（§09、DR-109）。
-- C で書いたサンプル [O]。
+- C で書いた、DSP・DOC の音楽・ACRTC の描画を見せるサンプル [O]。C で書いたサンプルは、v0.4 で HBlank のラスタのパレットと DIRECT の SAMPLE 7（`sdk/samples/raster`、DR-111）を足した。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

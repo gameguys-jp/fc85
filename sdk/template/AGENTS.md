@@ -1,6 +1,6 @@
 # ROM の作業の手引き（エージェントと人のため）
 
-**v0.4**  
+**v0.5**  
 2026年11月27日
 
 > このフォルダは fc85 のカートリッジ（ROM）を 1 本作るところ。`sdk/tools/new_rom.py` がひな形（`sdk/template/`）から作った。ここに書くのは作り方・試し方・守ることの要点で、正は SDK の文書（§06）。エージェント（Claude Code、ほかの道具）も人も、この順で作業する。
@@ -86,7 +86,7 @@ cd emulator && cargo build --release -p fc85-api -p fc85-host
 | `sdk/docs/emulator-api.md` | エミュレータの窓口の手順 |
 | `sdk/include/fc85.h`・`fc85.inc` | 番地とビットの名前（`docs/spec/registers.toml` から生成） |
 | `docs/spec/hardware.md` | 機械の仕様（§05 メモリ、§06 Data Fabric、§07 クロックと映像、§11 ベンド） |
-| `sdk/samples/*/README.md` | サンプル：game（SAMPLE 1：ACRTC の XOR の動く物、ADPCM の効果音、DOC か本体 DAC の音楽）、dsp（SAMPLE 2：DSP で音を加工）、patches（SAMPLE 3：実験パッチ）、video（SAMPLE 4：ACRTC の分割画面・ウィンドウ・ズーム・スクロール）、bend（SAMPLE 5：ベンド点の試験信号）、showcase（SAMPLE 6：ラスタのパレット、DSP と ACRTC の線画、ソフトのスプライト、漢字、描画の予算） |
+| `sdk/samples/*/README.md` | サンプル：game（SAMPLE 1：ACRTC の XOR の動く物、ADPCM の効果音、DOC か本体 DAC の音楽）、dsp（SAMPLE 2：DSP で音を加工）、patches（SAMPLE 3：実験パッチ）、video（SAMPLE 4：ACRTC の分割画面・ウィンドウ・ズーム・スクロール）、bend（SAMPLE 5：ベンド点の試験信号）、showcase（SAMPLE 6：ラスタのパレット、DSP と ACRTC の線画、ソフトのスプライト、漢字、描画の予算）、raster（SAMPLE 7：C で書いた HBlank のラスタのパレットと DIRECT。C の ROM の手本） |
 
 ## 07　しないこと
 

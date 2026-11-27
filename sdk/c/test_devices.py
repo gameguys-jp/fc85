@@ -9,7 +9,8 @@
    音を確かめる。期待値は台帳と仕様書から：ACRTC の画素の並び（1 語に 4 画素、左が下位）と、ALINE は終わりの
    点を描かない・AFRCT は両端を含む（HD63484.md）、Fabric の変換（AND MASK → XOR。仕様書 §06）、
    ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。HBlank の割込みで替えた色 0 の
-   区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を dspasm --c-array で C の見出しにする）。
+   区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を
+   dspasm --c-array で C の見出しにする）。
 """
 
 import os

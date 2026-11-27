@@ -57,6 +57,7 @@ py sdk/samples/patches/build.py
 py sdk/samples/video/build.py
 py sdk/samples/bend/build.py
 py sdk/samples/showcase/build.py
+py sdk/samples/raster/build.py      # C のサンプル。68000 の GCC が要る（sdk/docs/c.md §02）
 cd emulator
 cargo run --release -p fc85-host                                              # Boot ROM の内蔵のデモ
 cargo run --release -p fc85-host -- --cart ../sdk/samples/game/build/game.bin  # サンプルのカートリッジ
@@ -65,6 +66,7 @@ cargo run --release -p fc85-host -- --cart ../sdk/samples/patches/build/patches.
 cargo run --release -p fc85-host -- --cart ../sdk/samples/video/build/video.bin      # ACRTC の表示（分割画面・ウィンドウ・ズーム）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/bend/build/bend.bin        # ベンド点を試す試験信号（F2・F3 で Bend）
 cargo run --release -p fc85-host -- --cart ../sdk/samples/showcase/build/showcase.bin  # 映像と描画の予算（ラスタのパレット・DSP の立体・玉）
+cargo run --release -p fc85-host -- --cart ../sdk/samples/raster/build/raster.bin      # C で書いたラスタの帯（A で DIRECT、B で音）
 ```
 
 | キー | 働き |
