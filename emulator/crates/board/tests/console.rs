@@ -448,6 +448,56 @@ fn adpcm_and_dac_registers() {
     assert_eq!(c.rd(0x23_0010, Size::Word), BERR);
 }
 
+/// ADPCM の STATUS の bit 10 は V̄C̄K̄ のピンのレベル（DR-096、OI-064）。V̄C̄K̄ の立下りを見てから 16 µs
+/// （取込みは立下りの 6/384 kHz＝15.6 µs 後。台帳 MSM5205.md §3.2）より後、立上りの前に RESET を外すと、
+/// 最初の取込みは FIFO の最初のニブルになる。立上りの直後に外すと、RESET の間に置かれなかった D3〜D0 の
+/// 古いニブルが先に 1 つ復号される（OI-064 の不具合）。
+#[test]
+fn adpcm_status_shows_vck_so_software_can_release_reset_after_the_capture() {
+    fn first_captures(after_fall: bool) -> (Vec<u8>, Vec<u64>) {
+        let mut c = Cpu::new();
+        for b in [0x53u16, 0x9A] {
+            c.sys.ports.adpcm.shift_in(b);
+        }
+        let vck = |c: &mut Cpu| c.rw(0x23_0002) & 0x400 != 0;
+        // after_fall なら H → L（立下り）、でなければ L → H（立上り）を待つ
+        let (mut prev, mut edges) = (vck(&mut c), Vec::new());
+        loop {
+            let now = vck(&mut c);
+            if now != prev {
+                edges.push(c.clock);
+                if now != after_fall && edges.len() >= 3 {
+                    break;
+                }
+            }
+            prev = now;
+        }
+        if after_fall {
+            c.idle(160); // 20 µs
+        }
+        c.ww(0x23_0000, 0x0002); // RESET＝0、S1＝1（8 kHz）
+        let n0 = c.sys.ports.adpcm_port.captures;
+        let mut got = Vec::new();
+        while got.len() < 3 {
+            c.idle(40);
+            let p = &c.sys.ports.adpcm_port;
+            if p.captures > n0 + got.len() as u64 {
+                got.push(p.last_nibble);
+            }
+        }
+        (got, edges)
+    }
+    let (good, edges) = first_captures(true);
+    assert_eq!(good, vec![5, 3, 9]);
+    // V̄C̄K̄ は 8 kHz（68000 の 1,000 クロック）で、半周期ごとに反転する（デューティ 50%。台帳 §5 [V]）
+    for w in edges.windows(2) {
+        assert!((480..=520).contains(&(w[1] - w[0])), "{edges:?}");
+    }
+    let (bad, _) = first_captures(false);
+    assert_ne!(bad[0], 5);
+    assert_eq!(bad[1..], [5, 3]);
+}
+
 #[test]
 fn temporal_pointers() {
     let mut c = Cpu::new();

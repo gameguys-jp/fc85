@@ -237,7 +237,7 @@ DSP_PROGRAM_WORDS EQU   4096
 ; ------------------------------------------------------------------ ADPCM bridge と本体 DAC（DR-017、DR-019、DR-053）
 
 ADPCM_CTRL      EQU     $230000         ; bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み
-ADPCM_STATUS    EQU     $230002         ; bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き
+ADPCM_STATUS    EQU     $230002         ; bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄
 DAC_CTRL        EQU     $230010         ; bit 0 DIRECT。DOC の子基板があるときはバスエラー
 DAC_STATUS      EQU     $230012         ; bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C）
 DAC_DATA        EQU     $230014         ; DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央）
@@ -258,6 +258,8 @@ ADPCM_CTL_4K    EQU     $0000
 ADPCM_ST_COUNT  EQU     $007F           ; FIFO の byte 数
 ADPCM_ST_UNDERRUN EQU   $0100           ; W1C
 ADPCM_ST_HALF   EQU     $0200           ; 残りが 32 byte 以下
+ADPCM_ST_VCK    EQU     $0400           ; V̄C̄K̄ のピンのレベル（DR-096）。RESET を外すのは、1→0 を見てから
+                                        ; 16 µs より後、次の 0→1 の前（取込みと立上りの間。OI-064）
 
 ; ------------------------------------------------------------------ Temporal（DR-053）
 

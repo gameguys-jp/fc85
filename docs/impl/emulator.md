@@ -374,6 +374,7 @@
 | VPA のサイクル（DR-028、台帳 HD68000.md §2.5） | E は 10 クロックの周期で回り、E↑ を 10k＋5.5 クロックの立下りに置く [P]。1 サイクル 7＋d クロック（d＝3〜12） | E の位相は資料で決まらない | ACIA と IACK は 10〜19 クロック |
 | バスの時間切れ（DR-052、DR-079） | DTACK の認識が S0 から 65.5 クロックの立下り以降ならバスエラーで、サイクルは 67 クロック。DOC・ACRTC・パレットの窓は同じ時刻に DTACK で終わり、読出しは $FFFF（`BRIDGE_TIMEOUT_DATA`）。`BusLog::bridge_timeouts` で数える。DOC のブリッジは時間切れの後のスロットの頭で `host_abort` を呼ぶ | AS↓ からの 64 個の立上り | DOC の CLK を 2 MHz にすると 64 通りのうち 3 通り、1 MHz ではすべてが時間切れになる |
 | 割込み（DR-028） | 要因をレベルにまとめ、いちばん高いレベルを IPL にする。応答はすべてオートベクタ。レベル 6：映像の割込みと ACRTC の IRQ、5：ACIA、4：DOC、3：Fabric と ADPCM の半分空き、2：DSP の応答（IRQ_EN）、1：入力 | DR-028 (4) | 割込みを受けるのは CPU の命令の境目。IPL の同期化の遅れは扱わない |
+| ADPCM の STATUS の V̄C̄K̄（DR-096） | bit 10 に V̄C̄K̄ のピンのレベルを出す。基板は S0 を含むスロットの終わりまで進んでいるので、そのスロットの終わりのレベル | 読出しの緩衝器の空いたビット [P] | 縁は最大 1 スロット（250 ns）早く見える。取込みから立上りまで約 47 µs あるので、RESET を外す手順には効かない |
 | Temporal RAM（DR-053、DR-067） | 電源投入時の中身は決まった擬似乱数の模様（16 bit の LFSR）[P]。ポインタは止めず、一致したら OVERRUN・UNDERRUN の印だけを立てる。HOLD は /WE を止めてポインタを進める。RSYNC は VBlank の始まりで RPTR だけを 0 に | DR-067 | 書いていない番地の値に頼るソフトは実機で違う [V] |
 | RESET 命令（DR-052） | `peripheral_reset`：ACRTC、DSP・ADPCM・本体 DAC の CTRL、映像と入力の割込みの許可、Temporal の CTRL、PAL_CTRL、DOC の RESET | DR-052 (3) | Fabric と ACIA は変えない [V] |
 | 音声の出力（DR-054） | 48 kHz の標本ごとに、DOC のチャネルの平均（偶数を L、奇数を R）、子基板がないときは本体 DAC、ADPCM を半分ずつ足す。`audio_out` にためてホストが取り出す | ビット列の照合（`verify_wav.py` など）のために、アナログの段と別に残す | ホストの `--audio-tap digital` で聞く。LPF・DC 除去はなく、音量の比は仮 [V] |
@@ -759,6 +760,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 優先 | `levels_are_prioritized_by_the_74ls148` | レベル 6 と 1 が同時ならレベル 6 | 合格 |
 | DSP bridge | `dsp_bridge_registers` | CTRL の初期値、RESET の後の PRGBUS とプログラム窓、BIOSEL と IRQ_EN、COMMAND | 合格 |
 | ADPCM・本体 DAC | `adpcm_and_dac_registers` | CTRL の初期値、半分空きの割込み（レベル 3）、本体 DAC の DIRECT、子基板があるときの窓 | 合格 |
+| ADPCM の RESET の解除（DR-096、OI-064） | `adpcm_status_shows_vck_so_software_can_release_reset_after_the_capture` | STATUS の bit 10 が V̄C̄K̄ のレベルで、半周期（68000 の 500 クロック）ごとに反転する。立下りの 20 µs 後に RESET を外すと、最初の取込みは FIFO の最初のニブル。立上りの直後に外すと、古いニブルが 1 つ先に復号される | 合格 |
 | Temporal | `temporal_pointers` | ポインタの読み書き、DIST、初期化。Capture RAM の窓はバスエラー | 合格 |
 | Temporal の細部（DR-067） | `temporal_ring_flags_hold_and_repeat` | 書いていない番地は電源投入時の中身、追越しの印（OVERRUN・UNDERRUN）と W1C、HOLD、64 KiB で回る、VBlank での読出しだけの同期と両方の同期 | 合格 |
 | 時間切れ | `doc_bus_timeout_counts_from_as` | DOC の CLK を 1 MHz にすると、DOC のアクセスはすべて時間切れで、DTACK と $FFFF で終わる（DR-079）。バスエラーは増えない | 合格 |

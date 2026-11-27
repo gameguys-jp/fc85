@@ -659,8 +659,13 @@ impl System {
                 ok(v, 0)
             }
             (0x02, None) => {
+                // bit 10 は V̄C̄K̄ のピンのレベル（読出しの緩衝器の空いたビット。DR-096、OI-064）。基板はスロットの
+                // 終わりまで進んでいるので、レベルはそのスロットの終わりの値 [P]
                 let n = p.adpcm.len() as u16;
-                let v = n | (u16::from(p.adpcm_port.underrun) << 8) | (u16::from(n <= 32) << 9);
+                let v = n
+                    | (u16::from(p.adpcm_port.underrun) << 8)
+                    | (u16::from(n <= 32) << 9)
+                    | (u16::from(p.adpcm_port.vck()) << 10);
                 ok(v, 0)
             }
             (0x02, Some(v)) => {
