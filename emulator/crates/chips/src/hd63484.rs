@@ -20,7 +20,8 @@
 //!   DACK は 2CLK の立上りで取り込み、そのサイクルを T1、次の立上りを T3 として DTACK を出し、DACK＝H を
 //!   取り込んだ立上り（Tn）で FIFO との受け渡しを終える（U85 p.49–50、p.320–321）。ピンの遅れ（tDRQD・
 //!   tDDTZL など）は扱わず、立上りで変わるものとする。遅れは board 層のつなぎの模型が足す。
-//!   コマンドの DMA（CDM）は作っていない。
+//!   コマンドの DMA（CDM＝1）は、同じピンで書込み FIFO にコマンドの語を受ける。DRC によらず 1 語ずつの
+//!   サイクルスチールで、DONE は出さない。DONE の入力か CDM＝0 で終わる（U85 p.66。台帳 §4.7）。
 //! - 資料で決まらない動作は、`docs/impl/emulator.md` §03 にどう扱ったかを書く。
 
 use std::collections::{HashMap, VecDeque};
@@ -768,16 +769,20 @@ impl Hd63484 {
 
     /// DREQ が L（要求）か。サイクルスチール（DRC＝1）では 1 語ごとに、T1 で H に戻し、Tn で次を出す。
     /// バースト（DRC＝0）では、FIFO に余地があり語が残る間 L のまま [V]（1 要求で最大 8 語の上限は扱わない）。
+    /// コマンドの DMA（CDM＝1）は、DRC によらずサイクルスチールで、書込み FIFO に余地がある間に出す。語の数は
+    /// 決めない（U85 p.66 の注。p.50 の「バーストのみ」とは食い違う。台帳 §4.7 [V]）。
     pub fn dreq(&self) -> bool {
         let d = &self.dma;
-        if d.total == 0
-            || self.ccr & (CCR_ABT | CCR_PSE | CCR_CDM) != 0
-            || self.ccr & CCR_DDM == 0
-            || self.omr & OMR_STR == 0
-        {
+        if self.ccr & (CCR_ABT | CCR_PSE) != 0 || self.omr & OMR_STR == 0 {
             return false;
         }
         let busy = d.cycle != DmaCycle::Idle;
+        if self.ccr & CCR_CDM != 0 {
+            return !busy && self.wfifo.len() < FIFO_WORDS;
+        }
+        if d.total == 0 || self.ccr & CCR_DDM == 0 {
+            return false;
+        }
         if busy && self.ccr & CCR_DRC != 0 {
             return false;
         }
@@ -797,9 +802,16 @@ impl Hd63484 {
         self.dma.cycle == DmaCycle::Ack
     }
 
-    /// DONE が L か（データの DMA の最後の語のサイクル。T1 から Tn まで）。
+    /// DONE が L か（データの DMA の最後の語のサイクル。T1 から Tn まで）。コマンドの DMA では出さない。
     pub fn done(&self) -> bool {
         self.dma.cycle != DmaCycle::Idle && self.dma.last
+    }
+
+    /// DONE の入力（L のパルス）。コマンドの DMA では CDM を 0 にして終わる。データの DMA では DONE は出力で、
+    /// 外から終わらせられないので何もしない（U85 p.50、p.66）。パルスの幅（DACK＝L の間に 2CLK 2 周期以上、
+    /// U85 p.315 No.43）は呼ぶ側が守る。
+    pub fn done_input(&mut self) {
+        self.ccr &= !CCR_CDM;
     }
 
     /// DMA の読出しでデータバスに出す語（読出し FIFO の先頭。空なら 0）。
@@ -814,13 +826,15 @@ impl Hd63484 {
 
     /// 2CLK の立上りの DMA のバスのサイクル。
     fn dma_edge(&mut self) {
+        // コマンドの DMA の語は、データの DMA の語の数に入れず、DONE も出さない
+        let cdm = self.ccr & CCR_CDM != 0;
         let d = &mut self.dma;
         match d.cycle {
             DmaCycle::Idle => {
                 if d.dack {
                     d.cycle = DmaCycle::T1;
                     d.cycle_write = d.to_acrtc;
-                    d.last = d.total > 0 && d.count + 1 == d.total;
+                    d.last = !cdm && d.total > 0 && d.count + 1 == d.total;
                 }
             }
             DmaCycle::T1 => d.cycle = DmaCycle::Ack,
@@ -829,7 +843,7 @@ impl Hd63484 {
                     // Tn：書込みは FIFO に入れ、読出しは FIFO から出す
                     d.cycle = DmaCycle::Idle;
                     d.last = false;
-                    if d.count < d.total {
+                    if !cdm && d.count < d.total {
                         d.count += 1;
                     }
                     if d.cycle_write {

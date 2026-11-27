@@ -1577,6 +1577,88 @@ fn dma_state_survives_a_snapshot() {
     assert_eq!(b.dma_progress(), (0, 2));
 }
 
+// ---- コマンドの DMA（CDM＝1。U85 p.66、台帳 §4.7） ----
+
+/// CDM＝1、DRC＝0、GBM＝010。DRC でバーストを選んでも、コマンドの DMA はサイクルスチール（U85 p.66 の注 [V]）。
+const CCR_CMD_DMA: u16 = 0x1200;
+
+#[test]
+fn command_dma_feeds_the_command_fifo_one_word_per_request_without_done() {
+    let mut r = Rig::new(0x40);
+    r.reg(0x02, CCR_CMD_DMA);
+    // RWP を 0x100 にして、WT で 2 語を書く
+    let cmds = [WPR | RWPH, 0, WPR | RWPL, 0x1000, WT, 0xAAAA, WT, 0xBBBB];
+    let mut i = 0;
+    for _ in 0..10_000 {
+        if i == cmds.len() {
+            break;
+        }
+        if !r.a.dreq() {
+            r.a.tick(&mut r.m);
+            continue;
+        }
+        r.a.set_dack(true, true, cmds[i]);
+        r.a.tick(&mut r.m);
+        assert!(!r.a.dreq(), "T1 で戻す（サイクルスチール）");
+        assert!(!r.a.done(), "コマンドの DMA は DONE を出さない");
+        r.a.tick(&mut r.m);
+        assert!(r.a.dma_dtack());
+        r.a.set_dack(false, true, cmds[i]);
+        r.a.tick(&mut r.m);
+        i += 1;
+    }
+    assert_eq!(i, cmds.len());
+    r.finish();
+    assert_eq!(r.m.0[0x100..0x102], [0xAAAA, 0xBBBB]);
+    // データの DMA の語の数には入らない
+    assert_eq!(r.a.dma_progress(), (0, 0));
+    assert_eq!(r.a.error_counts(), (0, 0));
+    // 語の数は決まっていないので、CDM の間は要求を続ける。DONE の入力で CDM が 0 になり、やめる
+    r.until_dreq(100);
+    r.a.done_input();
+    for _ in 0..100 {
+        r.a.tick(&mut r.m);
+        assert!(!r.a.dreq());
+    }
+}
+
+#[test]
+fn command_dma_holds_dreq_while_the_command_fifo_is_full() {
+    let mut r = Rig::new(0x40);
+    r.reg(0x02, CCR_CMD_DMA);
+    // 2,048 語の CLR の後に WPR を続ける。CLR を描く間に書込み FIFO（16 語）が満ちる
+    let mut cmds = vec![CLR, 0x5A5A, 2047, 0];
+    for k in 0..12 {
+        cmds.extend([WPR | CL0, k]);
+    }
+    let (mut i, mut held) = (0, false);
+    for _ in 0..1_000_000 {
+        if i == cmds.len() {
+            break;
+        }
+        if r.a.dreq() {
+            assert!(!r.dma_word(true, cmds[i]).1);
+            i += 1;
+        } else {
+            if r.a.status() & SR_WFR == 0 {
+                held = true;
+            }
+            r.a.tick(&mut r.m);
+        }
+    }
+    assert_eq!(i, cmds.len());
+    assert!(held, "書込み FIFO が満杯の間は要求しない");
+    r.finish();
+    assert!(r.m.0[..2048].iter().all(|&w| w == 0x5A5A));
+    assert_eq!(r.a.error_counts(), (0, 0));
+    // PSE・ABT の間は、コマンドの DMA も要求しない
+    r.until_dreq(100);
+    r.reg(0x02, CCR_CMD_DMA | 0x4000);
+    assert!(!r.a.dreq());
+    r.reg(0x02, CCR_CMD_DMA);
+    assert!(r.a.dreq());
+}
+
 // ---- 表示（台帳 §3.4 の案B、U85 p.22・p.30・p.42・p.55・p.69–111） ----
 //
 // 案B：HSW 13、HDS 19、HDW 128、HC 171（342 ドット）、VSW 3、VDS 40、SP1 192、VC 262（台帳 §3.4）。

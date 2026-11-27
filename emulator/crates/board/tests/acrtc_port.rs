@@ -466,3 +466,38 @@ fn snapshot_round_trip_mid_port1_transfer() {
     assert_eq!(r.p, b.p);
     assert_eq!(r.f.status(0), DONE);
 }
+
+/// コマンドの DMA（CDM＝1）。port 1 への書込みの回路は同じで、ACRTC がコマンドの列として受ける。ACRTC は
+/// DONE を出さないので、最後の要素で COUNT と食い違い、チャネルは ERROR で終わる（DR-022 の照合。DR-093）。
+#[test]
+fn command_dma_through_port1_runs_the_commands_and_ends_with_error() {
+    let mut r = Rig::new();
+    // CDM＝1、DRC＝1、GBM＝010（DDM＝0）
+    r.acrtc_reg(0x02, 0x1A00);
+    const WT: u16 = 0x4800;
+    let cmds = [
+        WPR | RWPH,
+        0,
+        WPR | RWPL,
+        0x100 << 4,
+        WT,
+        0xAAAA,
+        WT,
+        0xBBBB,
+    ];
+    staging_words(&mut r.p, 0x1000, &cmds);
+    // IRQ_EN＝1
+    r.channel(0, 1, 0x1000, 0, cmds.len() as u16, 2, 0x20);
+    r.run_until_idle(500);
+    assert_eq!(r.f.status(0), ERROR);
+    assert!(r.f.irq());
+    assert_eq!(r.port1_lengths().len(), cmds.len());
+    r.acrtc_finish();
+    assert_eq!(r.p.acrtc.vram.0[0x100..0x102], [0xAAAA, 0xBBBB]);
+    assert_eq!(r.p.acrtc.acrtc.error_counts(), (0, 0));
+    // CDM の間、ACRTC は要求を続ける。CPU が CDM を 0 にしてやめる（DONE の入力は本機の回路にない）
+    assert!(r.p.acrtc.acrtc.dreq());
+    r.acrtc_reg(0x02, CCR_DMA);
+    r.run(10);
+    assert!(!r.p.acrtc.acrtc.dreq() && !r.p.acrtc.rdy1());
+}
