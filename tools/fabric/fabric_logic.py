@@ -612,7 +612,7 @@ def spec_answer(x, ans, abt):
     return ans or x['PND'], x['PR']
 
 
-P1A_IN = ['WPH', 'FREE', 'OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF', 'ABT', 'ACT', 'PND', 'DNM', 'PR', 'PM']
+P1A_IN = ['WPH', 'FREE', 'OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF', 'ABT', 'ACT', 'PND', 'DNM', 'PR', 'PM', 'L2']
 
 
 def spec_p1a(x):
@@ -626,8 +626,11 @@ def spec_p1a(x):
         p1m = not abt and (ans and x['DNF'] or x['PND'] and x['DNM'])
     else:
         p1m = x['PM']
+    # L2：OP の写し（port 2 の延びたアクセス）。OP に入る q0 の縁（WPH ∧ FREE）で NX から取り、ほかは保つ（DR-091）
+    load = x['WPH'] and x['FREE']
+    l2 = x['OPVD'] and x['NXLG'] and not x['NXP0'] if load else x['L2']
     return dict(act=start or x['ACT'] and not x['DTS'] and not abt, pnd=pnd, dnm=x['DNF'] if ans else x['DNM'],
-                p1r=p1r, p1m=p1m)
+                p1r=p1r, p1m=p1m, l2=l2)
 
 
 def check_p1a(pals):
@@ -641,15 +644,15 @@ def check_p1a(pals):
             continue
         env = {k: x[k] for k in ('OPVD', 'NXLG', 'NXP0', 'DTS', 'DNF')}
         env.update(WPHN=not x['WPH'], OPLDN=not x['FREE'], ABQN=not (x['ABT'] and x['WPH']), DACKN=not x['ACT'],
-                   PNDN=not x['PND'], DNMN=not x['DNM'], P1RN=not x['PR'], P1MN=not x['PM'])
+                   PNDN=not x['PND'], DNMN=not x['DNM'], P1RN=not x['PR'], P1MN=not x['PM'], L2N=not x['L2'])
         _, _, nxt = p.eval(env)
         w = spec_p1a(x)
         got = dict(act=not nxt['DACKN'], pnd=not nxt['PNDN'], dnm=not nxt['DNMN'], p1r=not nxt['P1RN'],
-                   p1m=not nxt['P1MN'])
+                   p1m=not nxt['P1MN'], l2=not nxt['L2N'])
         assert got == w, (x, got, w)
 
 
-P2A_IN = ['SYN1', 'LA', 'OPP0', 'OPW', 'ABT', 'WPH', 'BW', 'SYN2', 'S1', 'S0', 'RDH', 'PND', 'PR']
+P2A_IN = ['SYN1', 'L2', 'FREE', 'NXW', 'ABT', 'WPH', 'BW', 'SYN2', 'S1', 'S0', 'RDH', 'PND', 'PR', 'WQ']
 
 
 def spec_p2a(x):
@@ -657,6 +660,7 @@ def spec_p2a(x):
     取った読出しを捨てる 10。打切り（abort。ABT ∧ WPH）が先、次に窓の終わり（E の立下り）で預かりを空け、空いて
     いて、答えを預かっても数えてもいなければ Fabric のアクセスをラッチし（LDQ。書込みはすぐ答える）、E の立下りで
     窓を取る（ブリッジが先）。答えは spec_answer。
+    port 2 のアクセスがあるか（L2）は P1A の、向き（WQ）は P2A の、OP の写し（DR-091）。
     doc.rs と違う点：取った後の読出しの打切りは、E が上がる前でも捨てる（P2A は E の立上りを知らない。OI-089）。"""
     fell = x['SYN2'] and not x['SYN1']
     abt = x['ABT'] and x['WPH']
@@ -667,21 +671,22 @@ def spec_p2a(x):
     if fell and s1:
         ans = live = s0 and rdh
         s1 = s0 = False
-    lat = (x['LA'] and not x['OPP0'] and not abt and not x['PND'] and not x['PR'] and not live
+    lat = (x['L2'] and not abt and not x['PND'] and not x['PR'] and not live
            and not s1 and not s0)
     if lat:
-        s0, rdh = True, not x['OPW']
-        ans = ans or x['OPW']
+        s0, rdh = True, not x['WQ']
+        ans = ans or x['WQ']
     if fell and not x['BW'] and (s1, s0) == (False, True):
         s1 = True
     pnd, p2r = spec_answer(x, ans, abt)
-    return dict(syn2=x['SYN1'], s1=s1, s0=s0, rdh=rdh, pnd=pnd, p2r=p2r, ldq=lat)
+    wq = x['NXW'] if x['WPH'] and x['FREE'] else x['WQ']
+    return dict(syn2=x['SYN1'], s1=s1, s0=s0, rdh=rdh, pnd=pnd, p2r=p2r, ldq=lat, wq=wq)
 
 
 def p2a_reachable(x):
     """P2A の届く組。E の 1 周期は 16 MHz の 8 周期以上（DOC の CLK は 16 MHz 以下）とする。"""
     fell = x['SYN2'] and not x['SYN1']
-    a = x['LA'] and not x['OPP0']
+    a = x['L2']
     held = x['S1'] or x['S0']
     pr = x['PND'] or x['PR']
     if x['S1'] and not x['S0'] and not x['RDH']:
@@ -694,7 +699,7 @@ def p2a_reachable(x):
         return False          # 読出しを預かっている間は、答えはない
     if x['PR'] and x['ABT'] and x['WPH']:
         return False          # 数えたスロットの次の頭は、ODN があるので打ち切らない
-    if held and x['RDH'] and x['S0'] and not (a and not x['OPW']):
+    if held and x['RDH'] and x['S0'] and not (a and not x['WQ']):
         return False          # 捨てていない、預かった読出しは OP のアクセス
     return True
 
@@ -705,14 +710,14 @@ def check_p2a(pals):
         x = bits_env(P2A_IN, v)
         if not p2a_reachable(x):
             continue
-        env = {k: x[k] for k in ('SYN1', 'OPP0', 'OPW')}
-        env.update(LAN=not x['LA'], ABQN=not (x['ABT'] and x['WPH']), WPHN=not x['WPH'], BWN=not x['BW'],
-                   SYN2N=not x['SYN2'], S1N=not x['S1'], S0N=not x['S0'], RDHN=not x['RDH'], PNDN=not x['PND'],
-                   P2RN=not x['PR'])
+        env = {k: x[k] for k in ('SYN1', 'NXW')}
+        env.update(L2N=not x['L2'], OPLDN=not x['FREE'], ABQN=not (x['ABT'] and x['WPH']), WPHN=not x['WPH'],
+                   BWN=not x['BW'], SYN2N=not x['SYN2'], S1N=not x['S1'], S0N=not x['S0'], RDHN=not x['RDH'],
+                   PNDN=not x['PND'], P2RN=not x['PR'], WQN=not x['WQ'])
         _, _, nxt = p.eval(env)
         w = spec_p2a(x)
         got = dict(syn2=not nxt['SYN2N'], s1=not nxt['S1N'], s0=not nxt['S0N'], rdh=not nxt['RDHN'],
-                   pnd=not nxt['PNDN'], p2r=not nxt['P2RN'], ldq=not nxt['LDQN'])
+                   pnd=not nxt['PNDN'], p2r=not nxt['P2RN'], ldq=not nxt['LDQN'], wq=not nxt['WQN'])
         if not (w['s1'] or w['s0']):
             del got['rdh'], w['rdh']    # 空き（00）の RDH は使わない
         assert got == w, (x, got, w)

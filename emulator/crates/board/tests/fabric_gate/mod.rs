@@ -747,6 +747,9 @@ impl GateFabric {
         };
         self.sdn = o.sdn;
         self.lan = o.lan;
+        // P1A の L2 は、OP に入る縁で取る OP の写し（OPVD ∧ NXLG ∧ ¬NXP0）。OPA の LA ∧ ¬OPP0 と同じであるには、
+        // LA が OP の有効 ∧ LG と同じであればよい（DR-091）
+        debug_assert_eq!(!self.lan, self.op.v && self.op.lg, "LA は OP の有効 ∧ LG");
         self.stvn = g.stvn;
         self.stln = g.stln;
         self.dbchn = q.dbchn;

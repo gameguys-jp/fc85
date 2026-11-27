@@ -911,35 +911,45 @@ pub struct P1aOut {
     pub p1rn: bool,
     /// 登録出力：P1MN
     pub p1mn: bool,
+    /// 登録出力：L2N
+    pub l2n: bool,
 }
 
-/// P1A（PAL16R6A）。port 1（ACRTC）。16 MHz の縁ごと。NX の port 1 のアクセスが OP に入る q0 の縁（WPHN が Low）で DACK を出し（DACKN）、同期化した DTACK（DTS）で答え、そのときの DONE（DNF）を印にする（DNM）。答えは、q0 の縁ならそのスロットの答え（P1R、印 P1M）、q1〜q3 の縁なら預かり（PND）にして次の q0 の縁で P1R にする。打切り（ABQ ＝ ABT∧WPH。74S32）は q0 の縁だけで効き、DACK を戻し、預かった答えを捨てる
+/// P1A（PAL16R6A）。port 1（ACRTC）。16 MHz の縁ごと。NX の port 1 のアクセスが OP に入る q0 の縁（WPHN が Low）で DACK を出し（DACKN）、同期化した DTACK（DTS）で答え、そのときの DONE（DNF）を印にする（DNM）。答えは、q0 の縁ならそのスロットの答え（P1R、印 P1M）、q1〜q3 の縁なら預かり（PND）にして次の q0 の縁で P1R にする。打切り（ABQ ＝ ABT∧WPH。74S32）は q0 の縁だけで効き、DACK を戻し、預かった答えを捨てる。L2（port 2 の延びたアクセスが OP にある：DOC 子基板のとき。P2A へ）は、OP の写しとして、OP に入る q0 の縁で NX から取り込む（DR-091：OP の 74LS377 は SCLK の 27 ns 後で、P2A の q1 の縁に間に合わない）
 /// クロックは C16。
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn p1a(wphn: bool, opldn: bool, opvd: bool, nxlg: bool, nxp: u32, dts: bool, dnf: bool, abqn: bool, dackn: bool, pndn: bool, dnmn: bool, p1rn: bool, p1mn: bool) -> P1aOut {
+pub fn p1a(wphn: bool, opldn: bool, opvd: bool, nxlg: bool, nxp: u32, dts: bool, dnf: bool, abqn: bool, dackn: bool, pndn: bool, dnmn: bool, p1rn: bool, p1mn: bool, l2n: bool) -> P1aOut {
     let dackn_d = !((!wphn & !opldn & opvd & nxlg & ((nxp & 0x1) == 0x1)) | (!dackn & !dts & abqn));
     let pndn_d = !((wphn & !dackn & dts) | (wphn & !pndn));
     let dnmn_d = { let i = (dts as u32) << 0 | (dnf as u32) << 1 | (abqn as u32) << 2 | (dackn as u32) << 3 | (dnmn as u32) << 4; P1A_DNMN_T >> i & 1 != 0 };
     let p1rn_d = !((!wphn & abqn & !dackn & dts) | (!wphn & abqn & !pndn) | (wphn & !p1rn));
     let p1mn_d = !((!wphn & abqn & !dackn & dts & dnf) | (!wphn & abqn & !pndn & !dnmn) | (wphn & !p1mn));
+    let l2n_d = !((!wphn & !opldn & opvd & nxlg & ((nxp & 0x1) == 0x0)) | (wphn & !l2n) | (opldn & !l2n));
     P1aOut {
         dackn: dackn_d,
         pndn: pndn_d,
         dnmn: dnmn_d,
         p1rn: p1rn_d,
         p1mn: p1mn_d,
+        l2n: l2n_d,
     }
 }
 
-/// P2A の S0N の真理値表（番地の bit は SYN1、LAN、OPP0、ABQN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN の順）。
-const P2A_S0N_T: [u64; 16] = [0x00ff55ff00ff55ff, 0xfffffffffffffeff, 0x0000000000005455, 0xffffffff0000feff, 0x00ff55ff00ff55ff, 0xfffffffffffffeff, 0x0000000000005455, 0xffffffff0000feff, 0x00ff55ff00ff55ff, 0xfffffffffffffeff, 0x0000000000005455, 0xffffffff0000feff, 0x00ff54ff00ff55ff, 0xfcfffcfffffffeff, 0x0000000000005455, 0xfcfffcff0000feff];
+/// P2A の S1N の真理値表（番地の bit は SYN1、L2N、ABQN、BWN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN の順）。
+const P2A_S1N_T: [u64; 16] = [0xffffafff00005555, 0xffffffff00005555, 0xffffaaff00004555, 0xffffffff00004555, 0xffffafff00005555, 0xffffffff00005555, 0xffffaaff00004555, 0xffffffff00004555, 0xffffafff00005555, 0xffffffff00005555, 0xffffaaff00004555, 0xffffffff00004555, 0xffffafff00005555, 0xffffefff00004555, 0xffffaaff00004555, 0xffffefff00004555];
 
-/// P2A の RDHN の真理値表（番地の bit は SYN1、OPW、SYN2N、S1N、S0N、RDHN の順）。
-const P2A_RDHN_T: u64 = 0xcc04fffecc04cccc;
+/// P2A の S0N の真理値表（番地の bit は SYN1、L2N、ABQN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN の順）。
+const P2A_S0N_T: [u64; 8] = [0xffffffef0f5f0f5f, 0xffff00ef00000045, 0xffffffef0f5f0f5f, 0xffff00ef00000045, 0xffffffef0f5f0f5f, 0xffff00ef00000045, 0xcfcfffef0f4f0f5f, 0xcfcf00ef00000045];
 
-/// P2A の LDQN の真理値表（番地の bit は SYN1、LAN、OPP0、ABQN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN の順）。
-const P2A_LDQN_T: [u64; 16] = [0xffffffffffffffff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xffffffffffffffff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xffffffffffffffff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xfffffffffffffeff, 0xffffffffffffffff, 0xfcfffcfffffffeff, 0xfffffffffffffeff, 0xfcfffcfffffffeff];
+/// P2A の RDHN の真理値表（番地の bit は SYN1、SYN2N、S1N、S0N、RDHN、WQN の順）。
+const P2A_RDHN_T: u64 = 0x00fe0000f1fff1ff;
+
+/// P2A の PNDN の真理値表（番地の bit は SYN1、L2N、WPHN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN、WQN の順）。
+const P2A_PNDN_T: [u64; 16] = [0x0f0f0f0f0f0f0f0f, 0x0f0f0f0f0f0f0f0f, 0xffffffefffffffaf, 0xffffffefffffffef, 0x0f0f0f0f0f0f0f0f, 0x0f0f0f0f0f0f0f0f, 0xcfcfffefffffffaf, 0xcfcfffefffffffef, 0x0f0f0f0f0f0f0f0f, 0x0f0f0f0f0f0f0f0f, 0xffffffffffffffaf, 0xffffffffffffffff, 0x0f0f0f0f0f0f0f0f, 0x0f0f0f0f0f0f0f0f, 0xffffffffffffffaf, 0xffffffffffffffff];
+
+/// P2A の LDQN の真理値表（番地の bit は SYN1、L2N、ABQN、SYN2N、S1N、S0N、RDHN、PNDN、P2RN の順）。
+const P2A_LDQN_T: [u64; 8] = [0xffffffefffffffff, 0xffffffefffffffef, 0xffffffefffffffff, 0xffffffefffffffef, 0xffffffefffffffff, 0xffffffefffffffef, 0xcfcfffefffffffff, 0xcfcfffefffffffef];
 
 /// P2A（PAL16R8A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -958,20 +968,23 @@ pub struct P2aOut {
     pub p2rn: bool,
     /// 登録出力：LDQN
     pub ldqn: bool,
+    /// 登録出力：WQN
+    pub wqn: bool,
 }
 
-/// P2A（PAL16R8A）。port 2（DOC 子基板）。16 MHz の縁ごと。DOC の E の同期化の 2 段目（SYN2。1 段目 SYN1 は外の 74ALS74。DR-088）、預かりの段（S1・S0：空き 00、窓を待つ 01、窓を取った 11、取った読出しを捨てる 10）、預かったものが読出し（RDH）。空きなら Fabric のアクセスをラッチし（LDQ：次の縁で U48–U49 が番地を取り込む）、E の立下りで窓を取り、次の立下りで空ける。答え（書込みのラッチ、読出しの窓の終わり）は、q0 の縁ならそのスロットの答え（P2R）、q1〜q3 の縁なら預かり（PND）にして次の q0 の縁で P2R にする。打切り（ABQ ＝ ABT∧WPH。74S32）は q0 の縁だけで効く。BWN は 68000 のブリッジが窓を待っていない（HACK）。組合せの出力を帰還しない
+/// P2A（PAL16R8A）。port 2（DOC 子基板）。16 MHz の縁ごと。DOC の E の同期化の 2 段目（SYN2。1 段目 SYN1 は外の 74ALS74。DR-088）、預かりの段（S1・S0：空き 00、窓を待つ 01、窓を取った 11、取った読出しを捨てる 10）、預かったものが読出し（RDH）。空きなら Fabric のアクセスをラッチし（LDQ：次の縁で U48–U49 が番地を取り込む）、E の立下りで窓を取り、次の立下りで空ける。答え（書込みのラッチ、読出しの窓の終わり）は、q0 の縁ならそのスロットの答え（P2R）、q1〜q3 の縁なら預かり（PND）にして次の q0 の縁で P2R にする。打切り（ABQ ＝ ABT∧WPH。74S32）は q0 の縁だけで効く。BWN は 68000 のブリッジが窓を待っていない（HACK）。port 2 のアクセスがあるか（L2）は P1A が、向き（WQ）は P2A が、OP に入る q0 の縁で NX から写す（DR-091。OPLDN は OPA の OP の空き）。組合せの出力を帰還しない
 /// クロックは C16。
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn p2a(syn: u32, lan: bool, opp: u32, opw: bool, abqn: bool, wphn: bool, bwn: bool, syn2n: bool, s1n: bool, s0n: bool, rdhn: bool, pndn: bool, p2rn: bool) -> P2aOut {
+pub fn p2a(syn: u32, l2n: bool, opldn: bool, nxw: bool, abqn: bool, wphn: bool, bwn: bool, syn2n: bool, s1n: bool, s0n: bool, rdhn: bool, pndn: bool, p2rn: bool, wqn: bool) -> P2aOut {
     let syn2n_d = !((syn & 0x2) == 0x2);
-    let s1n_d = !((!s1n & syn2n) | (!s1n & ((syn & 0x2) == 0x2)) | (!syn2n & bwn & s1n & !s0n & rdhn & ((syn & 0x2) == 0x0)) | (!syn2n & bwn & s1n & !s0n & abqn & ((syn & 0x2) == 0x0)) | (!syn2n & bwn & !lan & abqn & s0n & pndn & p2rn & ((opp & 0x1) == 0x0) & ((syn & 0x2) == 0x0)) | (!lan & abqn & bwn & !s1n & rdhn & ((opp & 0x1) == 0x0)));
-    let s0n_d = { let i = (syn >> 1 & 0x1) << 0 | (lan as u32) << 1 | (opp >> 0 & 0x1) << 2 | (abqn as u32) << 3 | (syn2n as u32) << 4 | (s1n as u32) << 5 | (s0n as u32) << 6 | (rdhn as u32) << 7 | (pndn as u32) << 8 | (p2rn as u32) << 9; P2A_S0N_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
-    let rdhn_d = { let i = (syn >> 1 & 0x1) << 0 | (opw as u32) << 1 | (syn2n as u32) << 2 | (s1n as u32) << 3 | (s0n as u32) << 4 | (rdhn as u32) << 5; P2A_RDHN_T >> i & 1 != 0 };
-    let pndn_d = !((wphn & !pndn) | (wphn & !syn2n & !s1n & !s0n & !rdhn & ((syn & 0x2) == 0x0)) | (wphn & !syn2n & !lan & opw & !s1n & ((opp & 0x1) == 0x0) & ((syn & 0x2) == 0x0)) | (wphn & !lan & opw & s1n & s0n & p2rn & ((opp & 0x1) == 0x0)));
-    let p2rn_d = !((wphn & !p2rn) | (!wphn & abqn & !pndn) | (!wphn & abqn & !syn2n & !s1n & !s0n & !rdhn & ((syn & 0x2) == 0x0)) | (!wphn & abqn & !syn2n & !lan & opw & !s1n & ((opp & 0x1) == 0x0) & ((syn & 0x2) == 0x0)) | (!wphn & abqn & !lan & opw & s1n & s0n & p2rn & ((opp & 0x1) == 0x0)));
-    let ldqn_d = { let i = (syn >> 1 & 0x1) << 0 | (lan as u32) << 1 | (opp >> 0 & 0x1) << 2 | (abqn as u32) << 3 | (syn2n as u32) << 4 | (s1n as u32) << 5 | (s0n as u32) << 6 | (rdhn as u32) << 7 | (pndn as u32) << 8 | (p2rn as u32) << 9; P2A_LDQN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let s1n_d = { let i = (syn >> 1 & 0x1) << 0 | (l2n as u32) << 1 | (abqn as u32) << 2 | (bwn as u32) << 3 | (syn2n as u32) << 4 | (s1n as u32) << 5 | (s0n as u32) << 6 | (rdhn as u32) << 7 | (pndn as u32) << 8 | (p2rn as u32) << 9; P2A_S1N_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let s0n_d = { let i = (syn >> 1 & 0x1) << 0 | (l2n as u32) << 1 | (abqn as u32) << 2 | (syn2n as u32) << 3 | (s1n as u32) << 4 | (s0n as u32) << 5 | (rdhn as u32) << 6 | (pndn as u32) << 7 | (p2rn as u32) << 8; P2A_S0N_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let rdhn_d = { let i = (syn >> 1 & 0x1) << 0 | (syn2n as u32) << 1 | (s1n as u32) << 2 | (s0n as u32) << 3 | (rdhn as u32) << 4 | (wqn as u32) << 5; P2A_RDHN_T >> i & 1 != 0 };
+    let pndn_d = { let i = (syn >> 1 & 0x1) << 0 | (l2n as u32) << 1 | (wphn as u32) << 2 | (syn2n as u32) << 3 | (s1n as u32) << 4 | (s0n as u32) << 5 | (rdhn as u32) << 6 | (pndn as u32) << 7 | (p2rn as u32) << 8 | (wqn as u32) << 9; P2A_PNDN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let p2rn_d = !((wphn & !p2rn) | (!wphn & abqn & !pndn) | (!wphn & abqn & !syn2n & !s1n & !s0n & !rdhn & ((syn & 0x2) == 0x0)) | (!wphn & abqn & !syn2n & !l2n & !wqn & !s1n & ((syn & 0x2) == 0x0)) | (!wphn & abqn & !l2n & !wqn & s1n & s0n & p2rn));
+    let ldqn_d = { let i = (syn >> 1 & 0x1) << 0 | (l2n as u32) << 1 | (abqn as u32) << 2 | (syn2n as u32) << 3 | (s1n as u32) << 4 | (s0n as u32) << 5 | (rdhn as u32) << 6 | (pndn as u32) << 7 | (p2rn as u32) << 8; P2A_LDQN_T[(i >> 6) as usize] >> (i & 63) & 1 != 0 };
+    let wqn_d = !((!wphn & !opldn & nxw) | (wphn & !wqn) | (opldn & !wqn));
     P2aOut {
         syn2n: syn2n_d,
         s1n: s1n_d,
@@ -980,6 +993,7 @@ pub fn p2a(syn: u32, lan: bool, opp: u32, opw: bool, abqn: bool, wphn: bool, bwn
         pndn: pndn_d,
         p2rn: p2rn_d,
         ldqn: ldqn_d,
+        wqn: wqn_d,
     }
 }
 
