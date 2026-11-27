@@ -94,7 +94,7 @@ ES5503は1985年のMirage採用例に基づくが、確認した詳細仕様書�
 
 ### 05　メモリ構成・ホストバス [P]
 
-CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot ROMの先頭8 byteに配置する。16-bitレジスタは偶数番地、8-bit ICは上位バイトレーンに配置。未割当・不正幅アクセスは有限時間でバスエラー（初期実装は64 CPUサイクル以内を目標）。時間切れのカウンタはAS↓の後のCPUクロックの立上りを64数えてBERRを出す。S0から65.5クロックの立下りで認識され、サイクルは67クロックで終わる。ROMへの書込みはDTACKを返して捨て、16-bitレジスタへのバイトのアクセスはバスエラー [P]（DR-052）。外部クロックで待ちが変わるDOC・ACRTC・パレットの窓は、時間切れをBERRではなくDTACKで終わらせる。書込みは装置に届かず、読出しは$FFFF [P]（DR-079）。ACRTCのAR/STATUS・データポートには、CLR・TASなどの読み書き一体の命令を使わない。DMA中はCPUからACRTCのFIFOにアクセスしない。どちらもソフトの規約とし、BIOS・SDKの文書に書き、エミュレータで警告する [P]（DR-016）。ACRTCのFIFOにはSRのWFR・RFRを確かめてからアクセスする [P]（DR-033）。DOCの窓もMOVE.Bの1回の読みか書きだけで触り、0xE0・0xE2は読むと状態が変わるのでBIOSの決まった処理だけが読む [P]（DR-030）。規約に反するアクセスは、通常モードでは警告し、Bendモードでは実行する。実チップでの挙動がわからない部分は近似と明記する（§11）。\n\n例外ベクタ2〜255は、Main RAMのジャンプ表（0x100000＋6n、各項目は`JMP abs.L`）を指す。表はBIOSが起動時に埋め、アプリケーションはBIOSの呼出しか表の書き換えで処理を差し替える。レベル7の要因は、表を埋めるまで回路で止めておく [P]（DR-025）。\n\n割込みはすべてオートベクタ（VPA）で応える。IACKサイクルもバスエラーのタイマーの対象とし、応答のない割込みはスプリアス割込みで終わる。レベルは期限の短い順に割り当てる：6＝映像（VBlank・HBlank、ACRTCのIRQ）、5＝ACIA（MIDI。1バイト320 µs）、4＝DOC、3＝Data Fabric・ADPCM bridge、2＝DSP bridge、1＝入力（INPUT_IRQ_STATUS）、7＝予約 [P]（DR-028）。割込みの受付からジャンプ表の先の処理まで62〜71クロック（7.8〜8.9 µs）（計算、[31] §2.4）。
+CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot ROMの先頭8 byteに配置する。16-bitレジスタは偶数番地、8-bit ICは上位バイトレーンに配置。未割当・不正幅アクセスは有限時間でバスエラー（初期実装は64 CPUサイクル以内を目標）。時間切れのカウンタはAS↓の後のCPUクロックの立上りを64数えてBERRを出す。S0から65.5クロックの立下りで認識され、サイクルは67クロックで終わる。ROMへの書込みはDTACKを返して捨て、16-bitレジスタへのバイトのアクセスはバスエラー [P]（DR-052）。外部クロックで待ちが変わるDOC・ACRTC・パレットの窓は、時間切れをBERRではなくDTACKで終わらせる。書込みは装置に届かず、読出しは$FFFF [P]（DR-079）。ACRTCのAR/STATUS・データポートには、CLR・TASなどの読み書き一体の命令を使わない。DMA中はCPUからACRTCのFIFOにアクセスしない。どちらもソフトの規約とし、BIOS・SDKの文書に書き、エミュレータで警告する [P]（DR-016）。ACRTCのFIFOにはSRのWFR・RFRを確かめてからアクセスする [P]（DR-033）。DOCの窓もMOVE.Bの1回の読みか書きだけで触り、0xE0・0xE2は読むと状態が変わるのでBIOSの決まった処理だけが読む [P]（DR-030）。規約に反するアクセスは、通常モードでは警告し、Bendモードでは実行する。実チップでの挙動がわからない部分は近似と明記する（§11）。\n\n例外ベクタ2〜255は、Main RAMのジャンプ表（0x100000＋6n、各項目は`JMP abs.L`）を指す。表はBIOSが起動時に埋め、アプリケーションはBIOSの呼出しか表の書き換えで処理を差し替える。レベル7の要因は、表を埋めるまで回路で止めておく [P]（DR-025）。レベル7には要因をつながない（74LS148のレベル7の入力は使わない）ので、止める回路も、BIOSが解く書込みも置かない [P]（DR-095）。\n\n割込みはすべてオートベクタ（VPA）で応える。IACKサイクルもバスエラーのタイマーの対象とし、応答のない割込みはスプリアス割込みで終わる。レベルは期限の短い順に割り当てる：6＝映像（VBlank・HBlank、ACRTCのIRQ）、5＝ACIA（MIDI。1バイト320 µs）、4＝DOC、3＝Data Fabric・ADPCM bridge、2＝DSP bridge、1＝入力（INPUT_IRQ_STATUS）、7＝予約 [P]（DR-028）。レベル7は要因のない予約のままとし、拡張バスのIRQにも使わない [P]（DR-095）。割込みの受付からジャンプ表の先の処理まで62〜71クロック（7.8〜8.9 µs）（計算、[31] §2.4）。
 
 | CPU番地（hex） | 領域 | 用途 |
 |---|---|---|
@@ -111,7 +111,7 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 260000–2600FF | Controller / MIDI / matrix | 入力・ACIA・クロック・マトリクス |
 | 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）[P]（DR-027）。270022 VIDEO_IRQ（VBlank・HBlankの割込みの許可と保留、レベル6）、270024 LINE（ラスタ）、270026 LINE_CMP。残りは予約 [P]（DR-053） |
 | 280000–281FFF | DSP program window | 4K×16。DSPをリセットしPRGBUS＝1の間だけR/W可。それ以外はバスエラー [P]（DR-029） |
-| 400000–4FFFFF | Cartridge ROM window | 最大1 MiB窓、初期128 KiB想定。既定は1ウェイト（tACC 375 ns以下のROM）。カートリッジがDTACKを返す方式は [O]（DR-026） |
+| 400000–4FFFFF | Cartridge ROM window | 最大1 MiB窓、初期128 KiB想定。既定は1ウェイト（tACC 375 ns以下のROM）。カートリッジがDTACKを返す方式は [O]（DR-026）。カートリッジは端子の1本（/CART）を中でGNDにつなぐ。本体は/CARTを引上げ抵抗で受け、Highなら窓のDTACKを出さず（時間切れのバスエラー）、INPUT_IRQ_STATUSのbit 4で読ませる [P]（DR-095） |
 | その他 | 予約 | 将来拡張 |
 
 | ローカルメモリ | 容量 | 構成・アクセス |
@@ -276,7 +276,7 @@ MIDIは1983年に規格化され、1985年のAtari STにも内蔵端子の例が
 |---|---|---|
 | Controller A/B | 方向・ボタン等のデジタル状態、汎用アナログ値。端子ピン・物理形状は保留 | キーボード、ゲームパッド、MIDI等を割当 |
 | MIDI IN/OUT | 5-pin DIN、31.25 kbit/s、8N1。HD6850 [P]（DR-008）＋絶縁入力。THRU候補 | PC MIDI、USB-MIDI変換（RP2350等） |
-| Expansion | 16-bitホストバスの外部アクセス、IRQ、外部trigger（EXTRIG。Data FabricのTRIGGER 4とINPUT_IRQ_STATUSの両方に入る [P]（DR-018））。ピン割当・バッファ未定 | FPGA／マイコンブリッジ |
+| Expansion | 16-bitホストバスの外部アクセス、IRQ、外部trigger（EXTRIG。Data FabricのTRIGGER 4とINPUT_IRQ_STATUSの両方に入る [P]（DR-018））。ピン割当・バッファ未定。IRQはレベル7に使わない（レベルは未定）[P]（DR-095） | FPGA／マイコンブリッジ |
 | Audio IN/OUT | レベル調整付きアナログ入出力、ミキサ。DACは子基板がないとき本体のHA17408×2 [P]（DR-019）、ADCは音声入力基板（port 10、拡張） | Audio interface、外部モジュラー |
 | Video IN/OUT | NTSCコンポジット、75 Ω。入力基板の詳細は次頁 | ADV7180/ADV7391等、PCキャプチャ |
 | CV/Gate | [O] アナログ制御端子、外部trigger、ADC入力。電圧範囲未確定 | RP2350＋保護・レベル変換・必要な外付けADC/DAC |
@@ -288,7 +288,7 @@ MIDIは1983年に規格化され、1985年のAtari STにも内蔵端子の例が
 | 00 / 02 | PORT_A / PORT_B：16-bitデジタル状態（active-high論理値）。bit0 上、bit1 下、bit2 左、bit3 右、bit4 A、bit5 B、bit6 C、bit7 START、bit15–8 予約 [P]（DR-055） |
 | 04–12 | AXIS0–7：8個の16-bitレジスタ。初期は8-bitアナログ値を下位に格納 |
 | 14 / 16 | MIDI_STATUS / MIDI_DATA：ACIAの制御・状態、送受信データ、上位byte lane |
-| 18 | INPUT_IRQ_STATUS：bit0 PORT_Aの変化、bit1 PORT_Bの変化、bit2 MIDI受信、bit3 外部trigger [P]（DR-053）。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028） |
+| 18 | INPUT_IRQ_STATUS：bit0 PORT_Aの変化、bit1 PORT_Bの変化、bit2 MIDI受信、bit3 外部trigger [P]（DR-053）。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028）。bit4 カートリッジあり（/CARTがLowのとき1。読み専用で、割込みにはならない）[P]（DR-095）。部品は読出しの緩衝器の1ビットと引上げ抵抗1本（入力の窓の部品表は未定）[V] |
 | 1A | INPUT_IRQ_ENABLE：イベント割込みの許可 |
 | 20–3E | 予約：アナログマトリクス、外部trigger／拡張 |
 

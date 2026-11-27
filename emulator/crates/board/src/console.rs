@@ -70,6 +70,8 @@ pub const INPUT_PORT_A: u16 = 0x0001;
 pub const INPUT_PORT_B: u16 = 0x0002;
 pub const INPUT_MIDI: u16 = 0x0004;
 pub const INPUT_EXTRIG: u16 = 0x0008;
+/// カートリッジの端子 /CART（カートリッジの中で GND）。読出し専用で、割込みにはならない [P]（DR-095）。
+pub const INPUT_CART: u16 = 0x0010;
 
 /// 入力のレジスタ（仕様書 §09、DR-053）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +112,7 @@ pub struct System {
     pub ports: FabricPorts,
     pub boot_rom: Vec<u8>,
     pub main_ram: Vec<u8>,
-    /// カートリッジの ROM（なければ窓はバスエラー）。
+    /// カートリッジの ROM（なければ窓はバスエラー。あれば INPUT_IRQ_STATUS の bit 4 が 1。DR-095）。
     pub cart: Option<Vec<u8>>,
     pub acia: Hd6850,
     /// ACIA に渡した CPU クロック（16 の倍数。ACIA は 500 kHz＝CPU の 16 クロック）。
@@ -806,7 +808,8 @@ impl System {
             (0x00..=0x12, Some(_)) => ok(0, 0),
             (0x18, None) => {
                 let midi = if self.acia.irq() { INPUT_MIDI } else { 0 };
-                ok(i.status | midi, 0)
+                let cart = if self.cart.is_some() { INPUT_CART } else { 0 };
+                ok(i.status | midi | cart, 0)
             }
             (0x18, Some(v)) => {
                 i.status &= !(v & (INPUT_PORT_A | INPUT_PORT_B | INPUT_EXTRIG));

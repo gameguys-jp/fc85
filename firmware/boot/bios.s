@@ -1,4 +1,4 @@
-; Boot ROM（BIOS）版 1。m68kasm で組む（firmware/boot/build.py）。
+; Boot ROM（BIOS）版 2（DR-057、DR-094）。m68kasm で組む（firmware/boot/build.py）。
 ;
 ; 起動の順（sdk/docs/bios-abi.md §02）:
 ;   1. 例外のジャンプ表（Main RAM の $100000＋6n）を埋める（DR-025）
@@ -8,7 +8,7 @@
 ;   5. ACIA をマスタリセットし、MIDI（31.25 kbit/s、8N1、受信の割込み）にする。入力の割込みを許す
 ;   6. VBlank の割込み（レベル 6）を許す
 ;   7. 割込みのマスクを 0 にする
-;   8. $400000 にカートリッジの見出しがあれば、その入口へ飛ぶ
+;   8. カートリッジが差してあり（INPUT_IRQ_STATUS の bit 4、DR-095）、$400000 に見出しがあれば、その入口へ飛ぶ
 ;   9. なければ内蔵のデモ
 
         INCLUDE "fc85.inc"
@@ -35,7 +35,10 @@ V       SET     V+1
         JMP     (bios_put_hex).L
         JMP     (bios_set_pal).L
         JMP     (bios_read_pad).L
-        ASSERT  *=BIOS_READ_PAD+6
+        ASSERT  *=BIOS_PUTS_KUTEN
+        JMP     (bios_puts_kuten).L     ; 版 2
+        JMP     (bios_glyph).L
+        ASSERT  *=BIOS_CALLS_END
 
         ORG     BIOS_INFO
         DC.W    BIOS_VERSION
@@ -125,9 +128,13 @@ fabric_init:
 
 ; ------------------------------------------------------------------ カートリッジ
 
-; 見出しを読む。カートリッジがなければ窓はバスエラーなので、その間だけバスエラーの項目を差し替える。
-; 見出しが正しければ戻らない。
+; 見出しを読む。カートリッジが差してあるかを INPUT_IRQ_STATUS の bit 4（端子 /CART）で見て、なければ
+; 窓を読まない（窓はバスエラー。DR-095）。差してあっても、読む間だけバスエラーの項目を差し替えておく
+; （ベンドなどで窓が答えないとき）。見出しが正しければ戻らない。
 cart_probe:
+        MOVE.W  INPUT_IRQ_STATUS,D0
+        BTST    #INPUT_IRQ_CART_B,D0
+        BEQ     .none
         MOVE.L  JUMP_TABLE+VEC_BUS_ERROR*6+2,-(SP)
         MOVE.L  #probe_berr,JUMP_TABLE+VEC_BUS_ERROR*6+2
         MOVE.L  SP,bios_probe_sp
@@ -168,7 +175,9 @@ probe_berr:
 
 ; ------------------------------------------------------------------ 割込み
 
-; レベル 6：映像。VBlank なら数を 1 足し、パッドを読み、フックを呼ぶ。
+; レベル 6：映像。立っている保留（VBL・HBL）を両方消し、VBlank なら数を 1 足し、パッドを読み、フックを呼ぶ。
+; すべてのレジスタを保つ（フックが壊してよい D0–D1/A0–A1 もここで保つ）。アプリの処理は、自分の要因を
+; 先に処理してから、レジスタとスタックを入ったときの形に戻して、ここへ JMP でつなげる（bios-abi.md §03）。
 irq_video:
         MOVEM.L D0-D1/A0-A1,-(SP)
         MOVE.W  VIDEO_IRQ,D0
@@ -246,7 +255,7 @@ irq_doc:
 .out    MOVEM.L (SP)+,D0-D1/A0
         RTE
 
-; スプリアス割込みとレベル 7（予約）：数えるだけ。
+; スプリアス割込みとレベル 7（要因をつないでいない。DR-095）：数えるだけ。
 irq_count:
         ADDQ.W  #1,bios_spurious
         RTE

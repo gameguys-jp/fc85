@@ -44,13 +44,38 @@ class BootRom(unittest.TestCase):
             self.assertEqual(be32(self.rom, 4 * n), 0x100000 + 6 * n, n)
 
     def test_entry_table(self):
+        # 版 1 の 7 つに、版 2 で 2 つを足した（DR-094）。並びは変えない
         names = ["bios_wait_vbl", "bios_acrtc_send", "bios_cls", "bios_puts", "bios_put_hex",
-                 "bios_set_pal", "bios_read_pad"]
+                 "bios_set_pal", "bios_read_pad", "bios_puts_kuten", "bios_glyph"]
         for i, name in enumerate(names):
             off = 0x400 + 6 * i
             self.assertEqual(be16(self.rom, off), 0x4EF9, name)    # JMP abs.L
             self.assertEqual(be32(self.rom, off + 2), self.sym(name), name)
-        self.assertEqual(be16(self.rom, 0x480), 0x0001)          # BIOS_INFO：版
+        self.assertEqual(0x400 + 6 * len(names), self.sym("BIOS_CALLS_END"))
+        # 予約の項目は消去したまま（呼ぶと F ライン例外）
+        self.assertEqual(self.rom[self.sym("BIOS_CALLS_END"):0x480], b"\xFF" * (0x480 - self.sym("BIOS_CALLS_END")))
+        self.assertEqual(be16(self.rom, 0x480), 0x0002)          # BIOS_INFO：版
+        self.assertEqual(self.sym("BIOS_VERSION"), 0x0002)
+        self.assertEqual(self.rom[0x482:0x500], b"\xFF" * 0x7E)  # BIOS_INFO の予約
+
+    def test_glyph_masks(self):
+        # 字形の 1 行（MSB が左）→ 2 語。語の中は左の画素が下位ニブル（bios-abi.md §07）
+        base = self.sym("glyph_masks")
+        for byte in (0x00, 0x80, 0x01, 0xA5, 0xFF, 0x3C):
+            words = []
+            for k in range(2):
+                w = 0
+                for i in range(4):
+                    if byte & (0x80 >> (4 * k + i)):
+                        w |= 0xF << (4 * i)
+                words.append(w)
+            self.assertEqual([be16(self.rom, base + 4 * byte), be16(self.rom, base + 4 * byte + 2)], words, hex(byte))
+
+    def test_version_2_variables(self):
+        # 版 2 で足した変数は bios_hexbuf の後ろ。版 1 の変数の番地は動かさない
+        self.assertEqual(self.sym("bios_hexbuf"), 0x10066E)
+        self.assertEqual(self.sym("bios_acrtc_aborts"), 0x100678)
+        self.assertEqual(self.sym("bios_acrtc_abort_sr"), 0x10067A)
 
     def test_exception_stubs(self):
         # 入口ごとに MOVE.W #n,-(SP)（3F3C nnnn）と BRA.W exc_fatal
@@ -73,6 +98,24 @@ class BootRom(unittest.TestCase):
         self.assertLess(self.sym("exc_stubs_end"), 0x10000)
         # 使っていないところは 0xFF（消去した EPROM）
         self.assertEqual(self.rom[-1], 0xFF)
+
+
+class AbiTestCart(unittest.TestCase):
+    """BIOS の約束を確かめる試験のカートリッジ（boot/abitest.s。動きは board の console_boot.rs が見る）。"""
+
+    def test_header(self):
+        asm = Assembler(include_dirs=[os.path.join(HERE, "boot"), os.path.join(ROOT, "sdk", "include")],
+                        base=0x400000, fill=0xFF)
+        img = asm.assemble_file(os.path.join(HERE, "boot", "abitest.s"))
+        self.assertEqual(img[0:4], b"CART")
+        self.assertEqual(be16(img, 4), 1)
+        entry = be32(img, 8)
+        self.assertEqual(entry, asm.symbol_value("start"))
+        self.assertTrue(0x400000 <= entry < 0x400000 + len(img) and entry % 2 == 0)
+        self.assertEqual(be32(img, 12), len(img))
+        # 結果の表の番地は console_boot.rs と同じ
+        self.assertEqual(asm.symbol_value("r_case_sr"), 0x100850)
+        self.assertEqual(asm.symbol_value("bad_out"), 0x1009B4)
 
 
 class CharRom(unittest.TestCase):

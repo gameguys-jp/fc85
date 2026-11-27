@@ -166,8 +166,14 @@ fn memories_decode_to_the_address_map() {
         assert_eq!(c.rd(a, Size::Byte), BERR, "{a:#x}");
     }
     assert_eq!(c.sys.log.bus_errors, 13);
+    // カートリッジの有無は INPUT_IRQ_STATUS の bit 4（端子 /CART、読出し専用。DR-095）
+    assert_eq!(c.rw(0x26_0018) & 0x10, 0);
+    c.ww(0x26_0018, 0xFFFF);
     // カートリッジ：1 ウェイト
     c.sys.cart = Some(vec![0xCA, 0xFE, 0xBA, 0xBE]);
+    assert_eq!(c.rw(0x26_0018), 0x10);
+    c.ww(0x26_0018, 0x10);
+    assert_eq!(c.rw(0x26_0018), 0x10, "bit 4 は書いても消えない");
     assert_eq!(
         c.rd(0x40_0002, Size::Word),
         BusReply::Ok {

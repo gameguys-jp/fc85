@@ -351,12 +351,14 @@ AXIS0           EQU     $260004         ; AXIS0〜7：$260004〜$260012（下位
 MIDI_CTRL       EQU     $260014         ; ACIA の制御（書込み）／状態（読出し）。上位レーン、MOVE.B
 MIDI_STATUS     EQU     $260014
 MIDI_DATA       EQU     $260016         ; ACIA の送受信データ。上位レーン、MOVE.B
-INPUT_IRQ_STATUS EQU    $260018         ; bit 0、1、3 は W1C。bit 2 は ACIA の IRQ の写し（読出し専用）
+INPUT_IRQ_STATUS EQU    $260018         ; bit 0、1、3 は W1C。bit 2 は ACIA の IRQ の写し、bit 4 はカートリッジ（読出し専用）
 INPUT_IRQ_ENABLE EQU    $26001A
 INPUT_IRQ_PORT_A EQU    $0001
 INPUT_IRQ_PORT_B EQU    $0002
 INPUT_IRQ_MIDI  EQU     $0004
 INPUT_IRQ_EXTRIG EQU    $0008
+INPUT_IRQ_CART  EQU     $0010           ; INPUT_IRQ_STATUS だけ：カートリッジがある（端子 /CART。読出し専用、
+INPUT_IRQ_CART_B EQU    4               ; 割込みにはならない）[P]（DR-095）
 
 ; PORT_A・PORT_B のビット（DR-055 [P]）。bit 15–8 は予約（0）
 PAD_UP          EQU     $0001

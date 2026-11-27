@@ -37,11 +37,9 @@ fn check(doc: bool) {
         audio.append(&mut c.sys.audio_out);
     }
     assert_eq!(c.cpu.state, RunState::Running, "PC {:06X}", c.cpu.pc);
-    // バスエラーは、カートリッジの有無を調べる 0x400000 の読出しの 1 回だけ（bios-abi.md）
-    assert_eq!(
-        (c.sys.log.bus_errors, c.sys.log.last_bus_error),
-        (1, Some((0x40_0000, false)))
-    );
+    // バスエラーはない。カートリッジの有無は INPUT_IRQ_STATUS の bit 4 で見て、差していなければ窓を
+    // 読まない（DR-095。それまでは $400000 を読んでバスエラーが 1 回出ていた）
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
     assert_eq!(c.sys.log.doc_rule_warnings, 0);
     let v = &c.sys.ports.acrtc.video;
     assert!(c.sys.ports.acrtc.acrtc.display_running());
@@ -170,7 +168,7 @@ fn an_unclaimed_doc_interrupt_does_not_halt_the_bios() {
             assert!(spurious(&c) > 0, "{bend}：DOC の割込みが来ていない");
         }
         assert_eq!(
-            c.sys.log.bus_errors, 1,
+            c.sys.log.bus_errors, 0,
             "{bend}：{:?}",
             c.sys.log.last_bus_error
         );
@@ -206,7 +204,7 @@ fn stopping_the_video_clock_does_not_halt_the_bios() {
         "BIOS が止まった（PC {:06X}）",
         c.cpu.pc
     );
-    assert_eq!(c.sys.log.bus_errors, 1, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
     let changed = vram
         .iter()
         .zip(&c.sys.ports.acrtc.vram.0)
@@ -559,5 +557,160 @@ fn the_showcase_cartridge_reloads_the_dsp_after_an_overclock() {
     assert!(
         v.iter().any(|p| *p != v[0]),
         "頂点が 1 点に集まっている {v:?}"
+    );
+}
+
+/// 字形の 1 行（MSB が左）を、BIOS の描き方（bios-abi.md §07）で 4 bpp の 2 語にする。語の中は左の画素が
+/// 下位ニブル（台帳 HD63484.md §4.5）。
+fn glyph_words(row: u8, fg: u16, bg: u16) -> [u16; 2] {
+    let mut w = [0u16; 2];
+    for (k, word) in w.iter_mut().enumerate() {
+        for i in 0..4 {
+            let on = row & (0x80 >> (4 * k + i)) != 0;
+            *word |= (if on { fg } else { bg }) << (4 * i);
+        }
+    }
+    w
+}
+
+/// BIOS_PUTS_KUTEN の符号（$00xx：JIS X 0201、$KKTT：区点）→ 文字 ROM の offset（仕様書 §08）。ROM にない
+/// 区点は〓（2 区 14 点。bios-abi.md §05）。
+fn kuten_offset(code: u16) -> usize {
+    let (ku, ten) = (usize::from(code >> 8), usize::from(code & 0xFF));
+    let frame = |ku: usize, ten: usize| 0x800 + ((ku - 1) * 94 + ten - 1) * 8;
+    match (ku, ten) {
+        (0, _) => ten * 8,
+        (_, 0) | (_, 95..) => frame(2, 14),
+        (1..=8, _) => frame(ku, ten),
+        (16..=47, _) => 0x1F80 + ((ku - 16) * 94 + ten - 1) * 8,
+        _ => frame(2, 14),
+    }
+}
+
+/// VRAM の (x, y) から、文字 ROM の offset の字が前景 `fg`・背景 `bg` で並んでいるか。
+fn assert_text(c: &Console, x: usize, y: usize, offsets: &[usize], fg: u16, bg: u16) {
+    let vram = &c.sys.ports.acrtc.vram.0;
+    for r in 0..8 {
+        for (k, &off) in offsets.iter().enumerate() {
+            let want = glyph_words(c.sys.ports.char_rom[off + r], fg, bg);
+            let a = (y + r) * 64 + x / 4 + 2 * k;
+            assert_eq!(
+                [vram[a], vram[a + 1]],
+                want,
+                "({x},{y}) の {k} 字目の {r} 行目"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_bios_keeps_its_promises() {
+    // DR-094：試験のカートリッジ firmware/boot/abitest.s が、BIOS の呼出しと割込みを試して、結果を
+    // Main RAM の $100800 からに書く（番地は abitest.s の表）。DR-095：差してあるのでバスエラーはない
+    let Some(cart) = rom("firmware/boot/build/abitest.bin") else {
+        eprintln!("firmware/boot/build/abitest.bin がないので飛ばす");
+        return;
+    };
+    let Some(mut c) = boot(false) else {
+        eprintln!("firmware/boot/build/boot.bin がないので飛ばす");
+        return;
+    };
+    c.sys.cart = Some(cart);
+    c.power_on();
+    for _ in 0..40 {
+        c.sys.set_ports(0, 0);
+        c.run_frame();
+    }
+    let w = |a: usize| {
+        let i = a - 0x10_0000;
+        u16::from_be_bytes([c.sys.main_ram[i], c.sys.main_ram[i + 1]])
+    };
+    let l = |a: usize| (u32::from(w(a)) << 16) | u32::from(w(a + 2));
+    let app = 0x10_0800;
+    let z = 0x0004; // SR の Z
+    assert_eq!(w(app), 0x600D, "終わっていない（PC {:06X}）", c.cpu.pc);
+    assert_ne!(c.cpu.state, RunState::Halted, "PC {:06X}", c.cpu.pc);
+    // 時間（VBlank の割込みの直後から戻るまでのライン数）。版 1 の BIOS でも測る（abitest.s）ので、先に出す
+    let lines: Vec<u16> = (0..6).map(|k| w(app + 0x20 + 2 * k)).collect();
+    eprintln!(
+        "ライン数（版 {}）：PUTS 1 字 {}、10 字 {}、PUT_HEX 6 桁 {}（描き終わるまで {}）、PUTS_KUTEN 6 字 {}、ACRTC_SEND 64 語 {}",
+        w(app + 0x02),
+        lines[0],
+        lines[1],
+        lines[2],
+        lines[3],
+        lines[4],
+        lines[5]
+    );
+    // 版（BIOS_INFO と入口の D0）、カートリッジのビット
+    assert_eq!(w(app + 0x02), 2, "BIOS_INFO_VERSION");
+    assert_eq!(l(app + 0x04), 2, "入口の D0");
+    assert_eq!(w(app + 0x08) & 0x10, 0x10, "INPUT_IRQ_STATUS の bit 4");
+    // 出力のほかのレジスタ、SP、USP を保つ。割込み（アプリの処理 → BIOS の処理 → フック）の間も保つ
+    // 最初に違った呼出しの、戻った値と約束の値（D0–D7/A0–A6。abitest.s の bad_out）
+    let regs = |base: usize| -> Vec<String> {
+        (0..15)
+            .map(|k| format!("{:08X}", l(base + 4 * k)))
+            .collect()
+    };
+    assert_eq!(
+        w(app + 0x0A),
+        0,
+        "レジスタを保たない呼出し（bit が表の番号）：戻った値 {:?}、約束 {:?}",
+        regs(app + 0x1B4),
+        regs(app + 0x1F0)
+    );
+    assert_eq!(w(app + 0x0C), 0, "SP が戻らない呼出し");
+    assert_eq!(w(app + 0x0E), 0, "割込みの間に変わったレジスタの数");
+    assert_eq!(l(app + 0x10), 0x5A5A_A5A5, "USP");
+    // ACRTC を使う呼出し（ACRTC_SEND、CLS、PUTS、PUT_HEX、PUTS_KUTEN）は打ち切らなければ Z＝1。
+    // GLYPH は ROM にある区点で Z＝1
+    for i in [1, 2, 3, 4, 7, 8] {
+        assert_eq!(w(app + 0x50 + 2 * i) & z, z, "表の {i} 番目の呼出しの Z");
+    }
+    // 打切りを返す（DR-080、DR-082、DR-094）：誤りの列は Z＝0 で 1 回、SR の CER。次の正しい列は Z＝1
+    assert_eq!(w(app + 0x16) & z, 0, "誤りの列の後の Z");
+    assert_eq!(w(app + 0x18), 1, "打ち切った数");
+    assert_eq!(w(app + 0x1A) & 0x80, 0x80, "打ち切る前の SR に CER");
+    assert_eq!(w(app + 0x14) & z, z, "正しい列の後の Z");
+    // レベル 6：アプリの処理から BIOS の処理へつなぐと、VBlank の数え、パッド、フックが動き続ける
+    let (irq6, hook) = (w(app + 0x1C), w(app + 0x1E));
+    assert!(hook >= 30 && irq6 >= hook, "レベル 6 {irq6}、フック {hook}");
+    assert!(bios_frame(&c) >= 35, "bios_frame {}", bios_frame(&c));
+    // BIOS_GLYPH：$0041、16 区 1 点、47 区 94 点、ROM にない 3 つ（〓、Z＝0）
+    let geta = 0x01_0000 + 2 * kuten_offset(0x020E) as u32;
+    let want = [
+        (0x01_0000 + 0x41 * 16, z),
+        (0x01_0000 + 0x1F80 * 2, z),
+        (0x01_0000 + 0x7D78 * 2, z),
+        (geta, 0),
+        (geta, 0),
+        (geta, 0),
+    ];
+    for (k, (a0, zf)) in want.into_iter().enumerate() {
+        assert_eq!(l(app + 0x2C + 4 * k), a0, "BIOS_GLYPH {k} の A0");
+        assert_eq!(w(app + 0x44 + 2 * k) & z, zf, "BIOS_GLYPH {k} の Z");
+    }
+    // OI-065 の目安：6 桁の描き直しが VBlank（70 ライン）に入る
+    assert!(lines[3] < 70, "PUT_HEX 6 桁が VBlank に入らない：{lines:?}");
+    assert!(lines[1] < 10 * 4, "PUTS が速くなっていない：{lines:?}");
+    // 照合用の字：PUTS（A、1、ｱ、Z、空白）と PUTS_KUTEN（A、16 区 1 点、〓、4 区 2 点、〓）
+    assert_text(
+        &c,
+        16,
+        8,
+        &[0x41 * 8, 0x31 * 8, 0xB1 * 8, 0x5A * 8, 0x20 * 8],
+        15,
+        1,
+    );
+    let codes = [0x0041, 0x1001, 0x0914, 0x2422, 0x0100];
+    let offsets: Vec<usize> = codes.into_iter().map(kuten_offset).collect();
+    assert_text(&c, 16, 24, &offsets, 3, 0);
+    // バスエラーなし。WFE を見て 8 語を続けて書いても、満杯の FIFO に書かない
+    assert_eq!(c.sys.log.bus_errors, 0, "{:?}", c.sys.log.last_bus_error);
+    assert_eq!(
+        c.sys.ports.acrtc.acrtc.error_counts().0,
+        0,
+        "満杯の FIFO に書いた"
     );
 }
