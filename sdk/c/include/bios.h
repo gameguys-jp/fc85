@@ -52,16 +52,16 @@ typedef void (*bios_hook_t)(void);
 #define bios_midi_head         BIOS_VAR(uint16_t, 0x100612UL)     /* MIDI の受信のリングの書く位置 */
 #define bios_midi_tail         BIOS_VAR(uint16_t, 0x100614UL)     /* 書いてよい。読む位置 */
 #define bios_midi_buf          BIOS_ARRAY(uint8_t, 0x100616UL)    /* 64 byte */
-#define bios_midi_lost         BIOS_VAR(uint16_t, 0x100656UL)
-#define bios_spurious          BIOS_VAR(uint16_t, 0x100658UL)
-#define bios_pad_prev          BIOS_VAR(uint16_t, 0x10065AUL)
+#define bios_midi_lost         BIOS_VAR(uint16_t, 0x100656UL)     /* リングが満杯で捨てた数 */
+#define bios_spurious          BIOS_VAR(uint16_t, 0x100658UL)     /* スプリアス・レベル 7・DOC（レベル 4）の割込みの数 */
+#define bios_pad_prev          BIOS_VAR(uint16_t, 0x10065AUL)     /* 内部（版で変わる。頼らない） */
 #define bios_exc_vector        BIOS_VAR(uint16_t, 0x10065CUL)     /* 致命的な例外のベクタ番号 */
 #define bios_exc_sr            BIOS_VAR(uint16_t, 0x10065EUL)
 #define bios_exc_pc            BIOS_VAR(uint32_t, 0x100660UL)
 #define bios_exc_addr          BIOS_VAR(uint32_t, 0x100664UL)
-#define bios_exc_busy          BIOS_VAR(uint16_t, 0x100668UL)
-#define bios_probe_sp          BIOS_VAR(uint32_t, 0x10066AUL)
-#define bios_hexbuf            BIOS_ARRAY(uint8_t, 0x10066EUL)    /* 10 byte */
+#define bios_exc_busy          BIOS_VAR(uint16_t, 0x100668UL)     /* 内部 */
+#define bios_probe_sp          BIOS_VAR(uint32_t, 0x10066AUL)     /* 内部 */
+#define bios_hexbuf            BIOS_ARRAY(uint8_t, 0x10066EUL)    /* 内部。10 byte */
 #define bios_acrtc_aborts      BIOS_VAR(uint16_t, 0x100678UL)     /* 版 2 */
 #define bios_acrtc_abort_sr    BIOS_VAR(uint16_t, 0x10067AUL)     /* 版 2 */
 #define BIOS_VARS_USED         0x10067CUL

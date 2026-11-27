@@ -35,7 +35,8 @@ BIOS_INFO_VERSION EQU   BIOS_INFO+0     ; 語：BIOS_VERSION（約束の版）
 
 ; ------------------------------------------------------------------ Main RAM の使い方
 ; $100000–$1005FF  例外のジャンプ表（DR-025）。ベクタ n は JUMP_TABLE+6n。中身は JMP abs.L（$4EF9＋番地）
-; $100600–$1007FF  BIOS の変数（下）。カートリッジも読んでよい。書くのは「書いてよい」としたものだけ
+; $100600–$1007FF  BIOS の変数（下）。カートリッジも読んでよいが、約束するのは「内部」の印のないもの
+;                  （bios-abi.md §03 の表）だけ。書くのは「書いてよい」としたものだけ
 ; $100800–$11FFFF  アプリケーション。スタックは $120000 から下へ（初期の SSP）
 
 BIOS_VARS       EQU     $100600
@@ -55,15 +56,15 @@ bios_midi_head  RS.W    1               ; MIDI の受信のリング（64 byte�
 bios_midi_tail  RS.W    1               ; tail は読む位置（アプリが進める。書いてよい）
 bios_midi_buf   RS.B    64
 bios_midi_lost  RS.W    1               ; リングが満杯で捨てた数
-bios_spurious   RS.W    1               ; スプリアス割込みとレベル 7 の数
-bios_pad_prev   RS.W    1               ; BIOS_READ_PAD の前の値
+bios_spurious   RS.W    1               ; スプリアス割込み、レベル 7、既定の処理が受けた DOC の割込み（レベル 4）の数
+bios_pad_prev   RS.W    1               ; 内部：BIOS_READ_PAD の前の値（版で変わる。頼らない）
 bios_exc_vector RS.W    1               ; 致命的な例外：ベクタ番号
 bios_exc_sr     RS.W    1               ; 　SR
 bios_exc_pc     RS.L    1               ; 　PC
 bios_exc_addr   RS.L    1               ; 　アクセスの番地（バスエラーとアドレスエラー）
-bios_exc_busy   RS.W    1               ; 致命的な例外の処理中
-bios_probe_sp   RS.L    1               ; カートリッジを調べる間の SP
-bios_hexbuf     RS.B    10
+bios_exc_busy   RS.W    1               ; 内部：致命的な例外の処理中
+bios_probe_sp   RS.L    1               ; 内部：カートリッジを調べる間の SP
+bios_hexbuf     RS.B    10              ; 内部：16 進の字の作業場所
 ; 版 2
 bios_acrtc_aborts RS.W  1               ; BIOS が ACRTC のコマンドを打ち切った数（DR-080、DR-082。16 bit で一巡する）
 bios_acrtc_abort_sr RS.W 1              ; 最後に打ち切る前に読んだ ACRTC の SR（下位 byte。CER が立っていれば誤り、

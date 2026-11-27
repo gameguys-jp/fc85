@@ -1161,3 +1161,13 @@
 | 理由 | ユーザーの方針（Web は早めに）。ゲームの手触りを Web で確かめるのに、キーボードより手持ちのパッドが自然。ホストにゲームパッドを足すには crate（gilrs など）を取ってくる必要があり、取ってくるのは人の許可が要るので、ブラウザの機能だけで足りる Web から始める。確かめたこと [V]（Chrome）：Gamepad API を模したパッドで、SAMPLE 7 の上を 3 回押すと SPEED が 4 から 7 に、下の釦で DIRECT が入った。実物のゲームパッドではまだ確かめていない |
 | 却下した案 | 釦の割り当てを頁で変えられるようにする：使う人が出てからでよい。上の釦（3）も C にする：配置の違うパッドで押し間違える |
 | 影響 | emulator/embed/index.html、sdk/docs/emulator-api.md §08 |
+
+## DR-117　BIOS の文書と bios.inc の食い違いをそろえる（OI-099）
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。BIOS の中身は変えず、文書と注釈を BIOS の動きと §03・§11 の約束に合わせる [P]。(1) 本体 DAC の電源投入時の偏り：bios-abi.md §06 の「約 1 ms」を「約 3 ms」にする（エミュレータで DOC の子基板なしの最初の 139 標本、約 2.9 ms が下に寄る。impl/emulator.md の 2.8 ms も直す）。(2) `bios_spurious` の注釈（bios.inc・bios.h）に、既定の処理が受けた DOC の割込み（レベル 4）も数えることを書く（bios.s の `irq_doc` が数える。§03 の表はもとからそう書いている）。(3) bios.inc の BIOS の変数の範囲の注釈を「読んでよいが、約束するのは内部の印のないもの（§03 の表）だけ」にし、`bios_pad_prev`・`bios_exc_busy`・`bios_probe_sp`・`bios_hexbuf` に「内部」の印を付ける（bios.h も）。(4) bios-abi.md §11 の「保証しないこと」にあった「BIOS の呼出しは MASK・ORG・パターン RAM・ACRTC の CCR・OMR・DCR を、打切りの ABT のほか変えない」を「保証すること」に移し、残りの「CCR」が 68000 の CCR（呼出しの後の条件コード）であることを書く。bios-abi.md を v0.3 にする |
+| 理由 | ROM を書く人とエージェントが bios.inc・bios.h の注釈を読んで、内部の変数に頼ったり、DOC の割込みの数え方を見落としたりしないため。測った値（[V]、エミュレータ）：`load`（`doc` false）の直後から 3 フレームの音で、最初の 139 標本が −16384（デジタルの和）、LINE OUT でも 140 標本が −4000 より下 |
+| 却下した案 | 内部の変数を bios.inc・bios.h から消す：BIOS 自身（bios.s）が bios.inc の名前を使い、bios.h は試験が bios.inc と突き合わせるので、名前は残して印を付ける。偏りを BIOS で短くする：BIOS の起動の順（§02）を変えることになり、OI-061（ラッチの回路）の決め方による |
+| 影響 | sdk/include/bios.inc、sdk/c/include/bios.h（注釈だけ。番地と組み立てた ROM は変わらない）、sdk/docs/bios-abi.md v0.3（§06、§11）、docs/impl/emulator.md、OI-099 |
