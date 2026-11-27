@@ -23,8 +23,8 @@
 //!   書込みをラッチし、すぐ後の窓を取る。窓の前に番地を出しておくのは、台帳 §2 の注意 2（アドレスは
 //!   直前の E Low の間に出す）による。
 //! - 打ち切り（時間切れ、STOP）：待たせている間なら取り消す。預かった読出しは、窓を取る前なら取り消し、
-//!   E が上がった後なら窓のアクセスは行い、答えだけを捨てる [V]。預かった書込みは答えた後なので、
-//!   打ち切りとは関係なく窓で書く。
+//!   窓を取った後なら（E が上がる前でも）窓のアクセスは行い、答えだけを捨てる。P2A の式の「捨てる」段
+//!   （DR-089、DR-110）[V]。預かった書込みは答えた後なので、打ち切りとは関係なく窓で書く。
 //! - 波形 RAM は 64 KiB。DOC の BS（番地の bit 16）はつながず、上下のバンクは同じ RAM（台帳 §2）。
 //! - 68000 のブリッジ（段階 3。OI-055）：DOC の窓（0x210000〜0x2101FF）の reg n は 0x210000＋2n で、
 //!   上位バイトレーン（UDS だけ）。ほかの幅と、子基板がないときは DTACK を返さず、バスの時間切れで
@@ -690,14 +690,26 @@ impl DocBoard {
         if self.queued.take().is_some() {
             return;
         }
-        // 預かった読出し
+        // 預かった読出し：窓を取っていれば、E が上がる前でも捨てる段に入り、窓を使ってから空く（P2A の式。
+        // P2A は E の立上りを知らない。DR-110）
         if self.req.is_some_and(|r| !r.write) {
-            if self.owned {
+            if self.stage == Stage::Claimed {
                 self.discard = true;
             } else {
                 self.stage = Stage::Idle;
                 self.req = None;
             }
+        }
+    }
+
+    /// P2A の段の 2 bit（S1・S0。DR-089、fabric_logic.py の spec_p2a と同じ）：0b00 空き、0b01 窓を待つ、
+    /// 0b11 窓を取った、0b10 取った読出しを捨てる。
+    pub fn p2a_state(&self) -> u8 {
+        match self.stage {
+            Stage::Idle => 0b00,
+            Stage::Wait => 0b01,
+            Stage::Claimed if self.discard => 0b10,
+            Stage::Claimed => 0b11,
         }
     }
 

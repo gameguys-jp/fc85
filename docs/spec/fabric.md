@@ -1,6 +1,6 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.14**  
+**v0.15**  
 2026年11月27日
 
 > 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)、[DR-085](../decisions.md)、[OI-082](../open-issues.md)、[OI-083](../open-issues.md)、[OI-084](../open-issues.md)、[DR-088](../decisions.md)、[DR-089](../decisions.md)、[DR-090](../decisions.md)、[OI-087](../open-issues.md)、[OI-088](../open-issues.md)、[OI-089](../open-issues.md)、[DR-091](../decisions.md)、[OI-090](../open-issues.md)、[DR-098](../decisions.md)、[OI-092](../open-issues.md)、[DR-099](../decisions.md)、[OI-093](../open-issues.md)
@@ -533,7 +533,7 @@ NX と OP の制御、アクセスの終わりと時間切れ、ポートごと�
 - 書込みの値のラッチ U50 は 74LS377（LCLK、/EN ＝ P2R）、番地のラッチ U48–U49 は 74LS377（16 MHz、/EN ＝ LAT）にした（08）。DR-091 で、U48–U49 の /EN は P2A が登録する LDQ（ラッチの次の縁で取り込む）になった。U50 は、答えを数えたスロットの LCLK で取り込む。P2A は q1 以降の縁でラッチするので、それは 2 スロット目以降で、FD は OP が保つ間ずっと出ている。本体のクロック（DOC の CLK 8 MHz）では、U50 の値は窓の E の立上りの前に入る：いちばん近いのはラッチが q1 の縁のときで、E の立上りはラッチの 375 ns 以上後（emulator.md §03）、U50 の LCLK はラッチの 312.5 ns 後（TIM の 15 を足して 327.5）なので、47.5 ns 以上前。データの出力は 74LS377 の CLK→Q（27）の後で、窓の中の波形 RAM の書込みに間に合うかは [V]。外部クロックで E が短いと、U50 が取るのは窓の E の立上りの後になりうる（DOC の CLK が 16 MHz 以下なら窓の終わりの前）[V]。
 - 確かめたこと：DPA・OPA・OPB・STB・TIM は入力の全部、P1A・P2A は届きうる入力と状態の全部で、fabric_logic.py の仕様の定義と一致する。全体は門の模型で突き合わせた（上の「確かめたこと」）[P]。DR-091 の P1A・P2A（q1〜q3 の答えの預かり、q0 の縁だけで効く打切り、P2A の LDQ、OP の写しの L2・WQ）も同じように突き合わせた。L2 が前の式の LA ∧ ¬OPP0 と同じこと（OPA の LA が OP の有効 ∧ LG と同じこと）は、門の模型が毎スロット確かめる。門の模型は、延びたアクセスの答えの縁（q0〜q3）をポートの模型から受け取り、fabric.rs と同じスロットに数えることを、q0〜q3 のそれぞれで確かめた（試験 `fabric_lockstep` の網羅の目安「答え q0」〜「答え q3」）。
 - DR-091 の P2A の式は、E の 1 周期が 16 MHz の 8 周期以上（DOC の CLK が 16 MHz 以下）として、届かない組を省いた（fabric_logic.py の `p2a_reachable`：同期化した E の立下りと、預かった答え・このスロットの答えが重ならない）。U50 が窓の終わりの前に値を取るのも同じ前提による。外部クロック（DR-035）で DOC の CLK を 16 MHz より上げたときの P2A の働きは決めていない [V]（DOC は個体 0・25 °C で 12.6 MHz から崩れ始める。impl/emulator.md §04）。
-- P2A は、預かった読出しを STOP や時間切れで打ち切ると、窓を取る前でも「捨てる」段に入り、窓を 1 つ使ってから空く。エミュレータの模型（doc.rs）は、窓を取る前なら預かりをすぐ消す。違いは、打ち切った後の次の DOC のアクセスが最大で E の 1 周期遅れることだけ [V]（OI-089）。
+- P2A は、預かった読出しを STOP や時間切れで打ち切ると、窓を取った後なら（E が上がる前でも）「捨てる」段に入り、窓を 1 つ使ってから空く。窓を待っている間なら取り消す。DR-110 で、エミュレータの模型（doc.rs）をこの式に合わせた（前は、E が上がる前なら預かりをすぐ消していた。違いは、打ち切った後の次の DOC のアクセスが最大で E の 1 周期遅れること）[V]（OI-089）。
 - 68000 のブリッジ（/DCS の窓の待ち、E の立下りでの窓の取得、DTACK）の 3 つのレジスタは、P2A のピンが足りないので HACK に置いた。DR-088 の「P2A が E の立下りを使う 3 つのレジスタを持つ」とは置き場所が違う（同じ SYN1・SYN2 を見る）[P]（OI-089）。
 
 ```

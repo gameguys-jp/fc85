@@ -406,6 +406,40 @@ fn stop_cancels_a_waiting_read() {
 }
 
 #[test]
+fn stop_after_the_window_is_claimed_discards_the_read() {
+    // P2A の式（DR-089）：窓を取った（S1・S0＝11）後の読出しを打ち切ると、E が上がる前でも「捨てる」段
+    // （10）に入り、窓を 1 つ使ってから空く。答えは Fabric に届かない。P2A は E の立上りを知らない
+    // （DR-110、OI-089 (1)）。E の位相を 16 MHz の 1 周期ずつ変えて、窓を取った直後のスロットで止める
+    let regs = [
+        (SRC, 2),
+        (DST, 6),
+        (SRC_ADDR, 0x2000),
+        (COUNT, 1),
+        (FORMAT, 0),
+    ];
+    for k in 0..PERIOD_DOC_E / PERIOD_16M {
+        let mut r = Rig::new(k * PERIOD_16M);
+        r.p.doc_board.wave[0x2000] = 0x33;
+        r.p.temporal.mem[0] = 0xEE;
+        channel(&mut r, &regs);
+        while r.p.doc_board.p2a_state() != 0b11 {
+            r.step();
+        }
+        assert_eq!(r.p.doc_board.windows, 0);
+        r.write(CTRL, 2);
+        r.run(40);
+        assert_eq!(r.p.temporal.mem[0], 0xEE, "位相 {k}");
+        assert_eq!(r.p.doc_board.windows, 1, "位相 {k}：取った窓は使う");
+        assert_eq!(r.p.doc_board.p2a_state(), 0b00);
+        // P2A は空いていて、次の転送は通る
+        channel(&mut r, &regs);
+        r.run(40);
+        assert_eq!(r.p.temporal.mem[0], 0x33, "位相 {k}");
+        assert_eq!(r.p.doc_board.windows, 2);
+    }
+}
+
+#[test]
 fn stop_keeps_a_posted_write_and_cancels_the_next() {
     // DOC の CLK が 2 MHz なら、2 byte 目は 1 byte 目の窓を長く待つ。そこで止めると、2 byte 目は
     // 取り消し、預かった 1 byte 目は窓で書く
