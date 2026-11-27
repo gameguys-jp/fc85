@@ -109,12 +109,14 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 240000–24003F | Temporal / Capture | 独立R/Wポインタ・状態。+0 WPTR、+2 RPTR、+4 CTRL（ポインタの初期化、VBlankでの同期の初期化、読出しだけの同期、書込みの保持、ポインタの一致と追越しの印）、+6 DIST。240020–はCapture [O] [P]（DR-053、DR-067） |
 | 250000–250FFF | Data Fabric | DMA・IRQ・経路・bend |
 | 260000–2600FF | Controller / MIDI / matrix | 入力・ACIA・クロック・マトリクス |
-| 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）[P]（DR-027）。270022 VIDEO_IRQ（VBlank・HBlankの割込みの許可と保留、レベル6）、270024 LINE（ラスタ）、270026 LINE_CMP。残りは予約 [P]（DR-053） |
+| 270000–27003F | Palette | `$0RGB`の語×16（270000–27001F）、語アクセスのみ、書込み専用（読むと0）[P]（DR-053）。裏と表の2面で、書込みは次のラインから反映。270020はPAL_CTRL（bit0 DIRECT：表へ直接書き、ライン途中から効く。Bend）[P]（DR-027）。270022 VIDEO_IRQ（VBlank・HBlankの割込みの許可と保留、レベル6）、270024 LINE（ラスタ）、270026 LINE_CMP。残りは予約 [P]（DR-053） |
 | 280000–281FFF | DSP program window | 4K×16。DSPをリセットしPRGBUS＝1の間だけR/W可。それ以外はバスエラー [P]（DR-029） |
 | 400000–4FFFFF | Cartridge ROM window | 最大1 MiB窓、初期128 KiB想定。既定は1ウェイト（tACC 375 ns以下のROM）。カートリッジがDTACKを返す方式は [O]（DR-026）。カートリッジは端子の1本（/CART）を中でGNDにつなぐ。本体は/CARTを引上げ抵抗で受け、Highなら窓のDTACKを出さず（時間切れのバスエラー）、INPUT_IRQ_STATUSのbit 4で読ませる [P]（DR-095） |
 | その他 | 予約 | 将来拡張 |
 
 番地・幅・アクセス・ビットの名前と値の一覧は [registers.md](registers.md)（`docs/spec/registers.toml` から生成。fc85.inc・fc85.h・エミュレータの regmap.rs も同じ表から作る）[P]（DR-100）。
+
+レジスタのアクセスの一般の規則：書込み専用のレジスタは読むと0、読出し専用のレジスタへの書込みは捨てる（ROMへの書込みはDR-052）[P]（DR-053）。読むと変わるレジスタ（DSP_RESPONSEを読むとRESPONSEとDSPの割込みの要求が下がる）、W1Cのビット、使わないビット、32 bitのレジスタの上位語（Data Fabricのチャネルの32 bitのレジスタの上位語は読むと0で、書込みは捨てる。PORT_RESET・AUDIO_Nは読むと0。DR-046 (3)）は、registers.mdの表が正 [P]（DR-120）。
 
 | ローカルメモリ | 容量 | 構成・アクセス |
 |---|---:|---|
@@ -316,7 +318,7 @@ MIDIは1983年に規格化され、1985年のAtari STにも内蔵端子の例が
 | 04–12 | AXIS0–7：8個の16-bitレジスタ。初期は8-bitアナログ値を下位に格納 |
 | 14 / 16 | MIDI_STATUS / MIDI_DATA：ACIAの制御・状態、送受信データ、上位byte lane |
 | 18 | INPUT_IRQ_STATUS：bit0 PORT_Aの変化、bit1 PORT_Bの変化、bit2 MIDI受信、bit3 外部trigger [P]（DR-053）。W1C。ただしMIDIビットはACIAのIRQ̄の写しで読み専用。ACIAの状態→受信データの順に読んで解除する [P]（DR-028）。bit4 カートリッジあり（/CARTがLowのとき1。読み専用で、割込みにはならない）[P]（DR-095）。部品は読出しの緩衝器の1ビットと引上げ抵抗1本（入力の窓の部品表は未定）[V] |
-| 1A | INPUT_IRQ_ENABLE：イベント割込みの許可 |
+| 1A | INPUT_IRQ_ENABLE：イベント割込みの許可。bit0・1・3（INPUT_IRQ_STATUSと同じ並び）。bit2は使わない（MIDIの受信はACIAのIRQ̄でレベル5に出る）[P]（DR-053、DR-120） |
 | 20–3E | 予約：アナログマトリクス、外部trigger／拡張 |
 
 BIOS/SDKではデジタル状態、連続値、タイムスタンプ付きイベント（MIDI Note/CC/Clock等）を抽象化する。入力の意味付けはゲーム／制作ソフトが行う。MIDIバイト列はネイティブACIAを通し、エミュレータのホストイベントはシリアル転送時間も再現する。3-byteメッセージは約0.96 ms（連続送信時、待ちなし）。高頻度の連続制御は帯域制限を考慮する。
