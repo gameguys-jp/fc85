@@ -59,7 +59,7 @@
   <div>
     <h1>fc85 エミュレータ</h1>
     <div class="screen"><canvas id="screen" width="256" height="192" tabindex="0"></canvas></div>
-    <p class="help">矢印・Z（A）・X（B）・C（C）・Enter（START）が釦。画面を一度押すとキーを受ける。速さは手元のプログラムが仮想機を回す速さに合わせる（約 59.92 フレーム毎秒）。</p>
+    <p class="help">矢印・Z（A）・X（B）・C（C）・Enter（START）が釦。画面を一度押すとキーを受ける。ゲームパッドは、十字か左の棒、下の釦が A、右が B、左が C、START（つないで釦を一度押すと読み始める）。速さは手元のプログラムが仮想機を回す速さに合わせる（約 59.92 フレーム毎秒）。</p>
     <div id="msg"></div>
   </div>
   <div>
@@ -226,7 +226,8 @@ async function regs() {
 async function frame(n) {
   st.busy = true;
   try {
-    const r = await fetch("/frame", { method: "POST", body: JSON.stringify({ pad: st.pad, frames: n }) }).then((r) => r.json());
+    const pad = st.pad | gamepadBits();
+    const r = await fetch("/frame", { method: "POST", body: JSON.stringify({ pad, frames: n }) }).then((r) => r.json());
     if (r.error) throw new Error(r.error);
     draw(r.png); play(r.pcm); show(r.report, r.mode); showDoc(r.doc);
     st.fpsN += r.report.frames_run;
@@ -271,6 +272,23 @@ window.addEventListener("keyup", (e) => {
   if (b) { st.pad &= ~b; e.preventDefault(); }
 });
 window.addEventListener("blur", () => { st.pad = 0; });
+
+// ゲームパッド（Gamepad API の標準の配置。WebAssembly の試しの頁と同じ。DR-116、DR-125）：十字（12〜15）か
+// 左の棒、下の釦（0）= A、右（1）= B、左（2）= C、START（9）。フレームを頼むたびに読み、キーと OR にする
+const PAD_BUTTONS = [[12, 0x01], [13, 0x02], [14, 0x04], [15, 0x08], [0, 0x10], [1, 0x20], [2, 0x40], [9, 0x80]];
+function gamepadBits() {
+  let bits = 0;
+  for (const g of navigator.getGamepads ? navigator.getGamepads() : []) {
+    if (!g || !g.connected) continue;
+    for (const [i, bit] of PAD_BUTTONS) if (g.buttons[i] && g.buttons[i].pressed) bits |= bit;
+    const x = g.axes[0] ?? 0, y = g.axes[1] ?? 0;
+    if (y < -0.5) bits |= 0x01;
+    if (y > 0.5) bits |= 0x02;
+    if (x < -0.5) bits |= 0x04;
+    if (x > 0.5) bits |= 0x08;
+  }
+  return bits;
+}
 
 $("run").onclick = () => {
   st.running = !st.running;
