@@ -209,7 +209,7 @@ ROM 作りを始める線は、ソフトから見える約束（アドレスマ�
 
 ROM の回帰試験の要点。手順の詳細は [emulator-api.md](emulator-api.md)。
 
-1. 組むときにリストを作る（ひな形の `build.py` は `build/rom.lst` を書く。m68kasm を直に使うなら `-l`）。カートリッジの横の `.lst` は `load` が自動で読み、番地をラベルで書ける。新しい ROM は `py sdk/tools/new_rom.py` でひな形（[sdk/template/](../template/AGENTS.md)）から作ると、組立てと試験の形がそろう（DR-102）。C の ROM では `build.py` が GCC の出力から同じ形の記号の表を書く（[c.md](c.md) §09、DR-103）。
+1. 組むときにリストを作る（ひな形の `build.py` は `build/rom.lst` を書く。m68kasm を直に使うなら `-l`）。カートリッジの横の `.lst` は `load` が自動で読み、番地をラベルで書ける。新しい ROM は `py sdk/tools/new_rom.py` でひな形（[sdk/template/](../template/AGENTS.md)）から作ると、組立てと試験の形がそろう（DR-102）。C の ROM では `build.py` が GCC の出力から同じ形の記号の表を書く（[c.md](c.md) §10、DR-103）。
 2. `fc85-api`（JSON の手順か `--mcp`）で `load`（`cart`。`doc` を false にすると DOC の子基板なし）し、`run`（`frames`、入力の台本 `input`、`stop_on_bus_error`）で進める。
 3. `stop` が `frames`、`bus_errors`・`bridge_timeouts`・`doc_rule_warnings` が 0、`info` の `mode` が `normal` であることを見る。§06 のとおり、ACRTC の規約は窓口が数えないので、コードで守る（§03 の 6〜8）。
 4. 画面は `screenshot`（PNG）と `screen_hash`、音は `audio`（WAV、`peak`、`rms`）と `run` の `voices` で比べる。

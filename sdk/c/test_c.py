@@ -195,7 +195,7 @@ class TestCRuntime(unittest.TestCase):
     def test_the_listed_headers_compile(self):
         """sdk/docs/c.md §05 のヘッダが -nostdinc で読め、limits.h の値が 68000 の GCC の型と合う。"""
         heads = ["stdint.h", "stddef.h", "stdbool.h", "stdarg.h", "stdalign.h", "stdnoreturn.h", "iso646.h",
-                 "limits.h", "string.h", "bios.h", "fc85.h"]
+                 "limits.h", "string.h", "bios.h", "fc85.h", "acrtc.h", "fabric.h", "doc.h", "adpcm.h"]
         checks = ["CHAR_BIT == 8", "CHAR_MIN == -128", "UCHAR_MAX == 255", "SHRT_MIN == -32768",
                   "USHRT_MAX == 65535", "INT_MAX == 2147483647", "INT_MIN == -INT_MAX - 1",
                   "UINT_MAX == 4294967295U", "LONG_MAX == INT_MAX", "ULLONG_MAX == 18446744073709551615ULL",

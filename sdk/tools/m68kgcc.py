@@ -24,12 +24,15 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SDK = os.path.normpath(os.path.join(HERE, ".."))
 C_DIR = os.path.join(SDK, "c")
-RUNTIME = ["crt0.S", "bios.S", "runtime.S", "runtime64.c", "string.c"]
+# 使わない関数はリンクで落ちる（-ffunction-sections と --gc-sections）
+RUNTIME = ["crt0.S", "bios.S", "runtime.S", "runtime64.c", "string.c", "acrtc.c", "fabric.c", "doc.c", "adpcm.c"]
 LINKER_SCRIPT = "fc85.ld"
 CART_MAX = 0x100000
 
 CFLAGS = [
-    "-m68000", "-std=gnu11", "-g",
+    # -fno-store-merging：GCC（11.4 で確かめた）は構造体の初期化などで隣の欄の定数の書込みをまとめ、奇数番地への
+    # 長語の書込みにすることがある。68000 ではアドレスエラー（ベクタ 3）になる。-mstrict-align では止まらない（DR-106）
+    "-m68000", "-fno-store-merging", "-std=gnu11", "-g",
     "-ffreestanding", "-nostdinc",
     "-fno-pic", "-fno-pie", "-fno-stack-protector", "-fno-delete-null-pointer-checks",
     "-fno-asynchronous-unwind-tables", "-fno-unwind-tables", "-fno-common",
