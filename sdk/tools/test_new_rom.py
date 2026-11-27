@@ -32,9 +32,10 @@ class TestNewRom(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_creates_a_project_that_builds_and_finds_the_sdk(self):
-        self.assertEqual(quiet(new_rom.main, [self.dest, "--title", "HELLO 85"]), 0)
-        for name in new_rom.FILES + ["fc85-root", ".mcp.json"]:
+        self.assertEqual(quiet(new_rom.main, [self.dest, "--title", "HELLO 85", "--lang", "asm"]), 0)
+        for name in new_rom.FILES + ["main.s", "fc85-root", ".mcp.json"]:
             self.assertTrue(os.path.isfile(os.path.join(self.dest, name)), name)
+        self.assertFalse(os.path.exists(os.path.join(self.dest, "main.c")))
         with open(os.path.join(self.dest, "main.s"), encoding="utf-8") as f:
             text = f.read()
         self.assertIn('"HELLO 85        "', text)
@@ -66,6 +67,32 @@ class TestNewRom(unittest.TestCase):
                                capture_output=True, text=True, encoding="utf-8", timeout=60)
             self.assertEqual(json.loads(r.stdout)["result"]["serverInfo"]["name"], "fc85")
 
+    def test_the_c_project_is_the_default(self):
+        notes = quiet(new_rom.create, self.dest, "HELLO C")
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, "main.c")))
+        self.assertFalse(os.path.exists(os.path.join(self.dest, "main.s")))
+        with open(os.path.join(self.dest, "main.c"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('FC85_CART("HELLO C         ");', text)
+        self.assertIn('s_title[] = "HELLO C";', text)
+        self.assertNotIn("TEMPLATE", text)
+        sys.path.insert(0, HERE)
+        import m68kgcc
+        if m68kgcc.find_toolchain() is None:
+            self.assertTrue(any("GCC" in n for n in notes))
+            self.skipTest("68000 の GCC がない")
+        r = subprocess.run([sys.executable, "build.py"], cwd=self.dest, capture_output=True,
+                           text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for name in ("rom.bin", "rom.lst", "rom.elf", "rom.map", "rom.dis"):
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, "build", name)), name)
+        with open(os.path.join(self.dest, "build", "rom.bin"), "rb") as f:
+            self.assertEqual(f.read()[16:32], b"HELLO C".ljust(16))
+        # 同じ試験（test_rom.py）が C の ROM でも通る（ラベルは rom.lst の記号の表から）
+        r = subprocess.run([sys.executable, "-m", "unittest"], cwd=self.dest, capture_output=True,
+                           text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_the_default_title_comes_from_the_folder(self):
         self.assertEqual(new_rom.default_title(self.dest), "MY FIRST ROM")
         self.assertEqual(new_rom.default_title(os.path.join(self.tmp.name, "---")), "ROM")
@@ -75,6 +102,8 @@ class TestNewRom(unittest.TestCase):
             new_rom.create(self.dest, "TOO LONG FOR THE HEADER")
         with self.assertRaises(ValueError):
             new_rom.create(self.dest, 'QUOTE"')
+        with self.assertRaises(ValueError):
+            new_rom.create(self.dest, "OK", "basic")
         os.makedirs(self.dest)
         with open(os.path.join(self.dest, "x"), "w") as f:
             f.write("x")

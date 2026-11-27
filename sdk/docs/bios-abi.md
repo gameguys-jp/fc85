@@ -15,7 +15,7 @@
 | 組み方 | `python firmware/boot/build.py` → `firmware/boot/build/boot.bin`（64 KiB、空きは 0xFF）と `boot.lst`（リストと記号の表） |
 | 文字 ROM | `python firmware/charrom/build.py` → `firmware/charrom/build/char.bin`（32 KiB）と `char-status.tsv`（§07） |
 | アセンブラ | [sdk/m68kasm/](../m68kasm/)（Python 3 の標準ライブラリだけ。§10） |
-| ヘッダ | [fc85.inc](../include/fc85.inc)（MMIO。[registers.toml](../../docs/spec/registers.toml) から生成し、手で直さない。C では同じ名前の [fc85.h](../include/fc85.h)）[P]（DR-100）、[bios.inc](../include/bios.inc)（この文書の約束） |
+| ヘッダ | [fc85.inc](../include/fc85.inc)（MMIO。[registers.toml](../../docs/spec/registers.toml) から生成し、手で直さない。C では同じ名前の [fc85.h](../include/fc85.h)）[P]（DR-100）、[bios.inc](../include/bios.inc)（この文書の約束。C では [bios.h](../c/include/bios.h)。使い方は [c.md](c.md) §07。DR-103） |
 | 動かし方 | 両方を組んでから、`emulator/` で `cargo run --release -p fc85-host`。ホストは既定で `firmware/` のビルド結果を読む |
 | 試験 | `python -m unittest firmware/test_firmware.py`（イメージの形）。動作はエミュレータで見る（§08）。呼出しと割込みの約束は、試験のカートリッジ `firmware/boot/abitest.s`（`build.py` が `build/abitest.bin` に組む）を board の試験 `console_boot.rs` の `the_bios_keeps_its_promises` が動かして確かめる（DR-094） |
 | 版 | BIOS の版 2（`BIOS_VERSION`＝$0002。ROM の $000480 の `BIOS_INFO_VERSION` とカートリッジの入口の D0）。版 1 は DR-057、版 2 は DR-094・DR-095。確かめ方は §11 [P] |

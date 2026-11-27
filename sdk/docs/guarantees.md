@@ -18,7 +18,8 @@ ROM を書く前に、この文書の §03（守ること）と、[bios-abi.md](
 | [決定記録](../../docs/decisions.md) | 決めたことの理由と却下した案。この文書の (DR-xxx) はここ |
 | [bios-abi.md](bios-abi.md) | BIOS の版 2 の約束。保証することとしないことは §11 |
 | [emulator-api.md](emulator-api.md) | エミュレータを外から動かす窓口（JSON の手順、MCP、Web の GUI） |
-| [fc85.inc](../include/fc85.inc)・[bios.inc](../include/bios.inc) | 番地・ビット・BIOS の名前。仕様書と bios-abi.md の写しで、食い違えばそちらが正 |
+| [fc85.inc](../include/fc85.inc)・[bios.inc](../include/bios.inc) | 番地・ビット・BIOS の名前。仕様書と bios-abi.md の写しで、食い違えばそちらが正。C では [fc85.h](../include/fc85.h)・[bios.h](../c/include/bios.h) |
+| [c.md](c.md) | C で書くときの手引き（GCC、メモリと起動、使えるもの、レジスタの扱い。DR-103） |
 | [impl/emulator.md](../../docs/impl/emulator.md) | エミュレータの実装。仕様との差と [V] の扱いは §03 |
 | [課題台帳](../../docs/open-issues.md) | 未決の課題（OI-xxx） |
 
@@ -207,7 +208,7 @@ ROM 作りを始める線は、ソフトから見える約束（アドレスマ�
 
 ROM の回帰試験の要点。手順の詳細は [emulator-api.md](emulator-api.md)。
 
-1. 組むときにリストを作る（ひな形の `build.py` は `build/rom.lst` を書く。m68kasm を直に使うなら `-l`）。カートリッジの横の `.lst` は `load` が自動で読み、番地をラベルで書ける。新しい ROM は `py sdk/tools/new_rom.py` でひな形（[sdk/template/](../template/AGENTS.md)）から作ると、組立てと試験の形がそろう（DR-102）。
+1. 組むときにリストを作る（ひな形の `build.py` は `build/rom.lst` を書く。m68kasm を直に使うなら `-l`）。カートリッジの横の `.lst` は `load` が自動で読み、番地をラベルで書ける。新しい ROM は `py sdk/tools/new_rom.py` でひな形（[sdk/template/](../template/AGENTS.md)）から作ると、組立てと試験の形がそろう（DR-102）。C の ROM では `build.py` が GCC の出力から同じ形の記号の表を書く（[c.md](c.md) §09、DR-103）。
 2. `fc85-api`（JSON の手順か `--mcp`）で `load`（`cart`。`doc` を false にすると DOC の子基板なし）し、`run`（`frames`、入力の台本 `input`、`stop_on_bus_error`）で進める。
 3. `stop` が `frames`、`bus_errors`・`bridge_timeouts`・`doc_rule_warnings` が 0、`info` の `mode` が `normal` であることを見る。§06 のとおり、ACRTC の規約は窓口が数えないので、コードで守る（§03 の 6〜8）。
 4. 画面は `screenshot`（PNG）と `screen_hash`、音は `audio`（WAV、`peak`、`rms`）と `run` の `voices` で比べる。
