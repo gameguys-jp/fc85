@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **始める前と push の前に `git pull --rebase`。** 作業は小さく区切り、こまめに push する。push した履歴は書き換えない（force push をしない）。master は GitHub の ruleset（`protect-master`）で force push と削除を禁じている。
 - **DR・OI の番号**は、push の直前に取り込んだ最新の次の番号にする。rebase で番号がぶつかったら、まだ push していない側が自分の番号を振り直し、参照（仕様書、台帳、`CLAUDE.md`、コミットメッセージ）も直す。push 済みの番号は変えない。
-- **衝突しやすいファイル**：`docs/decisions.md` と `docs/open-issues.md`（末尾に追記し、既存の行を並べ替えない）、`CLAUDE.md`、`README.md`、仕様書 `docs/spec/hardware.md`、外形（`docs/spec/board.md`、`docs/design/enclosure.md`）、字形（`docs/design/glyphs-v0.1.tsv`）、`docs/impl/emulator.md`。これらで節の組み替え、表の作り直し、全体の置換をするときは、ブランチを切ってプルリクエストにし、相手に知らせる。
+- **衝突しやすいファイル**：`docs/decisions.md` と `docs/open-issues.md` と `docs/design-log.md`（末尾に追記し、既存の行を並べ替えない）、`CLAUDE.md`、`README.md`、仕様書 `docs/spec/hardware.md`、外形（`docs/spec/board.md`、`docs/design/enclosure.md`）、字形（`docs/design/glyphs-v0.1.tsv`）、`docs/impl/emulator.md`。これらで節の組み替え、表の作り直し、全体の置換をするときは、ブランチを切ってプルリクエストにし、相手に知らせる。
 - **自分の変更と関係のない行を整形しない**（表の幅、句読点、改行）。コードの整形は `cargo fmt --all` だけ。
 - **改行は LF**（`.gitattributes`）。
 - **公開前の走査**：pre-commit フック `tools/hooks/pre-commit` が、コミットに追加する行のローカルの絶対パス、メールアドレス、トークンを調べる。クローンしたら一度 `git config core.hooksPath tools/hooks` を実行する。自分の名前やユーザー名など個人を特定する文字列は、リポジトリに入れず `.git/info/private-patterns`（1 行に 1 つの正規表現）に書く。フックが止めたときに `--no-verify` を使うかは人が決める。
@@ -47,6 +47,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/parts/` | 実在部品の台帳と供給調査。事実だけを書き、本機での使い方は仕様書に書く |
 | `docs/decisions.md` | 決定記録（DR-xxx）。理由と却下した案 |
 | `docs/open-issues.md` | 課題台帳（OI-xxx） |
+| `docs/design-log.md` | 設計の経緯（LOG-xx）。ハードウェアの試行錯誤（見積りの外れ、あふれ、時間が閉じない、不具合、構成や部品の変更）を、DR をまたいだ流れとして残す。あとで開発史などに拾うための記録で、作中の事実ではない |
 | `docs/sources.md` | 部品以外の史実（JIS 改正、キャプテンシステム、Commodore など）の出典台帳 |
 | `docs/design/` | 製品デザイン。書体（`main.md`、文字 ROM の字形の試案 v0.1）と字形データ `glyphs-v0.1.tsv`、筐体の外観の大枠（`enclosure.md`。構成と外寸は確定、意匠は未定。DR-038、DR-047）。製品名・ロゴ・UI・意匠の規則は未確定 |
 | `docs/impl/` | 実装ごとの文書。`emulator.md`：構成、仕様との差、テストと判定基準 |
@@ -72,7 +73,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 仕様書を書くときのルール
 
-- 仕様書は確定版ではなく作業中の版。調査で整合しない点、時代考証やリアリティが薄い点が見つかったら随時更新する前提で扱う。発見した課題は `docs/open-issues.md` に記録し、決めたことは `docs/decisions.md` に DR として書いてから、根拠を付けて仕様書に反映する。
+- 仕様書は確定版ではなく作業中の版。調査で整合しない点、時代考証やリアリティが薄い点が見つかったら随時更新する前提で扱う。発見した課題は `docs/open-issues.md` に記録し、決めたことは `docs/decisions.md` に DR として書いてから、根拠を付けて仕様書に反映する。ハードウェアに関わる試行錯誤（見積りの外れ、収まらない、間に合わない、不具合、構成や部品の変更）があったら、`docs/design-log.md` にも 1 項目足す（小さなことでもよい。あとから拾えることを優先する）。
 - **部品の選び方**：①1985年の日本の中堅業務用電子機器メーカーにとって自然か（国内大手、とくに日立の品を優先。`docs/parts/baseline-1985.md`）、②現代の再現で入手できるか、の順で判断する。
 - **リアリティと表現**：1985年の自然さを優先しても、本機の独自の映像・音響表現を失わせない。両者がぶつかるときは、通常モードを実機どおりにし、表現は Bend モード、切り替えのビット、拡張基板の候補 [O] として残す（例：DR-027 のパレットの直結モード、DR-030 の規約違反）。
 - **記述ステータス**：`[D]` 原典に根拠のあるIC仕様（§14の参照番号を付ける）、`[P]` 本機独自の暫定設計値、`[O]` 代替・拡張候補、`[V]` 要検証。追記・変更する記述にも必ず付ける。
