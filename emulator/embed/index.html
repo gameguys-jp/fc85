@@ -9,8 +9,10 @@
   しては開けない（WebAssembly を fetch で読む）ので、静的に配る：
     py emulator/embed/build.py     # build/fc85emu.wasm と Boot ROM・文字 ROM を置く
     py emulator/embed/serve.py     # http://127.0.0.1:8000/ を開く（.js・.wasm の MIME を正しく返す）
-  build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジも欄で選ぶか、頁の URL に
-  ?cart=<URL>（この頁からの相対。例 ?cart=build/game.bin）を付ける。?doc=0 で DOC の子基板を外す。
+  build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジは、build.py が写した
+  サンプル（build/carts.json の一覧。DR-115）から選ぶか、ファイルの欄で選ぶか、頁の URL に ?cart=<URL>
+  （この頁からの相対。例 ?cart=build/carts/game.bin）か ?sample=<名前>（例 ?sample=echo）を付ける。
+  ?doc=0 で DOC の子基板を外す。
   仮想機は Web Worker（worker.js）で回し、音は AudioWorklet（audio.js）で鳴らす。進める速さは音の時計に
   合わせる（DR-107）。この頁は釦と描画だけ（OffscreenCanvas が使えれば描画も Worker）。
   ライセンスは MIT（リポジトリの LICENSE）。
@@ -69,10 +71,14 @@
       <label>文字 ROM <input type="file" id="chars" accept=".bin"></label>
     </div>
     <div class="row">
-      <label>カートリッジ <input type="file" id="cart" accept=".bin"></label>
+      <label>サンプル <select id="sample"><option value="">なし（Boot ROM の内蔵のデモ）</option></select></label>
       <label><input type="checkbox" id="doc" checked> DOC の子基板</label>
     </div>
+    <div class="row">
+      <label>カートリッジのファイル <input type="file" id="cart" accept=".bin"></label>
+    </div>
     <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。
+      サンプルを選び直すと、その場で読み込み直す。サンプルの使い方は sdk/samples/&lt;名前&gt;/README.md。
       「速さを測る」は、今の場面を写した別の仮想機を 240 フレーム止まらずに進めた 1 フレームの時間（実時間は約 16.7 ms）。
       読み込んでから十数秒は、ブラウザが機械語を組み直すので遅い。</p>
   </section>
@@ -211,10 +217,12 @@ $("start").onclick = async () => {
     }
     roms.boot = (await fileBytes($("boot"))) ?? roms.boot ?? (await fetchBytes("build/boot.bin"));
     roms.chars = (await fileBytes($("chars"))) ?? roms.chars ?? (await fetchBytes("build/char.bin"));
+    // カートリッジ：ファイルの欄、サンプルの欄、URL の ?cart= の順
     let cart = await fileBytes($("cart"));
-    if (!cart && params.get("cart")) {
-      cart = await fetchBytes(new URL(params.get("cart"), location.href));
-      if (!cart) throw new Error(`カートリッジを読めない：${params.get("cart")}`);
+    const src = cart ? null : ($("sample").value ? `build/${$("sample").value}` : params.get("cart"));
+    if (src) {
+      cart = await fetchBytes(new URL(src, location.href));
+      if (!cart) throw new Error(`カートリッジを読めない：${src}`);
     }
     worker.postMessage({ type: "boot", boot: roms.boot, chars: roms.chars, cart, doc: $("doc").checked });
     if (!roms.boot) say("Boot ROM がない（68000 はすぐ止まる）。欄で選ぶ");
@@ -234,6 +242,28 @@ $("pause").onclick = () => {
   worker.postMessage({ type: "run", on: running });
   $("pause").textContent = running ? "一時停止" : "続ける";
 };
+/** サンプルの一覧（build.py が書く build/carts.json）を欄に並べる。?sample=<名前> ならそれを選ぶ。 */
+async function listSamples() {
+  let carts = [];
+  try {
+    const r = await fetch("build/carts.json");
+    if (r.ok) carts = await r.json();
+  } catch { /* 一覧がなければ欄は「なし」だけ */ }
+  for (const c of carts) {
+    const o = document.createElement("option");
+    o.value = c.file;
+    o.textContent = `${c.title}（${c.name}）`;
+    if (params.get("sample") === c.name) o.selected = true;
+    $("sample").append(o);
+  }
+}
+listSamples();
+$("sample").onchange = () => {
+  $("cart").value = "";
+  if (worker) $("start").click();
+};
+$("cart").onchange = () => { if ($("cart").files.length) $("sample").value = ""; };
+
 $("reset").onclick = () => worker.postMessage({ type: "reset" });
 $("save").onclick = () => worker.postMessage({ type: "save" });
 $("load").onclick = () => { if (saved) worker.postMessage({ type: "load", state: saved }); };

@@ -216,6 +216,34 @@ class EmbedTest(unittest.TestCase):
         for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc"):
             self.assertEqual(web[k], native[k], f"{k} が C の ABI と WebAssembly で違う")
 
+    def test_samples_are_listed_for_the_page(self):
+        """build.py が組んであるサンプルだけを carts/ に写し、題の順に carts.json に載せる（DR-115）。"""
+        samples = tempfile.mkdtemp(prefix="fc85-samples-")
+        out = tempfile.mkdtemp(prefix="fc85-carts-")
+
+        def put(name, file, data):
+            os.makedirs(os.path.join(samples, name, "build"), exist_ok=True)
+            with open(os.path.join(samples, name, "build", file), "wb") as f:
+                f.write(data)
+
+        def cart(title):
+            return b"CART" + bytes(12) + title.ljust(16).encode("ascii") + b"\x4e\x75"
+
+        put("zeta", "zeta.bin", cart("SAMPLE 1"))
+        put("alpha", "alpha.bin", cart("SAMPLE 2"))
+        put("data", "data.bin", b"\x00" * 64)            # 見出しがない
+        put("other", "sfx.bin", cart("SAMPLE 3"))         # 名前と違うファイル
+        os.makedirs(os.path.join(samples, "unbuilt"))
+        self.assertEqual(build.copy_samples(out, samples), 2)
+        with open(os.path.join(out, "carts.json"), encoding="utf-8") as f:
+            listed = json.load(f)
+        self.assertEqual(listed, [{"name": "zeta", "file": "carts/zeta.bin", "title": "SAMPLE 1"},
+                                  {"name": "alpha", "file": "carts/alpha.bin", "title": "SAMPLE 2"}])
+        self.assertEqual(read(os.path.join(out, "carts", "alpha.bin")), cart("SAMPLE 2"))
+        self.assertEqual(sorted(os.listdir(os.path.join(out, "carts"))), ["alpha.bin", "zeta.bin"])
+        shutil.rmtree(samples)
+        shutil.rmtree(out)
+
     def test_a_missing_wasm_opt_is_reported(self):
         missing = os.path.join(tempfile.mkdtemp(prefix="fc85-wasm-opt-"), "wasm-opt.exe")
         with self.assertRaises(build.BuildError):

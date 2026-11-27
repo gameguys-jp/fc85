@@ -49,7 +49,7 @@
 | WebAssembly の速さ | リポジトリの根で `node emulator/embed/speed.mjs <fc85emu.wasm> <boot.bin> <char.bin> [cart.bin か -] [フレーム数]`（Node。DR-105） |
 | 窓口を動かす | `cargo run --release -p fc85-api -- [--mcp] [--cart cart.bin]`（標準入出力。手順は sdk/docs/emulator-api.md） |
 | Web の GUI | `cargo run --release -p fc85-api -- --http [--cart cart.bin]` → http://127.0.0.1:8085/（DR-101） |
-| 組込み | `py emulator/embed/build.py [--native] [--libretro] [--wasm-opt PATH] [--no-wasm-opt]`（WebAssembly・C の ABI・libretro のコア。DR-104。WebAssembly は binaryen の wasm-opt が PATH か環境変数 WASM_OPT にあれば -O3 をかける。DR-108）、`py emulator/embed/serve.py`（WebAssembly の試しの頁）、試験 `py -m unittest discover -s emulator/embed` |
+| 組込み | `py emulator/embed/build.py [--native] [--libretro] [--wasm-opt PATH] [--no-wasm-opt] [--roms]`（WebAssembly・C の ABI・libretro のコア。DR-104。WebAssembly は binaryen の wasm-opt が PATH か環境変数 WASM_OPT にあれば -O3 をかける。DR-108。試しの頁が読む Boot ROM・文字 ROM・組んであるサンプルのカートリッジを `build/` に写す。`--roms` は写すだけ。DR-115）、`py emulator/embed/serve.py`（WebAssembly の試しの頁）、試験 `py -m unittest discover -s emulator/embed` |
 | 書式 | `cargo fmt --all` |
 | lint | `cargo clippy --all-targets -- -D warnings` |
 

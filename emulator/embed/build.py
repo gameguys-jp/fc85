@@ -2,10 +2,13 @@
 """組込みの窓口（DR-104）を組む。
 
   py emulator/embed/build.py            WebAssembly（emulator/embed/build/fc85emu.wasm）と、Web の試しの頁で
-                                        読む Boot ROM・文字 ROM（firmware の組立ての結果があれば）
+                                        読む Boot ROM・文字 ROM（firmware の組立ての結果があれば）と、組んで
+                                        あるサンプルのカートリッジ（build/carts/ と一覧 build/carts.json。DR-115）
   py emulator/embed/build.py --native   C の ABI の共有ライブラリ（emulator/target/release/ の fc85emu.dll・
                                         libfc85emu.so・libfc85emu.dylib と静的なライブラリ）
   py emulator/embed/build.py --libretro libretro のコア（emulator/target/release/ の fc85_libretro.dll など）
+  py emulator/embed/build.py --roms     Boot ROM・文字 ROM・サンプルのカートリッジを写すだけ（サンプルを組み
+                                        直したとき）
 
 WebAssembly は Rust の wasm32-unknown-unknown の target が要る（rustup target add wasm32-unknown-unknown）。
 binaryen の wasm-opt があれば、組んだ WebAssembly を -O3 で最適化する（DR-108。約 1 割速くなり、振る舞いは
@@ -14,6 +17,7 @@ binaryen の wasm-opt があれば、組んだ WebAssembly を -O3 で最適化�
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -28,6 +32,8 @@ FIRMWARE = {
     "boot.bin": os.path.join(REPO, "firmware", "boot", "build", "boot.bin"),
     "char.bin": os.path.join(REPO, "firmware", "charrom", "build", "char.bin"),
 }
+SAMPLES = os.path.join(REPO, "sdk", "samples")
+CART_MAGIC = b"CART"            # カートリッジの見出し（bios-abi.md §04）。題は 16〜31 byte
 
 
 class BuildError(Exception):
@@ -79,6 +85,33 @@ def find_wasm_opt(path=None):
     return shutil.which("wasm-opt")
 
 
+def copy_samples(dst_dir=BUILD, samples=SAMPLES):
+    """組んであるサンプルのカートリッジ（samples/<名前>/build/<名前>.bin で、見出しのあるもの）を
+    dst_dir/carts/ に写し、頁が読む一覧 dst_dir/carts.json（名前・ファイル・見出しの題。題の順）を書く。
+    写した数を返す。組んでいないサンプルは載せない。"""
+    carts = []
+    out = os.path.join(dst_dir, "carts")
+    names = sorted(os.listdir(samples)) if os.path.isdir(samples) else []
+    for name in names:
+        src = os.path.join(samples, name, "build", name + ".bin")
+        if not os.path.isfile(src):
+            continue
+        with open(src, "rb") as f:
+            head = f.read(32)
+        if len(head) < 32 or head[:4] != CART_MAGIC:
+            continue
+        os.makedirs(out, exist_ok=True)
+        shutil.copyfile(src, os.path.join(out, name + ".bin"))
+        title = head[16:32].decode("ascii", "replace").strip()
+        carts.append({"name": name, "file": f"carts/{name}.bin", "title": title})
+    carts.sort(key=lambda c: (c["title"], c["name"]))
+    os.makedirs(dst_dir, exist_ok=True)
+    with open(os.path.join(dst_dir, "carts.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(carts, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+    return len(carts)
+
+
 def build_wasm(copy_firmware=True, optimize=True, wasm_opt=None):
     """WebAssembly を組んで build/ に置き、その道を返す。optimize なら、wasm-opt があれば -O3 で最適化する
     （なければ最適化を省き、標準エラーに知らせる）。"""
@@ -98,10 +131,17 @@ def build_wasm(copy_firmware=True, optimize=True, wasm_opt=None):
             print("wasm-opt（binaryen）がないので最適化を省いた（入れると約 1 割速い）", file=sys.stderr)
         shutil.copyfile(src, dst)
     if copy_firmware:
-        for name, path in FIRMWARE.items():
-            if os.path.exists(path):
-                shutil.copyfile(path, os.path.join(BUILD, name))
+        copy_roms()
     return dst
+
+
+def copy_roms():
+    """Boot ROM・文字 ROM（組んであれば）とサンプルのカートリッジを build/ に写す。"""
+    os.makedirs(BUILD, exist_ok=True)
+    for name, path in FIRMWARE.items():
+        if os.path.exists(path):
+            shutil.copyfile(path, os.path.join(BUILD, name))
+    return copy_samples()
 
 
 def main(argv=None):
@@ -110,13 +150,17 @@ def main(argv=None):
     ap.add_argument("--libretro", action="store_true", help="libretro のコア")
     ap.add_argument("--wasm-opt", metavar="PATH", help="binaryen の wasm-opt の道（既定は WASM_OPT か PATH）")
     ap.add_argument("--no-wasm-opt", action="store_true", help="WebAssembly を最適化しない")
+    ap.add_argument("--roms", action="store_true",
+                    help="Boot ROM・文字 ROM・サンプルのカートリッジを写すだけ（WebAssembly は組まない）")
     a = ap.parse_args(argv)
     try:
         if a.native:
             print(build_native())
         if a.libretro:
             print(build_libretro())
-        if not (a.native or a.libretro):
+        if a.roms:
+            print(f"サンプルのカートリッジ {copy_roms()} 本を {os.path.join(BUILD, 'carts')} に写した")
+        if not (a.native or a.libretro or a.roms):
             print(build_wasm(optimize=not a.no_wasm_opt, wasm_opt=a.wasm_opt))
     except BuildError as e:
         print(e, file=sys.stderr)
