@@ -42,6 +42,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/spec/hardware.md` | 仕様書（以下「仕様書」）。機械が何であるか。正となる仕様 |
 | `docs/spec/board.md` | 基板の分け方と外形の見積り（最終試作機と量産計画）。筐体の設計の条件。配置図は `docs/spec/img/` |
 | `docs/spec/fabric.md` | Data Fabric（最終試作機）の回路と部品表。PAL の式は `tools/fabric/pal/*.pal`（fabric.md の式と同じ）、PROM の中身は `tools/fabric/fabric_logic.py` で作り、仕様と突き合わせ、エミュレータの `fabric_pal.rs` を生成する（DR-084） |
+| `docs/spec/registers.toml` | 68000 から見た番地とレジスタ（窓、メモリ、MMIO のレジスタ、ビット、定数）の正。`tools/regmap/regmap.py` が fc85.inc・fc85.h・regmap.rs と人が読む表 `registers.md` を作る（DR-100） |
 | `docs/story/` | 開発史・メーカーの出自・音源の差し替えなど。なぜそうなったか |
 | `docs/parts/` | 実在部品の台帳と供給調査。事実だけを書き、本機での使い方は仕様書に書く |
 | `docs/decisions.md` | 決定記録（DR-xxx）。理由と却下した案 |
@@ -65,7 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `tests/` | §12 の独立参照モデル・ゴールデンデータ・テスト ROM。エミュレータと FPGA で共通に使う |
 | `tools/`・`third_party/` | 補助スクリプト。外部のコード（MAME、fx68k など）は元のライセンスのまま置く |
 
-- アドレスマップとレジスタ表は、機械が読める形で `docs/spec/` に1か所置き、エミュレータ・SDK・ハードウェアはそこから生成する（置き場所と形式は実装を始めるときに決める）。
+- アドレスマップとレジスタ表は、機械が読める形で `docs/spec/registers.toml` に1か所置き、エミュレータ・SDK・ハードウェアはそこから生成する（DR-100）。`py tools/regmap/regmap.py` で `sdk/include/fc85.inc`・`fc85.h`、`emulator/crates/board/src/regmap.rs`、`docs/spec/registers.md` を作り、`--check` で生成物が古くないかを確かめる。`fc85.inc` を含む生成物は手で直さない（直すのは registers.toml）。dsp.inc と bios.inc は手で書く。
 - 実装ごとに `docs/impl/<名前>.md` を置く。
 - ライセンスは「リポジトリ」の節のとおり（ソフトと文書は MIT、ハードウェアは CERN-OHL-P v2、外部のコードは元のライセンス）。
 
@@ -102,7 +103,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 層構成：`core`（時刻・イベント・バス・信号線・IRQ・trace・snapshot）／`chips`／`board`（アドレスマップ・Data Fabric・ポートアダプタ・映像音響経路）／`host`／`SDK`／`tests`。
 - 各クロック領域は整数または有理数の時刻で独立に管理する。core 層の `time` の単位（1/15.12 GHz）で、4 つの発振源の周期がすべて整数になる。ホスト出力の表示レートと音声レートは仕様書§12に従う（仮想機のフレームは約 59.92 Hz）。
 - MAMEの既存実装（68000、HD63484、TMS32010、ES5503、MSM5205、ACIA）を参照してよい。コードは写さず、台帳に書き起こした式とタイミングから書く（V3 の独立性のため、DR-040）。
-- ファームウェアと SDK（Python 3 の標準ライブラリだけ）：`py firmware/charrom/build.py`（文字 ROM）、`py firmware/boot/build.py`（Boot ROM と、BIOS の約束を試すカートリッジ `build/abitest.bin`。DR-094）。ビルドの結果は `firmware/*/build/` でリポジトリに入れない。ホストと board 層の起動の試験（`console_boot.rs`）はこれを読み、なければ飛ばす。サンプルのカートリッジは `py sdk/samples/game/build.py`（`--cart sdk/samples/game/build/game.bin` で動かす）と、DSP の `py sdk/samples/dsp/build.py`（TMS32010 のアセンブラは `sdk/dspasm`。DR-062）と、仕様書 §11 の実験パッチの `py sdk/samples/patches/build.py`（SAMPLE 3）と、ACRTC の表示の `py sdk/samples/video/build.py`（SAMPLE 4）と、仕様書 §11 のベンド点を試す試験信号の `py sdk/samples/bend/build.py`（SAMPLE 5。`emulator/` で `--cart ../sdk/samples/bend/build/bend.bin`）と、通常モードの映像と描画の予算を見せる `py sdk/samples/showcase/build.py`（SAMPLE 6。`--cart ../sdk/samples/showcase/build/showcase.bin`）。試験は `py -m unittest discover -s <dir>` を `sdk/m68kasm`・`sdk/dspasm`・`sdk/tools`・`sdk/samples/game`・`sdk/samples/dsp`・`sdk/samples/patches`・`sdk/samples/video`・`sdk/samples/bend`・`sdk/samples/showcase`・`firmware`・`tools/fabric` で。BIOS が約束することは `sdk/docs/bios-abi.md`（DR-057。版 2 は DR-094・DR-095。保証しないことは §11）。
+- ファームウェアと SDK（Python 3 の標準ライブラリだけ）：`py firmware/charrom/build.py`（文字 ROM）、`py firmware/boot/build.py`（Boot ROM と、BIOS の約束を試すカートリッジ `build/abitest.bin`。DR-094）。ビルドの結果は `firmware/*/build/` でリポジトリに入れない。ホストと board 層の起動の試験（`console_boot.rs`）はこれを読み、なければ飛ばす。サンプルのカートリッジは `py sdk/samples/game/build.py`（`--cart sdk/samples/game/build/game.bin` で動かす）と、DSP の `py sdk/samples/dsp/build.py`（TMS32010 のアセンブラは `sdk/dspasm`。DR-062）と、仕様書 §11 の実験パッチの `py sdk/samples/patches/build.py`（SAMPLE 3）と、ACRTC の表示の `py sdk/samples/video/build.py`（SAMPLE 4）と、仕様書 §11 のベンド点を試す試験信号の `py sdk/samples/bend/build.py`（SAMPLE 5。`emulator/` で `--cart ../sdk/samples/bend/build/bend.bin`）と、通常モードの映像と描画の予算を見せる `py sdk/samples/showcase/build.py`（SAMPLE 6。`--cart ../sdk/samples/showcase/build/showcase.bin`）。試験は `py -m unittest discover -s <dir>` を `sdk/m68kasm`・`sdk/dspasm`・`sdk/tools`・`sdk/samples/game`・`sdk/samples/dsp`・`sdk/samples/patches`・`sdk/samples/video`・`sdk/samples/bend`・`sdk/samples/showcase`・`firmware`・`tools/fabric`・`tools/regmap` で。BIOS が約束することは `sdk/docs/bios-abi.md`（DR-057。版 2 は DR-094・DR-095。保証しないことは §11）。
 - 仮想機が停止するのは許容するが、PCアプリは停止させない。ホスト側の安全層（音声リミッタ、DC除去、表示保持）は仮想機の挙動を変えない別層にする。
 - 開発段階：0 仕様・資料 → 1 Chip sandbox → 2 Data Fabric → 3 Console → 4 AV/HCI → 5 PCB/拡張。各段階の合格条件は仕様書§12の表を参照。
 - 検証目標：正常系はビット列一致（V2）と独立実装との比較（V3）。

@@ -114,6 +114,8 @@ CPUアドレスはbyte単位。big-endian。リセット時の初期SP/PCはBoot
 | 400000–4FFFFF | Cartridge ROM window | 最大1 MiB窓、初期128 KiB想定。既定は1ウェイト（tACC 375 ns以下のROM）。カートリッジがDTACKを返す方式は [O]（DR-026）。カートリッジは端子の1本（/CART）を中でGNDにつなぐ。本体は/CARTを引上げ抵抗で受け、Highなら窓のDTACKを出さず（時間切れのバスエラー）、INPUT_IRQ_STATUSのbit 4で読ませる [P]（DR-095） |
 | その他 | 予約 | 将来拡張 |
 
+番地・幅・アクセス・ビットの名前と値の一覧は [registers.md](registers.md)（`docs/spec/registers.toml` から生成。fc85.inc・fc85.h・エミュレータの regmap.rs も同じ表から作る）[P]（DR-100）。
+
 | ローカルメモリ | 容量 | 構成・アクセス |
 |---|---:|---|
 | ACRTC VRAM | 128 KiB | 16-bit word。HM4864A-12（64K×1、120 ns）×16。読み出しと書き込みでCASの時刻を分ける [P]（DR-005）。リフレッシュはACRTCがHSYNC中に行う [D]（[15] §3.1）。表示・描画・DMAは調停。CPUからはACRTC経由 |

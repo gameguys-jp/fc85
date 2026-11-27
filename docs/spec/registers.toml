@@ -1,0 +1,1333 @@
+# registers.toml：本体の番地とレジスタ（68000 から見た MMIO）の正（DR-100）。
+#
+# ここから `py tools/regmap/regmap.py` が次を作る。生成物は手で直さない。`--check` で作り直して突き合わせる。
+#   sdk/include/fc85.inc（m68kasm）、sdk/include/fc85.h（C）、emulator/crates/board/src/regmap.rs（Rust）、
+#   docs/spec/registers.md（人が読む表）
+#
+# 番地・幅・アクセス・ビットの名前と値はこのファイルが正。動作の説明と根拠は仕様書（hardware.md §05・§06・
+# §09）と DR。食い違いを見つけたら OI にし、両方をそろえる。名前は fc85.inc から変えない（アセンブラ・C・
+# Rust で同じ名前）。
+#
+# 形（TOML 1.0。数は 0x の 16 進で書いてよい）：
+#   [meta]           title、intro（前書きの行）、rules_title・rules（アクセスの規約。1 つは文字列か行の配列）
+#   [access]         アクセスの記号（r・w・rw）と意味。[when] 使える条件。[unlisted] 窓の中で表にない番地
+#   [[block]]        ブロック（fc85.inc の節）。id、title、refs（根拠：§・DR・[n]）、status（D・P・O・V）、
+#                    note（注釈の行）、base（{ name, addr }：ブロックの先頭の名前）、index_stride（native の
+#                    レジスタの番号から番地への倍率。DOC）
+#   [[block.window]] アドレスマップの窓。name、first、last（含む）、doc、unlisted（既定は berr）、when
+#   [[block.region]] メモリ。name、addr、bytes、end（終わりの次の番地の名前）、access、width（any：byte と語、
+#                    word：語だけ、upper：上位バイトレーン）、within（含まれる領域）、when、doc。
+#                    within のない領域は、それ自身がアドレスマップの窓になる
+#   [block.bank]     同じ並びのレジスタの組（Data Fabric のチャネル）。title、names（組の先頭の名前）、addr、
+#                    stride、stride_name、reserved（窓に取ってある組の数）、doc。[[block.bank.reg]] は offset で置く
+#   [[block.reg]]    レジスタ。name、addr（絶対番地）か index（native の番号）か offset（bank の中）、bits（8：
+#                    上位バイトレーンの 1 byte、16：語、32：2 語）、access、count・stride（並び。stride の既定は
+#                    2）、low（32 bit の下位語の名前）、w1c（W1C のビット）、read_effect（読むと変わること）、
+#                    when、status、refs、doc
+#   [[block.group]]  定数のまとまり。title、note、of（どのレジスタのものか）、kind（mask・bit・value・number）、
+#                    width（8・16・32：C と Rust の型）、digits（fc85.inc の 16 進の桁。0 は 10 進）、status、
+#                    refs、items（{ name, value か expr, doc, kind, digits }。expr は前に出た名前と | + - * << &）
+#   doc と note は文字列か行の配列。fc85.inc では doc の 2 行目から続きの注釈の行になる。
+
+[meta]
+title = "本体の番地とレジスタ（68000 から見た MMIO）"
+intro = [
+  "番地・幅・アクセス・ビットの名前と値は docs/spec/registers.toml が正（DR-100）。仕様書（docs/spec/hardware.md）",
+  "§05 のアドレスマップ、§06 の Data Fabric、§09 の入力と、DR-016・DR-019・DR-025・DR-027・DR-028・DR-029・",
+  "DR-046・DR-053・DR-055 から書き起こした。動作の説明と根拠は仕様書と DR。食い違えば OI にしてそろえる。",
+  "記述ステータスは節と見出しの印に従う（ほとんど [P]）。",
+]
+rules_title = "アクセスの規約（仕様書 §05、DR-016・DR-030・DR-033・DR-052・DR-053）："
+rules = [
+  "16 bit のレジスタは語アクセスだけ。バイトのアクセスはバスエラー。",
+  "8 bit の IC（DOC、ACIA、文字 ROM）は上位バイトレーン（偶数番地）。MOVE.B で偶数番地を使う。",
+  "未割当の番地はバスエラー（64 クロックの時間切れ）。",
+  [
+    "ROM と読出し専用のレジスタへの書込みは捨て、書込み専用のレジスタは読むと 0（同じ番地にもう一方の向きの",
+    "レジスタがあれば、そのレジスタを読み書きする）。",
+  ],
+  "ACRTC の AR/SR とデータポート、DOC の窓には、CLR・TAS・BSET などの読み書き一体の命令を使わない。",
+  "ACRTC の FIFO には、SR の WFR（書込み）・RFR（読出し）を確かめてからアクセスする。",
+  "DOC の 0xE0・0xE2 は読むと状態が変わる。BIOS の決まった処理だけが読む。",
+]
+
+[access]
+r = "読出し。書込みはバスエラーにならない（ROM と I/O のレジスタは捨てる。DR-052、DR-053）"
+w = "書込み。読出しはバスエラーにならない（I/O のレジスタは 0 が読める。DR-046、DR-053）"
+rw = "読み書き"
+
+[when]
+always = "いつでも"
+doc = "DOC の子基板がある（FABRIC_MODULES の bit 2）。ないと窓はバスエラー（DR-019）"
+no_doc = "DOC の子基板がない。あると窓はバスエラー（DR-019）"
+dsp_prgbus = "DSP をリセットし PRGBUS＝1 の間。ほかはバスエラー（DR-029）"
+cart = "カートリッジが差してある（INPUT_IRQ_STATUS の bit 4）。ないと窓はバスエラー（DR-095）"
+
+[unlisted]
+berr = "表にない番地はバスエラー（DR-052、DR-053）"
+chip = "窓の中の番地はすべて IC に届く（DOC のネイティブのレジスタ 256 個）"
+
+# ---------------------------------------------------------------------------------------------- メモリ
+
+[[block]]
+id = "memory"
+title = "メモリ"
+refs = ["§05"]
+status = "P"
+
+[[block.region]]
+name = "BOOT_ROM"
+addr = 0x000000
+bytes = 0x10000
+access = "r"
+width = "any"
+doc = "64 KiB"
+
+[[block.region]]
+name = "CHAR_ROM"
+addr = 0x010000
+bytes = 0x10000
+access = "r"
+width = "upper"
+refs = ["DR-031"]
+doc = "文字 ROM。ROM の offset n は CHAR_ROM+2n（上位レーン）"
+
+[[block.region]]
+name = "MAIN_RAM"
+addr = 0x100000
+bytes = 0x20000
+end = "MAIN_RAM_END"
+access = "rw"
+width = "any"
+doc = "128 KiB"
+
+[[block.region]]
+name = "JUMP_TABLE"
+addr = 0x100000
+bytes = 0x600
+end = "JUMP_TABLE_END"
+access = "rw"
+width = "any"
+within = "MAIN_RAM"
+doc = "例外のジャンプ表。ベクタ n は JUMP_TABLE+6n（JMP abs.L）（DR-025）"
+
+[[block.region]]
+name = "STAGING"
+addr = 0x120000
+bytes = 0x10000
+end = "STAGING_END"
+access = "rw"
+width = "any"
+doc = "64 KiB の AV staging RAM（Fabric の port 0）"
+
+[[block.region]]
+name = "CART"
+addr = 0x400000
+bytes = 0x100000
+end = "CART_END"
+access = "r"
+width = "any"
+when = "cart"
+doc = "カートリッジの窓（最大 1 MiB）。なければバスエラー"
+
+# ---------------------------------------------------------------------------------------------- ACRTC
+
+[[block]]
+id = "acrtc"
+title = "ACRTC HD63484"
+refs = ["§05", "DR-016", "DR-033"]
+status = "P"
+
+[[block.window]]
+name = "ACRTC"
+first = 0x200000
+last = 0x200003
+doc = "ACRTC のホストの口：+0 AR（書込み）・SR（読出し）、+2 データ"
+
+[[block.reg]]
+name = "ACRTC_AR"
+addr = 0x200000
+bits = 16
+access = "w"
+doc = "書込み：AR（レジスタの番号）"
+
+[[block.reg]]
+name = "ACRTC_SR"
+addr = 0x200000
+bits = 16
+access = "r"
+doc = "読出し：SR（上位バイトは 1）"
+
+[[block.reg]]
+name = "ACRTC_DATA"
+addr = 0x200002
+bits = 16
+access = "rw"
+read_effect = "r00 では読出し FIFO から 1 語を取る"
+doc = "AR が指すレジスタ。r00 は FIFO"
+
+[[block.group]]
+title = "SR のビット"
+of = "ACRTC_SR"
+kind = "mask"
+width = 16
+digits = 2
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_SR_CER", value = 0x80, doc = "コマンドの誤り" },
+  { name = "ACRTC_SR_ARD", value = 0x40, doc = "領域の検出" },
+  { name = "ACRTC_SR_CED", value = 0x20, doc = "コマンドの終わり" },
+  { name = "ACRTC_SR_LPD", value = 0x10, doc = "ライトペン" },
+  { name = "ACRTC_SR_RFF", value = 0x08, doc = "読出し FIFO が満杯" },
+  { name = "ACRTC_SR_RFR", value = 0x04, doc = "読出し FIFO に語がある" },
+  { name = "ACRTC_SR_WFR", value = 0x02, doc = "書込み FIFO に空きがある" },
+  { name = "ACRTC_SR_WFE", value = 0x01, doc = "書込み FIFO が空" },
+]
+
+[[block.group]]
+title = "SR のビット番号（BTST 用）"
+of = "ACRTC_SR"
+kind = "bit"
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_SR_CER_B", value = 7 },
+  { name = "ACRTC_SR_CED_B", value = 5 },
+  { name = "ACRTC_SR_RFR_B", value = 2 },
+  { name = "ACRTC_SR_WFR_B", value = 1 },
+  { name = "ACRTC_SR_WFE_B", value = 0 },
+]
+
+[[block.group]]
+title = "レジスタの番号（AR に書く値）。r80 以降は語ごとに AR が 2 進む"
+of = "ACRTC_AR"
+kind = "value"
+width = 16
+digits = 2
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_FIFO", value = 0x00 },
+  { name = "ACRTC_CCR", value = 0x02, doc = "コマンドの制御" },
+  { name = "ACRTC_OMR", value = 0x04, doc = "動作モード" },
+  { name = "ACRTC_DCR", value = 0x06, doc = "表示の制御" },
+  { name = "ACRTC_RCR", value = 0x80, doc = "ラスタの数（読出し）" },
+  { name = "ACRTC_HSR", value = 0x82, doc = "水平同期" },
+  { name = "ACRTC_HDR", value = 0x84, doc = "水平表示" },
+  { name = "ACRTC_VSR", value = 0x86, doc = "垂直同期" },
+  { name = "ACRTC_VDR", value = 0x88, doc = "垂直表示" },
+  { name = "ACRTC_SSW", value = 0x8A, doc = "分割画面の幅 1" },
+  { name = "ACRTC_SSW0", value = 0x8C, doc = "上画面のラスタの数（U85 p.91）" },
+  { name = "ACRTC_SSW2", value = 0x8E, doc = "下画面のラスタの数" },
+  { name = "ACRTC_BCR", value = 0x90, doc = "属性の点滅：BON1・BOFF1・BON2・BOFF2（4 bit ずつ、U85 p.92–93）" },
+  { name = "ACRTC_HWR", value = 0x92, doc = "ウィンドウの横：上位 HWS−1（HSYNC の終わりから）、下位 HWW−1" },
+  { name = "ACRTC_VWS", value = 0x94, doc = "ウィンドウの縦の始まり−1（VSYNC の終わりから、U85 p.89–90）" },
+  { name = "ACRTC_VWW", value = 0x96, doc = "ウィンドウのラスタの数" },
+  { name = "ACRTC_GCRX", value = 0x98, doc = "グラフィックカーソル：上位 CXE、下位 CXS（HSYNC の始まりからのメモリサイクル）" },
+  { name = "ACRTC_GCRYS", value = 0x9A, doc = "CYS（VSYNC の終わりからのラスタ、U85 p.94）" },
+  { name = "ACRTC_GCRYE", value = 0x9C, doc = "CYE" },
+  { name = "ACRTC_MWR0", value = 0xC2, doc = "上画面の記憶の幅" },
+  { name = "ACRTC_SAR0H", value = 0xC4 },
+  { name = "ACRTC_SAR0L", value = 0xC6 },
+  { name = "ACRTC_MWR1", value = 0xCA, doc = "基本画面の記憶の幅" },
+  { name = "ACRTC_SAR1H", value = 0xCC, doc = "基本画面の開始番地（bit 11–8 は SDA：横のスムーズスクロール）" },
+  { name = "ACRTC_SAR1L", value = 0xCE },
+  { name = "ACRTC_MWR2", value = 0xD2, doc = "下画面" },
+  { name = "ACRTC_SAR2H", value = 0xD4 },
+  { name = "ACRTC_SAR2L", value = 0xD6 },
+  { name = "ACRTC_MWR3", value = 0xDA, doc = "ウィンドウ" },
+  { name = "ACRTC_SAR3H", value = 0xDC },
+  { name = "ACRTC_SAR3L", value = 0xDE },
+  { name = "ACRTC_CDR", value = 0xE8, doc = "カーソルの定義（U85 p.107–109）" },
+  { name = "ACRTC_ZFR", value = 0xEA, doc = "ズーム：bit 15–12 HZF、bit 11–8 VZF（倍率−1、基本画面だけ、U85 p.110）" },
+]
+
+[[block.group]]
+title = "CCR のビット"
+kind = "mask"
+width = 16
+digits = 4
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_CCR_ABT", value = 0x8000, doc = "打切り（リセットの後は 1）" },
+  { name = "ACRTC_CCR_PSE", value = 0x4000 },
+  { name = "ACRTC_CCR_DDM", value = 0x2000, doc = "データの DMA（DWT・DRD・DMOD を Fabric の port 1 で運ぶ）" },
+  { name = "ACRTC_CCR_CDM", value = 0x1000 },
+  { name = "ACRTC_CCR_DRC", value = 0x0800, doc = "DMA の要求：1 はサイクルスチール" },
+  { name = "ACRTC_CCR_GBM4", value = 0x0200, doc = "4 bit/画素" },
+]
+
+[[block.group]]
+title = "OMR のビット"
+kind = "mask"
+width = 16
+digits = 4
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_OMR_MS", value = 0x8000, doc = "マスタ" },
+  { name = "ACRTC_OMR_STR", value = 0x4000, doc = "表示と描画を始める" },
+  { name = "ACRTC_OMR_ACM_I", value = 0x0008, doc = "インタリーブ" },
+  { name = "ACRTC_OMR_ACP", value = 0x2000, doc = "単一アクセスで描画を優先" },
+  { name = "ACRTC_OMR_CSK1", value = 0x0400, doc = "カーソルのスキュー（×1〜3 メモリサイクル。十字では 0 にしない）" },
+  { name = "ACRTC_OMR_DSK1", value = 0x0100, doc = "DISP のスキュー（×1〜3 メモリサイクル）" },
+  { name = "ACRTC_OMR_RAM", value = 0x0080, doc = "1：HSYNC の間に DRAM をリフレッシュしない" },
+]
+
+[[block.group]]
+title = "DCR のビット（U85 p.75–78）。SE は 0x 使わない、10 ブランク、11 表示（基本画面の SE1 は 1 bit）"
+kind = "mask"
+width = 16
+digits = 4
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_DCR_DSP", value = 0x8000 },
+  { name = "ACRTC_DCR_BASE", value = 0x4000, doc = "基本画面を表示（BIOS が書く値。DR-071）" },
+  { name = "ACRTC_DCR_UPPER", value = 0x3000, doc = "上画面を表示（ブランクは $2000）" },
+  { name = "ACRTC_DCR_LOWER", value = 0x0C00, doc = "下画面を表示（ブランクは $0800）" },
+  { name = "ACRTC_DCR_WIN", value = 0x0300, doc = "ウィンドウを表示（ブランクは $0200）" },
+]
+
+[[block.group]]
+title = "CDR のビット（U85 p.107–109）。CON・COFF は 4 フィールド単位"
+kind = "mask"
+width = 16
+digits = 4
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_CDR_GRAPHIC", value = 0x8000, doc = "GCR のカーソルを CUD1 に" },
+  { name = "ACRTC_CDR_CROSS", value = 0xC000, doc = "十字（横が CUD1、縦が CUD2）" },
+  { name = "ACRTC_CDR_CON1", value = 0x0800, doc = "×1〜7：ON は 4×(n＋1) フィールド。0 は出さない" },
+  { name = "ACRTC_CDR_COFF1", value = 0x0100, doc = "×1〜7：OFF は 4×(n＋1) フィールド。0 は常に ON" },
+]
+
+[[block.group]]
+title = "案B の表示（256×192、4 bpp、262 ライン、台帳 HD63484.md §3.4）"
+kind = "value"
+width = 16
+digits = 4
+status = "P"
+items = [
+  { name = "ACRTC_B_HSR", value = 0xAA0D },
+  { name = "ACRTC_B_HDR", value = 0x127F },
+  { name = "ACRTC_B_VSR", value = 0x0106 },
+  { name = "ACRTC_B_VDR", value = 0x2703 },
+  { name = "ACRTC_B_SSW", value = 0x00C0 },
+  { name = "ACRTC_B_MW", value = 0x0040, doc = "1 行 64 語（256 画素）" },
+  { name = "ACRTC_B_OMR", value = 0xC008, doc = "M/S＝1、STR＝1、ACM＝10（DSK・CSK は 0）" },
+]
+
+[[block.group]]
+title = "コマンド（U85 p.173）。下位ビット：OPM（2–0）、COL（4–3）、AREA（7–5）"
+kind = "value"
+width = 16
+digits = 4
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_ORG", value = 0x0400, doc = "DPH, DPL" },
+  { name = "ACRTC_WPR", value = 0x0800, doc = "| rn、data" },
+  { name = "ACRTC_RPR", value = 0x0C00, doc = "| rn" },
+  { name = "ACRTC_WPTN", value = 0x1800, doc = "| pra、n、data×n" },
+  { name = "ACRTC_RPTN", value = 0x1C00, doc = "| pra、n" },
+  { name = "ACRTC_DRD", value = 0x2400, doc = "AX, AY" },
+  { name = "ACRTC_DWT", value = 0x2800, doc = "AX, AY、data×(|AX|+1)(|AY|+1)" },
+  { name = "ACRTC_DMOD", value = 0x2C00, doc = "| mm、AX, AY" },
+  { name = "ACRTC_RD", value = 0x4400 },
+  { name = "ACRTC_WT", value = 0x4800, doc = "data" },
+  { name = "ACRTC_MOD", value = 0x4C00, doc = "| mm、data" },
+  { name = "ACRTC_CLR", value = 0x5800, doc = "data, AX, AY（RWP から）" },
+  { name = "ACRTC_SCLR", value = 0x5C00, doc = "| mm、data, AX, AY" },
+  { name = "ACRTC_CPY", value = 0x6000, doc = "| S | DSD、Sah, Sal, AX, AY" },
+  { name = "ACRTC_SCPY", value = 0x7000 },
+  { name = "ACRTC_AMOVE", value = 0x8000, doc = "X, Y" },
+  { name = "ACRTC_RMOVE", value = 0x8400, doc = "dX, dY" },
+  { name = "ACRTC_ALINE", value = 0x8800, doc = "X, Y" },
+  { name = "ACRTC_RLINE", value = 0x8C00, doc = "dX, dY" },
+  { name = "ACRTC_ARCT", value = 0x9000, doc = "X, Y" },
+  { name = "ACRTC_RRCT", value = 0x9400, doc = "dX, dY" },
+  { name = "ACRTC_APLL", value = 0x9800, doc = "n, X1, Y1, ..." },
+  { name = "ACRTC_RPLL", value = 0x9C00 },
+  { name = "ACRTC_APLG", value = 0xA000 },
+  { name = "ACRTC_RPLG", value = 0xA400 },
+  { name = "ACRTC_CRCL", value = 0xA800, doc = "r（| ACRTC_CW で時計回り）" },
+  { name = "ACRTC_ELPS", value = 0xAC00, doc = "a, b, dX" },
+  { name = "ACRTC_AARC", value = 0xB000 },
+  { name = "ACRTC_RARC", value = 0xB400 },
+  { name = "ACRTC_AEARC", value = 0xB800 },
+  { name = "ACRTC_REARC", value = 0xBC00 },
+  { name = "ACRTC_AFRCT", value = 0xC000, doc = "X, Y（CP から X・Y までを塗る）" },
+  { name = "ACRTC_RFRCT", value = 0xC400, doc = "dX, dY" },
+  { name = "ACRTC_PAINT", value = 0xC800 },
+  { name = "ACRTC_DOT", value = 0xCC00 },
+  { name = "ACRTC_PTN", value = 0xD000, doc = "| S | SD、SZ" },
+  { name = "ACRTC_AGCPY", value = 0xE000 },
+  { name = "ACRTC_RGCPY", value = 0xF000 },
+  { name = "ACRTC_CW", value = 0x0100, doc = "円・弧：時計回り" },
+]
+
+[[block.group]]
+title = "演算（OPM）"
+kind = "value"
+width = 16
+digits = 0
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_OPM_REP", value = 0, doc = "置き換え" },
+  { name = "ACRTC_OPM_OR", value = 1 },
+  { name = "ACRTC_OPM_AND", value = 2 },
+  { name = "ACRTC_OPM_EOR", value = 3 },
+]
+
+[[block.group]]
+title = "色（COL）"
+kind = "value"
+width = 16
+digits = 2
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_COL_PAT", value = 0x00, doc = "パターンのビットで CL0・CL1" },
+  { name = "ACRTC_COL_CL1", value = 0x08, doc = "1 は CL1、0 は描かない" },
+  { name = "ACRTC_COL_CL0", value = 0x10, doc = "0 は CL0、1 は描かない" },
+  { name = "ACRTC_COL_DIR", value = 0x18, doc = "パターン RAM の語をそのまま" },
+]
+
+[[block.group]]
+title = "パラメータレジスタ（WPR の rn）"
+kind = "value"
+width = 16
+digits = 2
+status = "D"
+refs = ["[15]"]
+items = [
+  { name = "ACRTC_P_CL0", value = 0x00 },
+  { name = "ACRTC_P_CL1", value = 0x01 },
+  { name = "ACRTC_P_CCMP", value = 0x02 },
+  { name = "ACRTC_P_EDG", value = 0x03 },
+  { name = "ACRTC_P_MASK", value = 0x04 },
+  { name = "ACRTC_P_PRC0", value = 0x05 },
+  { name = "ACRTC_P_PRC1", value = 0x06 },
+  { name = "ACRTC_P_PRC2", value = 0x07 },
+  { name = "ACRTC_P_ADR_XMIN", value = 0x08 },
+  { name = "ACRTC_P_ADR_YMIN", value = 0x09 },
+  { name = "ACRTC_P_ADR_XMAX", value = 0x0A },
+  { name = "ACRTC_P_ADR_YMAX", value = 0x0B },
+  { name = "ACRTC_P_RWPH", value = 0x0C, doc = "DN<<14 | 語番地の bit 19–12" },
+  { name = "ACRTC_P_RWPL", value = 0x0D, doc = "語番地の bit 11–0 << 4" },
+]
+
+# ---------------------------------------------------------------------------------------------- DOC
+
+[[block]]
+id = "doc"
+title = "DOC ES5503"
+refs = ["§05", "DR-019", "DR-030"]
+status = "P"
+note = [
+  "子基板。ネイティブのレジスタ n は DOC+2n の上位バイト。MOVE.B の 1 回の読みか書きだけ。子基板がなければ",
+  "バスエラー（FABRIC_MODULES の bit 2 で確かめる）。波形 RAM は Fabric の port 2 からだけ読み書きできる。",
+]
+base = { name = "DOC", addr = 0x210000 }
+index_stride = 2
+
+[[block.window]]
+name = "DOC"
+first = 0x210000
+last = 0x2101FF
+unlisted = "chip"
+when = "doc"
+doc = "DOC のレジスタ（ネイティブのレジスタ n は先頭＋2n の上位バイト）"
+
+[[block.reg]]
+name = "DOC_FREQ_LO"
+index = 0x00
+bits = 8
+access = "rw"
+count = 32
+doc = "+2×osc"
+
+[[block.reg]]
+name = "DOC_FREQ_HI"
+index = 0x20
+bits = 8
+access = "rw"
+count = 32
+
+[[block.reg]]
+name = "DOC_VOLUME"
+index = 0x40
+bits = 8
+access = "rw"
+count = 32
+
+[[block.reg]]
+name = "DOC_DATA"
+index = 0x60
+bits = 8
+access = "r"
+count = 32
+doc = "最後に読んだ波形の値（読出し）"
+
+[[block.reg]]
+name = "DOC_POINTER"
+index = 0x80
+bits = 8
+access = "rw"
+count = 32
+doc = "波形テーブルの頁（番地の bit 15–8）"
+
+[[block.reg]]
+name = "DOC_CONTROL"
+index = 0xA0
+bits = 8
+access = "rw"
+count = 32
+
+[[block.reg]]
+name = "DOC_SIZE"
+index = 0xC0
+bits = 8
+access = "rw"
+count = 32
+doc = "bit 6 BS、bit 5–3 テーブルの大きさ T、bit 2–0 分解能 R"
+
+[[block.reg]]
+name = "DOC_IRQ"
+index = 0xE0
+bits = 8
+access = "r"
+read_effect = "割込みの要求を 1 つ取る"
+doc = "読むと割込みの要求を 1 つ取る（BIOS だけが読む）"
+
+[[block.reg]]
+name = "DOC_OSC_ENABLE"
+index = 0xE1
+bits = 8
+access = "rw"
+doc = "(N−1)×2。書くと走査を始める"
+
+[[block.reg]]
+name = "DOC_ADC"
+index = 0xE2
+bits = 8
+access = "r"
+read_effect = "A/D の変換を始める"
+doc = "読むと A/D の変換を始める（BIOS だけが読む）"
+
+[[block.group]]
+title = "オシレータの並び"
+kind = "number"
+items = [
+  { name = "DOC_OSC_STRIDE", value = 2, doc = "オシレータ 1 つぶんの番地の差" },
+]
+
+[[block.group]]
+title = "CONTROL のビット"
+of = "DOC_CONTROL"
+kind = "mask"
+width = 8
+digits = 2
+status = "D"
+refs = ["[18]"]
+items = [
+  { name = "DOC_CTL_HALT", value = 0x01 },
+  { name = "DOC_CTL_FREE", value = 0x00, kind = "value", doc = "モード（bit 2–1）" },
+  { name = "DOC_CTL_ONESHOT", value = 0x02, kind = "value" },
+  { name = "DOC_CTL_SYNC", value = 0x04, kind = "value" },
+  { name = "DOC_CTL_SWAP", value = 0x06, kind = "value" },
+  { name = "DOC_CTL_IE", value = 0x08 },
+  { name = "DOC_CTL_CA_SH", value = 4, kind = "bit", doc = "CA3–0（bit 7–4）。偶数は L、奇数は R（DR-054）" },
+]
+
+# ---------------------------------------------------------------------------------------------- DSP
+
+[[block]]
+id = "dsp"
+title = "DSP bridge"
+refs = ["§05", "DR-029", "DR-049", "DR-053"]
+status = "P"
+
+[[block.window]]
+name = "DSP bridge"
+first = 0x220000
+last = 0x22001F
+doc = "DSP の制御、状態、メールボックス、応答"
+
+[[block.window]]
+name = "DSP program"
+first = 0x280000
+last = 0x281FFF
+when = "dsp_prgbus"
+doc = "DSP のプログラム RAM（4K×16）"
+
+[[block.reg]]
+name = "DSP_CTRL"
+addr = 0x220000
+bits = 16
+access = "rw"
+doc = "bit 0 RESET、bit 2–1 BIOSEL、bit 3 IRQ_EN"
+
+[[block.reg]]
+name = "DSP_STATUS"
+addr = 0x220002
+bits = 16
+access = "r"
+w1c = 0x0060
+doc = [
+  "bit 0 PRGBUS、1 入力の語あり、2 出力に空き、3 COMMAND、4 RESPONSE、",
+  "5 UNDERRUN（W1C）、6 OVERRUN（W1C）",
+]
+
+[[block.reg]]
+name = "DSP_MAILBOX"
+addr = 0x220004
+bits = 16
+access = "w"
+
+[[block.reg]]
+name = "DSP_RESPONSE"
+addr = 0x220006
+bits = 16
+access = "r"
+read_effect = "RESPONSE と割込みの要求を下げる（DR-053）"
+
+[[block.reg]]
+name = "DSP_PROGRAM"
+addr = 0x280000
+bits = 16
+access = "rw"
+count = 4096
+when = "dsp_prgbus"
+doc = "4K 語。DSP をリセットし PRGBUS＝1 の間だけ（語アクセス）"
+
+[[block.group]]
+title = "CTRL のビット"
+of = "DSP_CTRL"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "DSP_CTRL_RESET", value = 0x0001 },
+  { name = "DSP_CTRL_IRQ_EN", value = 0x0008 },
+]
+
+[[block.group]]
+title = "CTRL の BIOSEL（bit 2–1）：DSP の BIO に出す条件（DR-029 (3)、DR-049）"
+of = "DSP_CTRL"
+kind = "value"
+width = 16
+digits = 4
+items = [
+  { name = "DSP_CTRL_BIO_INPUT", value = 0x0000, doc = "入力 FIFO が空でない（既定）" },
+  { name = "DSP_CTRL_BIO_SPACE", value = 0x0002, doc = "出力 FIFO に空き" },
+  { name = "DSP_CTRL_BIO_MAIL", value = 0x0004, doc = "メールボックスに着信" },
+  { name = "DSP_CTRL_BIO_TICK", value = 0x0006, doc = "音声クロックの拍のラッチ" },
+]
+
+[[block.group]]
+title = "STATUS のビット番号（BTST 用。MOVE.W で読んでから調べる。バイトのアクセスはバスエラー）"
+of = "DSP_STATUS"
+kind = "bit"
+items = [
+  { name = "DSP_ST_PRGBUS_B", value = 0 },
+  { name = "DSP_ST_INPUT_B", value = 1 },
+  { name = "DSP_ST_SPACE_B", value = 2 },
+  { name = "DSP_ST_COMMAND_B", value = 3 },
+  { name = "DSP_ST_RESPONSE_B", value = 4 },
+]
+
+[[block.group]]
+title = "STATUS の W1C のビット"
+of = "DSP_STATUS"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "DSP_ST_UNDERRUN", value = 0x0020, doc = "W1C" },
+  { name = "DSP_ST_OVERRUN", value = 0x0040, doc = "W1C" },
+]
+
+[[block.group]]
+title = "プログラム RAM の大きさ"
+kind = "number"
+items = [
+  { name = "DSP_PROGRAM_WORDS", value = 4096 },
+]
+
+# ---------------------------------------------------------------------------------------------- ADPCM と本体 DAC
+
+[[block]]
+id = "adpcm"
+title = "ADPCM bridge と本体 DAC"
+refs = ["§05", "DR-017", "DR-019", "DR-053"]
+status = "P"
+
+[[block.window]]
+name = "ADPCM bridge"
+first = 0x230000
+last = 0x23001F
+doc = "ADPCM の制御と状態。+10〜+1F は本体 DAC（子基板がないとき）"
+
+[[block.reg]]
+name = "ADPCM_CTRL"
+addr = 0x230000
+bits = 16
+access = "rw"
+doc = "bit 0 RESET、1 S1、2 S2、3 下位ニブルから、4 置換しない、5 半分空きの割込み"
+
+[[block.reg]]
+name = "ADPCM_STATUS"
+addr = 0x230002
+bits = 16
+access = "r"
+w1c = 0x0100
+doc = "bit 7–0 残量、bit 8 UNDERRUN（W1C）、bit 9 半分空き、bit 10 V̄C̄K̄"
+
+[[block.reg]]
+name = "DAC_CTRL"
+addr = 0x230010
+bits = 16
+access = "rw"
+when = "no_doc"
+doc = "bit 0 DIRECT。DOC の子基板があるときはバスエラー"
+
+[[block.reg]]
+name = "DAC_STATUS"
+addr = 0x230012
+bits = 16
+access = "r"
+w1c = 0x0100
+when = "no_doc"
+doc = "bit 7–0 FIFO の残量、bit 8 UNDERRUN（W1C）"
+
+[[block.reg]]
+name = "DAC_DATA"
+addr = 0x230014
+bits = 16
+access = "rw"
+when = "no_doc"
+doc = "DIRECT のとき：上位バイト L、下位バイト R（符号なし、$80 が中央）"
+
+[[block.group]]
+title = "本体 DAC の CTRL と DATA"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "DAC_CTRL_DIRECT", value = 0x0001 },
+  { name = "DAC_CENTER", value = 0x8080, kind = "value", doc = "DATA の中央（L・R とも $80）" },
+]
+
+[[block.group]]
+title = "ADPCM の CTRL のビット（DR-053）"
+note = [
+  "S1・S2 は MSM5205 の標本化：S1＝1・S2＝0 で 8 kHz、S1＝0・S2＝1 で 6 kHz、両方 0 で 4 kHz",
+  "（384 kHz の 1/48・1/64・1/96、台帳 MSM5205.md §3.1）。両方 1 は Bend（V̄C̄K̄ が入力になる。エミュレータでは",
+  "取込みが起きない [V]）。RESET は電源投入時 1",
+]
+of = "ADPCM_CTRL"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "ADPCM_CTL_RESET", value = 0x0001 },
+  { name = "ADPCM_CTL_S1", value = 0x0002 },
+  { name = "ADPCM_CTL_S2", value = 0x0004 },
+  { name = "ADPCM_CTL_LOW_FIRST", value = 0x0008, doc = "ニブルを下位から" },
+  { name = "ADPCM_CTL_NO_REPLACE", value = 0x0010, doc = "FIFO が空でも 0x08 に置き換えない（Bend）" },
+  { name = "ADPCM_CTL_HALF_IRQ", value = 0x0020, doc = "半分空きの割込み（レベル 3）" },
+  { name = "ADPCM_CTL_8K", expr = "ADPCM_CTL_S1", kind = "value" },
+  { name = "ADPCM_CTL_6K", expr = "ADPCM_CTL_S2", kind = "value" },
+  { name = "ADPCM_CTL_4K", value = 0x0000, kind = "value" },
+]
+
+[[block.group]]
+title = "ADPCM の STATUS のビット（DR-053、DR-096）"
+of = "ADPCM_STATUS"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "ADPCM_ST_COUNT", value = 0x007F, doc = "FIFO の byte 数" },
+  { name = "ADPCM_ST_UNDERRUN", value = 0x0100, doc = "W1C" },
+  { name = "ADPCM_ST_HALF", value = 0x0200, doc = "残りが 32 byte 以下" },
+  { name = "ADPCM_ST_VCK", value = 0x0400, doc = [
+    "V̄C̄K̄ のピンのレベル（DR-096）。RESET を外すのは、1→0 を見てから",
+    "16 µs より後、次の 0→1 の前（取込みと立上りの間。OI-064）",
+  ] },
+]
+
+# ---------------------------------------------------------------------------------------------- Temporal
+
+[[block]]
+id = "temporal"
+title = "Temporal"
+refs = ["§05", "DR-053", "DR-067"]
+status = "P"
+note = ["0x240020〜0x24003F は Capture RAM [O]。実装しないので、今はバスエラー。"]
+
+[[block.window]]
+name = "Temporal"
+first = 0x240000
+last = 0x24003F
+doc = "Temporal RAM のポインタと状態（Capture RAM は [O]）"
+
+[[block.reg]]
+name = "TEMPORAL_WPTR"
+addr = 0x240000
+bits = 16
+access = "rw"
+
+[[block.reg]]
+name = "TEMPORAL_RPTR"
+addr = 0x240002
+bits = 16
+access = "rw"
+
+[[block.reg]]
+name = "TEMPORAL_CTRL"
+addr = 0x240004
+bits = 16
+access = "rw"
+w1c = 0x0300
+doc = "下の TMP_*（DR-067）"
+
+[[block.reg]]
+name = "TEMPORAL_DIST"
+addr = 0x240006
+bits = 16
+access = "r"
+doc = "WPTR−RPTR"
+
+[[block.group]]
+title = "CTRL のビット"
+of = "TEMPORAL_CTRL"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "TMP_CLEAR", value = 0x0001, doc = "両方のポインタと印を 0 に" },
+  { name = "TMP_SYNC", value = 0x0002, doc = "VBlank の始まりで両方のポインタを 0 に" },
+  { name = "TMP_RSYNC", value = 0x0004, doc = "VBlank の始まりで読出しのポインタだけを 0 に（繰返し）" },
+  { name = "TMP_HOLD", value = 0x0008, doc = "書込みの /WE を止める。ポインタは進む（保持）" },
+  { name = "TMP_EQUAL", value = 0x0010, doc = "読出し専用：WPTR＝RPTR" },
+  { name = "TMP_OVERRUN", value = 0x0100, doc = "書く側が追いついた。W1C" },
+  { name = "TMP_UNDERRUN", value = 0x0200, doc = "読む側が追いついた。W1C" },
+]
+
+# ---------------------------------------------------------------------------------------------- Data Fabric
+
+[[block]]
+id = "fabric"
+title = "Data Fabric"
+refs = ["§06", "DR-046"]
+status = "P"
+base = { name = "FABRIC", addr = 0x250000 }
+
+[[block.window]]
+name = "Data Fabric"
+first = 0x250000
+last = 0x250FFF
+doc = "チャネル 0・1 のレジスタ（4 チャネル分の窓を予約）、PORT_RESET、AUDIO_N、MODULES"
+
+[block.bank]
+title = "チャネルの中の offset"
+names = ["FABRIC_CH0", "FABRIC_CH1"]
+addr = 0x250000
+stride = 0x40
+stride_name = "FABRIC_CH_SIZE"
+reserved = 4
+doc = [
+  "チャネル ch のレジスタは FABRIC_CH0＋FABRIC_CH_SIZE×ch＋offset。",
+  "チャネル 2・3 の窓（予約）と、各チャネルの 0x20〜0x3E はバスエラー。",
+]
+
+[[block.bank.reg]]
+name = "FAB_SRC"
+offset = 0x00
+bits = 16
+access = "w"
+doc = "ポートの ID"
+
+[[block.bank.reg]]
+name = "FAB_DST"
+offset = 0x02
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_SRC_ADDR"
+offset = 0x04
+bits = 32
+access = "rw"
+low = "FAB_SRC_ADDR_L"
+doc = "32 bit（下位語 $06 だけを使う）"
+
+[[block.bank.reg]]
+name = "FAB_DST_ADDR"
+offset = 0x08
+bits = 32
+access = "rw"
+low = "FAB_DST_ADDR_L"
+
+[[block.bank.reg]]
+name = "FAB_COUNT"
+offset = 0x0C
+bits = 16
+access = "rw"
+
+[[block.bank.reg]]
+name = "FAB_SRC_STEP"
+offset = 0x0E
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_DST_STEP"
+offset = 0x10
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_FORMAT"
+offset = 0x12
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_MASK"
+offset = 0x14
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_XOR"
+offset = 0x16
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_SHIFT"
+offset = 0x18
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_TRIGGER"
+offset = 0x1A
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_CTRL"
+offset = 0x1C
+bits = 16
+access = "w"
+
+[[block.bank.reg]]
+name = "FAB_STATUS"
+offset = 0x1E
+bits = 16
+access = "r"
+w1c = 0x001A
+
+[[block.reg]]
+name = "FABRIC_PORT_RESET"
+addr = 0x250100
+bits = 16
+access = "w"
+doc = "bit n：port n の FIFO・ポインタを初期化（書込み専用）"
+
+[[block.reg]]
+name = "FABRIC_AUDIO_N"
+addr = 0x250102
+bits = 16
+access = "w"
+doc = "音声クロック＝8 MHz÷N（12 bit）"
+
+[[block.reg]]
+name = "FABRIC_MODULES"
+addr = 0x250104
+bits = 16
+access = "r"
+doc = "読出し専用"
+
+[[block.group]]
+title = "MODULES のビット"
+of = "FABRIC_MODULES"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "FABRIC_MOD_DOC", value = 0x0004, doc = "bit 2：DOC 子基板" },
+  { name = "FABRIC_MOD_DOC_B", value = 2, kind = "bit" },
+]
+
+[[block.group]]
+title = "ポートの ID"
+of = "FAB_SRC"
+kind = "value"
+width = 16
+digits = 0
+items = [
+  { name = "PORT_STAGING", value = 0 },
+  { name = "PORT_ACRTC", value = 1 },
+  { name = "PORT_DOC", value = 2, doc = "子基板がないときは本体 DAC の FIFO（語、上位 L・下位 R）" },
+  { name = "PORT_DSP_IN", value = 3 },
+  { name = "PORT_DSP_OUT", value = 4 },
+  { name = "PORT_ADPCM", value = 5 },
+  { name = "PORT_TEMPORAL_W", value = 6 },
+  { name = "PORT_TEMPORAL_R", value = 7 },
+  { name = "PORT_CAPTURE", value = 8 },
+  { name = "PORT_CHAR_ROM", value = 9 },
+  { name = "PORT_AUDIO_IN", value = 10 },
+]
+
+[[block.group]]
+title = "FORMAT"
+of = "FAB_FORMAT"
+kind = "value"
+width = 16
+digits = 0
+items = [
+  { name = "FMT_8_8", value = 0 },
+  { name = "FMT_16_16", value = 1 },
+  { name = "FMT_8_16", value = 2, doc = "ゼロ拡張" },
+  { name = "FMT_16_8_LO", value = 3 },
+  { name = "FMT_16_8_HI", value = 4 },
+  { name = "FMT_16_ROT", value = 5, doc = "SHIFT で回転" },
+]
+
+[[block.group]]
+title = "TRIGGER の発生源（bit 2–0）"
+refs = ["DR-018"]
+of = "FAB_TRIGGER"
+kind = "value"
+width = 16
+digits = 0
+items = [
+  { name = "TRG_NOW", value = 0 },
+  { name = "TRG_VBLANK", value = 1 },
+  { name = "TRG_HBLANK", value = 2 },
+  { name = "TRG_AUDIO", value = 3 },
+  { name = "TRG_EXTRIG", value = 4 },
+  { name = "TRG_ADPCM_VCK", value = 5 },
+]
+
+[[block.group]]
+title = "TRIGGER のビット"
+of = "FAB_TRIGGER"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "TRG_EACH", value = 0x0008, doc = "1 回のトリガで 1 要素" },
+  { name = "TRG_LOOP", value = 0x0010 },
+  { name = "TRG_IRQ_EN", value = 0x0020, doc = "DONE か ERROR で割込み（レベル 3）" },
+]
+
+[[block.group]]
+title = "CTRL"
+of = "FAB_CTRL"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "FAB_START", value = 0x0001 },
+  { name = "FAB_STOP", value = 0x0002 },
+]
+
+[[block.group]]
+title = "STATUS"
+of = "FAB_STATUS"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "FAB_ST_BUSY", value = 0x0001 },
+  { name = "FAB_ST_DONE", value = 0x0002, doc = "W1C" },
+  { name = "FAB_ST_STALL", value = 0x0004 },
+  { name = "FAB_ST_ERROR", value = 0x0008, doc = "W1C" },
+  { name = "FAB_ST_MISS", value = 0x0010, doc = "W1C" },
+  { name = "FAB_ST_WAIT", value = 0x0020 },
+  { name = "FAB_ST_W1C", value = 0x001A },
+]
+
+# ---------------------------------------------------------------------------------------------- 入力と ACIA
+
+[[block]]
+id = "input"
+title = "入力と ACIA"
+refs = ["§09", "DR-028", "DR-053", "DR-055"]
+status = "P"
+base = { name = "INPUT", addr = 0x260000 }
+
+[[block.window]]
+name = "Controller / MIDI"
+first = 0x260000
+last = 0x2600FF
+doc = "コントローラ、アナログ値、ACIA、入力の割込み（+20〜+3E のマトリクスと拡張は予約で、今はバスエラー）"
+
+[[block.reg]]
+name = "PORT_A"
+addr = 0x260000
+bits = 16
+access = "r"
+doc = "コントローラ A（active-high）"
+
+[[block.reg]]
+name = "PORT_B"
+addr = 0x260002
+bits = 16
+access = "r"
+doc = "コントローラ B（同じ割当て）"
+
+[[block.reg]]
+name = "AXIS0"
+addr = 0x260004
+bits = 16
+access = "r"
+count = 8
+doc = "AXIS0〜7：$260004〜$260012（下位 8 bit にアナログ値）"
+
+[[block.reg]]
+name = "MIDI_CTRL"
+addr = 0x260014
+bits = 8
+access = "w"
+doc = "ACIA の制御（書込み）／状態（読出し）。上位レーン、MOVE.B"
+
+[[block.reg]]
+name = "MIDI_STATUS"
+addr = 0x260014
+bits = 8
+access = "r"
+doc = "ACIA の状態"
+
+[[block.reg]]
+name = "MIDI_DATA"
+addr = 0x260016
+bits = 8
+access = "rw"
+read_effect = "受けた byte を取り、RDRF を下げる"
+doc = "ACIA の送受信データ。上位レーン、MOVE.B"
+
+[[block.reg]]
+name = "INPUT_IRQ_STATUS"
+addr = 0x260018
+bits = 16
+access = "r"
+w1c = 0x000B
+doc = "bit 0、1、3 は W1C。bit 2 は ACIA の IRQ の写し、bit 4 はカートリッジ（読出し専用）"
+
+[[block.reg]]
+name = "INPUT_IRQ_ENABLE"
+addr = 0x26001A
+bits = 16
+access = "rw"
+
+[[block.group]]
+title = "INPUT_IRQ_STATUS・INPUT_IRQ_ENABLE のビット"
+of = "INPUT_IRQ_STATUS"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "INPUT_IRQ_PORT_A", value = 0x0001 },
+  { name = "INPUT_IRQ_PORT_B", value = 0x0002 },
+  { name = "INPUT_IRQ_MIDI", value = 0x0004 },
+  { name = "INPUT_IRQ_EXTRIG", value = 0x0008 },
+  { name = "INPUT_IRQ_CART", value = 0x0010, doc = [
+    "INPUT_IRQ_STATUS だけ：カートリッジがある（端子 /CART。読出し専用、",
+    "割込みにはならない）[P]（DR-095）",
+  ] },
+  { name = "INPUT_IRQ_CART_B", value = 4, kind = "bit" },
+]
+
+[[block.group]]
+title = "PORT_A・PORT_B のビット（DR-055）。bit 15–8 は予約（0）"
+of = "PORT_A"
+kind = "mask"
+width = 16
+digits = 4
+status = "P"
+items = [
+  { name = "PAD_UP", value = 0x0001 },
+  { name = "PAD_DOWN", value = 0x0002 },
+  { name = "PAD_LEFT", value = 0x0004 },
+  { name = "PAD_RIGHT", value = 0x0008 },
+  { name = "PAD_A", value = 0x0010 },
+  { name = "PAD_B", value = 0x0020 },
+  { name = "PAD_C", value = 0x0040 },
+  { name = "PAD_START", value = 0x0080 },
+]
+
+[[block.group]]
+title = "PORT_A・PORT_B のビット番号（BTST 用）"
+of = "PORT_A"
+kind = "bit"
+status = "P"
+items = [
+  { name = "PAD_UP_B", value = 0 },
+  { name = "PAD_DOWN_B", value = 1 },
+  { name = "PAD_LEFT_B", value = 2 },
+  { name = "PAD_RIGHT_B", value = 3 },
+  { name = "PAD_A_B", value = 4 },
+  { name = "PAD_B_B", value = 5 },
+  { name = "PAD_C_B", value = 6 },
+  { name = "PAD_START_B", value = 7 },
+]
+
+[[block.group]]
+title = "HD6850 ACIA の制御"
+of = "MIDI_CTRL"
+kind = "value"
+width = 8
+digits = 2
+status = "D"
+refs = ["[23]"]
+items = [
+  { name = "ACIA_RESET", value = 0x03, doc = "マスタリセット" },
+  { name = "ACIA_DIV16", value = 0x01, doc = "500 kHz÷16＝31.25 kbit/s" },
+  { name = "ACIA_8N1", value = 0x14 },
+  { name = "ACIA_RIE", value = 0x80, kind = "mask", doc = "受信の割込み" },
+  { name = "ACIA_MIDI", expr = "ACIA_RIE|ACIA_8N1|ACIA_DIV16", doc = "$95" },
+]
+
+[[block.group]]
+title = "HD6850 ACIA の状態"
+of = "MIDI_STATUS"
+kind = "mask"
+width = 8
+digits = 2
+status = "D"
+refs = ["[23]"]
+items = [
+  { name = "ACIA_ST_RDRF", value = 0x01 },
+  { name = "ACIA_ST_TDRE", value = 0x02 },
+  { name = "ACIA_ST_OVRN", value = 0x20 },
+  { name = "ACIA_ST_IRQ", value = 0x80 },
+]
+
+# ---------------------------------------------------------------------------------------------- パレットと映像
+
+[[block]]
+id = "video"
+title = "パレットと映像"
+refs = ["§05", "DR-027", "DR-053"]
+status = "P"
+
+[[block.window]]
+name = "Palette"
+first = 0x270000
+last = 0x27003F
+doc = "パレット、PAL_CTRL、映像の割込みとラスタ"
+
+[[block.reg]]
+name = "PALETTE"
+addr = 0x270000
+bits = 16
+access = "w"
+count = 16
+doc = "$0RGB×16。書込み専用、語アクセス。次のラインから効く"
+
+[[block.reg]]
+name = "PAL_CTRL"
+addr = 0x270020
+bits = 16
+access = "rw"
+doc = "bit 0 DIRECT（Bend）"
+
+[[block.reg]]
+name = "VIDEO_IRQ"
+addr = 0x270022
+bits = 16
+access = "rw"
+w1c = 0x0300
+doc = "割込みの許可と保留（W1C）、今のレベル。下の VIRQ_*"
+
+[[block.reg]]
+name = "VIDEO_LINE"
+addr = 0x270024
+bits = 16
+access = "r"
+doc = "今のラスタ"
+
+[[block.reg]]
+name = "VIDEO_LINE_CMP"
+addr = 0x270026
+bits = 16
+access = "rw"
+doc = "12 bit"
+
+[[block.group]]
+title = "VIDEO_IRQ のビット"
+of = "VIDEO_IRQ"
+kind = "mask"
+width = 16
+digits = 4
+items = [
+  { name = "VIRQ_VBL_EN", value = 0x0001 },
+  { name = "VIRQ_HBL_EN", value = 0x0002 },
+  { name = "VIRQ_LINE_CMP", value = 0x0004, doc = "HBlank の割込みを LINE_CMP の 1 ラインだけにする" },
+  { name = "VIRQ_VBL", value = 0x0100, doc = "保留（W1C）" },
+  { name = "VIRQ_HBL", value = 0x0200, doc = "保留（W1C）" },
+  { name = "VIRQ_HBLANK", value = 0x4000, doc = "今のレベル" },
+  { name = "VIRQ_VBLANK", value = 0x8000 },
+]
+
+[[block.group]]
+title = "画面の大きさ"
+kind = "number"
+items = [
+  { name = "SCREEN_W", value = 256 },
+  { name = "SCREEN_H", value = 192 },
+]
+
+# ---------------------------------------------------------------------------------------------- 割込み
+
+[[block]]
+id = "irq"
+title = "割込み"
+refs = ["§05", "DR-028"]
+status = "P"
+note = ["すべてオートベクタ。レベル L のベクタは 24＋L。"]
+
+[[block.group]]
+title = "レベル"
+kind = "number"
+items = [
+  { name = "IRQ_VIDEO", value = 6, doc = "VBlank・HBlank、ACRTC" },
+  { name = "IRQ_ACIA", value = 5 },
+  { name = "IRQ_DOC", value = 4 },
+  { name = "IRQ_FABRIC", value = 3, doc = "Data Fabric、ADPCM bridge" },
+  { name = "IRQ_DSP", value = 2 },
+  { name = "IRQ_INPUT", value = 1 },
+]
+
+[[block.group]]
+title = "68000 の例外のベクタの番号"
+kind = "number"
+status = "D"
+refs = ["[31]"]
+items = [
+  { name = "VEC_BUS_ERROR", value = 2 },
+  { name = "VEC_ADDR_ERROR", value = 3 },
+  { name = "VEC_ILLEGAL", value = 4 },
+  { name = "VEC_ZERO_DIV", value = 5 },
+  { name = "VEC_CHK", value = 6 },
+  { name = "VEC_TRAPV", value = 7 },
+  { name = "VEC_PRIVILEGE", value = 8 },
+  { name = "VEC_TRACE", value = 9 },
+  { name = "VEC_LINE_A", value = 10 },
+  { name = "VEC_LINE_F", value = 11 },
+  { name = "VEC_SPURIOUS", value = 24 },
+  { name = "VEC_AUTO1", value = 25, doc = "レベル 1〜7：25〜31" },
+  { name = "VEC_TRAP0", value = 32, doc = "TRAP #0〜15：32〜47" },
+]
