@@ -145,7 +145,7 @@ DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読�
 | 口 | 置き場所 | 組み方 |
 |---|---|---|
 | C の ABI | crate `fc85-capi`（`emulator/crates/capi`）。見出し `emulator/crates/capi/include/fc85emu.h`（ROM の中で使う `fc85.h` とは別物） | `emulator/` で `cargo build --release -p fc85-capi`（か `py emulator/embed/build.py --native`）。`target/release/` に共有ライブラリ（`fc85emu.dll`・`libfc85emu.so`・`libfc85emu.dylib`）と静的なライブラリ（`fc85emu.lib`・`libfc85emu.a`） |
-| WebAssembly | 同じ crate を wasm32-unknown-unknown に組む。糊 `emulator/embed/fc85emu.js`、試しの頁 `emulator/embed/index.html`（Web Worker `worker.js`、AudioWorklet `audio.js`。DR-107） | `py emulator/embed/build.py`（`emulator/embed/build/fc85emu.wasm`。Rust の `wasm32-unknown-unknown` の target が要る）。頁は `py emulator/embed/serve.py` で配り、http://127.0.0.1:8000/ を開く |
+| WebAssembly | 同じ crate を wasm32-unknown-unknown に組む。糊 `emulator/embed/fc85emu.js`、試しの頁 `emulator/embed/index.html`（Web Worker `worker.js`、AudioWorklet `audio.js`。DR-107） | `py emulator/embed/build.py`（`emulator/embed/build/fc85emu.wasm`。Rust の `wasm32-unknown-unknown` の target が要る。binaryen の wasm-opt が PATH か環境変数 `WASM_OPT` にあれば -O3 をかける。`--wasm-opt PATH`・`--no-wasm-opt`。DR-108）。頁は `py emulator/embed/serve.py` で配り、http://127.0.0.1:8000/ を開く |
 | libretro | crate `fc85-libretro`（`emulator/crates/libretro`） | `cargo build --release -p fc85-libretro`（か `build.py --libretro`）。`fc85_libretro.dll`・`.so`・`.dylib` をフロントエンド（RetroArch など）のコアのフォルダに置く |
 
 ### C の ABI
@@ -190,8 +190,8 @@ m.call("regs");                                  // JSON の手順
 
 - 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 - WebAssembly にはファイルがないので、`fc85_call` の手順のうち `path` を使うもの（`load`、`screenshot` の `path` など）は誤りになる。ROM はバイト列で渡す。
-- 速さ [V]：開発機の Chrome の Worker の中で 1 フレーム約 15〜19 ms（ネイティブの release は約 10 ms。DR-105、DR-107）。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）は実時間の約 9 割で、音が途切れる（OI-103）。
-- 試しの頁（DR-107）：仮想機は module の Web Worker（`worker.js`）で回し、頁の主のスレッドは釦と描画だけにする（OffscreenCanvas が使えれば描画も Worker）。音は AudioWorklet（`audio.js`）で鳴らし、進める速さは音の時計に合わせる（鳴っていない音が約 50〜167 ms になるようにフレームを進める。仮想機のフレームは約 59.92 Hz で、画面の 60 Hz とは合わせない）。音が鳴る前と AudioWorklet がないときは時刻に合わせる。実時間に追いつかない機械では実時間より遅く進み、音は途切れる（音の高さは変えない）。1 フレームより短い釦の押下も、次のフレームでは押したことにする。状態の行に、実時間の割合、仮想機に使った時間の割合、音の溜まり、途切れの数を出す。「速さを測る」は、同じ ROM の別の仮想機を電源投入から 240 フレーム止まらずに進めた 1 フレームの時間。
+- 速さ [V]：開発機の Chrome の Worker の中で 1 フレーム約 13〜18 ms（ネイティブの release は約 10 ms。DR-105、DR-107、DR-108）。wasm-opt の -O3 で約 1 割速くなる（振る舞いは同じ）。読み込んでから約 10 秒は、ブラウザが機械語を組み直す前で遅い。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）は実時間の 9 割台で、音が途切れる（OI-103）。
+- 試しの頁（DR-107）：仮想機は module の Web Worker（`worker.js`）で回し、頁の主のスレッドは釦と描画だけにする（OffscreenCanvas が使えれば描画も Worker）。音は AudioWorklet（`audio.js`）で鳴らし、進める速さは音の時計に合わせる（鳴っていない音が約 50〜167 ms になるようにフレームを進める。仮想機のフレームは約 59.92 Hz で、画面の 60 Hz とは合わせない）。音が鳴る前と AudioWorklet がないときは時刻に合わせる。実時間に追いつかない機械では実時間より遅く進み、音は途切れる（音の高さは変えない）。1 フレームより短い釦の押下も、次のフレームでは押したことにする。状態の行に、実時間の割合、仮想機に使った時間の割合、音の溜まり、途切れの数を出す。「速さを測る」は、今の場面（動かしている仮想機の状態を写す。まだ動かしていなければ電源投入）から、同じ ROM の別の仮想機を 240 フレーム止まらずに進めた 1 フレームの時間（DR-108）。
 - 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。カートリッジは欄で選ぶか、頁の URL に `?cart=<URL>`（頁からの相対。例 `?cart=build/game.bin`）を付ける。`?doc=0` で DOC の子基板を外す。釦はホストと同じ（矢印、Z・X・C、Enter）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールや Worker を読まないので `serve.py` を使う。
 
 ### libretro のコア

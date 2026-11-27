@@ -8,7 +8,9 @@
   py emulator/embed/build.py --libretro libretro のコア（emulator/target/release/ の fc85_libretro.dll など）
 
 WebAssembly は Rust の wasm32-unknown-unknown の target が要る（rustup target add wasm32-unknown-unknown）。
-Python 3 の標準ライブラリだけで書く。
+binaryen の wasm-opt があれば、組んだ WebAssembly を -O3 で最適化する（DR-108。約 1 割速くなり、振る舞いは
+同じ）。--wasm-opt で道を渡すか、環境変数 WASM_OPT か PATH から探す。なければ最適化を省いて知らせる。
+--no-wasm-opt で省く。Python 3 の標準ライブラリだけで書く。
 """
 
 import argparse
@@ -67,15 +69,34 @@ def build_libretro():
     return os.path.join(EMULATOR, "target", "release", lib_name("fc85_libretro"))
 
 
-def build_wasm(copy_firmware=True):
-    """WebAssembly を組んで build/ に写し、その道を返す。"""
+def find_wasm_opt(path=None):
+    """binaryen の wasm-opt を探す（引数、環境変数 WASM_OPT、PATH の順）。なければ None。"""
+    for p in (path, os.environ.get("WASM_OPT")):
+        if p:
+            if not os.path.isfile(p):
+                raise BuildError(f"wasm-opt がない：{p}")
+            return p
+    return shutil.which("wasm-opt")
+
+
+def build_wasm(copy_firmware=True, optimize=True, wasm_opt=None):
+    """WebAssembly を組んで build/ に置き、その道を返す。optimize なら、wasm-opt があれば -O3 で最適化する
+    （なければ最適化を省き、標準エラーに知らせる）。"""
     if not has_wasm_target():
         raise BuildError(f"Rust の {WASM_TARGET} がない（rustup target add {WASM_TARGET}）")
     cargo(["build", "--release", "--target", WASM_TARGET, "-p", "fc85-capi"])
     os.makedirs(BUILD, exist_ok=True)
     src = os.path.join(EMULATOR, "target", WASM_TARGET, "release", "fc85emu.wasm")
     dst = os.path.join(BUILD, "fc85emu.wasm")
-    shutil.copyfile(src, dst)
+    exe = find_wasm_opt(wasm_opt) if optimize else None
+    if exe:
+        r = subprocess.run([exe, "-O3", src, "-o", dst], capture_output=True)
+        if r.returncode != 0:
+            raise BuildError("wasm-opt が失敗した：" + r.stderr.decode("utf-8", "replace")[-4000:])
+    else:
+        if optimize:
+            print("wasm-opt（binaryen）がないので最適化を省いた（入れると約 1 割速い）", file=sys.stderr)
+        shutil.copyfile(src, dst)
     if copy_firmware:
         for name, path in FIRMWARE.items():
             if os.path.exists(path):
@@ -87,6 +108,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--native", action="store_true", help="C の ABI の共有ライブラリ")
     ap.add_argument("--libretro", action="store_true", help="libretro のコア")
+    ap.add_argument("--wasm-opt", metavar="PATH", help="binaryen の wasm-opt の道（既定は WASM_OPT か PATH）")
+    ap.add_argument("--no-wasm-opt", action="store_true", help="WebAssembly を最適化しない")
     a = ap.parse_args(argv)
     try:
         if a.native:
@@ -94,7 +117,7 @@ def main(argv=None):
         if a.libretro:
             print(build_libretro())
         if not (a.native or a.libretro):
-            print(build_wasm())
+            print(build_wasm(optimize=not a.no_wasm_opt, wasm_opt=a.wasm_opt))
     except BuildError as e:
         print(e, file=sys.stderr)
         return 1

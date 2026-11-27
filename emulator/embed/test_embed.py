@@ -1,7 +1,8 @@
 """組込みの窓口（DR-104）の試験。
 
 - C の ABI の共有ライブラリを ctypes で呼び（C から呼ぶのと同じ）、WebAssembly を Node で動かした結果
-  （check.mjs）と、画面・音・状態がビットまで同じかを突き合わせる。
+  （check.mjs）と、画面・音・状態がビットまで同じかを突き合わせる。WebAssembly は build.py と同じく、
+  wasm-opt があれば最適化したもの（DR-108）。
 - fc85emu.h が C99 の見出しとして通るか（GCC があれば。sdk/tools/m68kgcc.py で探す）。
 - libretro のコアの共有ライブラリが libretro の関数をすべて出しているか。
 
@@ -214,6 +215,11 @@ class EmbedTest(unittest.TestCase):
         self.assertTrue(web["rgba_ok"], "fc85_screen_rgba が fc85_screen の並べ替えになっていない（WebAssembly）")
         for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc"):
             self.assertEqual(web[k], native[k], f"{k} が C の ABI と WebAssembly で違う")
+
+    def test_a_missing_wasm_opt_is_reported(self):
+        missing = os.path.join(tempfile.mkdtemp(prefix="fc85-wasm-opt-"), "wasm-opt.exe")
+        with self.assertRaises(build.BuildError):
+            build.find_wasm_opt(missing)
 
     def test_header_compiles_as_c99(self):
         tc = m68kgcc.find_toolchain()

@@ -164,12 +164,15 @@ function setRunning(on) {
   }
 }
 
-/** 同じ ROM で別の仮想機を作り、電源投入から frames フレームを止まらずに進めた 1 フレームあたりの時間。
- *  毎フレーム音と画面（テレビの模型の 320×240）を取り出す（speed.mjs と同じ手順）。 */
+/** 同じ ROM で別の仮想機を作り、今の場面（動かしている仮想機の状態を写す。まだなければ電源投入）から
+ *  frames フレームを止まらずに進めた 1 フレームあたりの時間。釦は今のまま。毎フレーム音と画面（テレビの
+ *  模型の 320×240）を取り出す（speed.mjs と同じ手順）。動かしている仮想機は変えない。 */
 function bench(frames) {
   const b = fc85.create({ boot: roms.boot, chars: roms.chars, flags: roms.doc ? 0 : FLAGS.NO_DOC });
   try {
     if (roms.cart) b.loadCart(roms.cart);
+    if (m) b.loadState(m.saveState());
+    b.setInput(pad);
     const px = new Uint8ClampedArray(W * H * 4);
     const t = performance.now();
     for (let i = 0; i < frames; i++) {
