@@ -1,0 +1,13 @@
+[package]
+name = "fc85-libretro"
+description = "fc85 のエミュレータの libretro のコア（DR-104）"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "fc85_libretro"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fc85-api = { path = "../api" }

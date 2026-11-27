@@ -19,7 +19,9 @@ pub mod symbols;
 use std::collections::VecDeque;
 
 use fc85_board::bend::Mode;
-use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console, MAIN_RAM_BYTES};
+/// 音の標本化の頻度（Hz）。
+pub use fc85_board::console::AUDIO_RATE;
+use fc85_board::console::{BOOT_ROM_BYTES, Console, MAIN_RAM_BYTES};
 use fc85_board::fabric::{CHANNELS, Phase};
 use fc85_board::tv::Tv;
 use fc85_board::video::{RASTER_H, RASTER_W};
@@ -38,6 +40,13 @@ pub const AUDIO_KEEP: usize = AUDIO_RATE as usize * 60;
 
 /// 1 回の `run` のフレーム数の上限（約 10 分）。
 pub const MAX_FRAMES: u64 = 36_000;
+
+/// 仮想機のフレームの頻度（Hz）。1 フレームはラスタ 342 ドット × 262 ライン、ドットは 2CLK（DR-002）。
+pub const FRAME_RATE: f64 = fc85_core::time::UNITS_PER_SECOND as f64
+    / (RASTER_W as u64 * RASTER_H as u64 * fc85_core::time::PERIOD_2CLK) as f64;
+
+/// `pack_state` の頭の印と版。
+pub const STATE_MAGIC: &[u8; 8] = b"FC85ST01";
 
 /// 番地の範囲（CPU から見た番地。仕様書 §05）。
 pub const BOOT_ROM: u32 = 0x00_0000;
@@ -100,6 +109,12 @@ pub enum Area {
 }
 
 impl Area {
+    /// 幅と高さ。
+    pub fn size(self) -> (usize, usize) {
+        let (_, _, w, h) = self.rect();
+        (w, h)
+    }
+
     fn rect(self) -> (usize, usize, usize, usize) {
         match self {
             Area::Active => (64, 43, 256, 192),
@@ -1060,6 +1075,95 @@ impl Machine {
         self.audio.clear();
         self.resume_pc = None;
     }
+
+    /// 組込み用（C の ABI、libretro、WebAssembly。DR-104）：`n` フレームを、ホストの `Console::run_frame` と
+    /// 同じに進める。止める条件も数え方もなく、68000 が止まってもフレームは進む（PC のアプリは止めない）。
+    pub fn run_frames(&mut self, n: u64) {
+        for _ in 0..n {
+            self.console.run_frame();
+            self.collect_audio(None);
+        }
+        self.resume_pc = None;
+    }
+
+    /// PORT_A・PORT_B に今の入力を置く（入力の割込みは基板が変化を見て出す）。
+    pub fn set_input(&mut self, port_a: u16, port_b: u16) {
+        self.console.sys.set_ports(port_a, port_b);
+    }
+
+    /// 画面（テレビの模型の絵）を `0x00RRGGBB` で `out` に書く。幅と高さを返す。
+    pub fn screen_xrgb(&mut self, area: Area, out: &mut Vec<u32>) -> (usize, usize) {
+        self.tv.picture(&self.console.sys, &mut self.pic);
+        let (x0, y0, w, h) = area.rect();
+        out.clear();
+        out.reserve(w * h);
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                out.push(if x < RASTER_W && y < RASTER_H {
+                    self.pic[y * RASTER_W + x] & 0x00FF_FFFF
+                } else {
+                    0
+                });
+            }
+        }
+        (w, h)
+    }
+
+    /// 状態を小さくまとめる：`STATE_MAGIC` ＋ `save_state` の JSON を deflate したもの。
+    pub fn pack_state(&self) -> Result<Vec<u8>, String> {
+        pack_console(&self.console)
+    }
+
+    /// `pack_state` の大きさの見積りの上限：今の状態の大きなメモリ（Main RAM、Staging、VRAM、波形 RAM、
+    /// DSP のプログラム RAM、Temporal RAM）を擬似乱数で埋めて詰めた大きさに、1/4 と 64 KiB の余裕を足す。
+    /// 大きさを先に決めて領域を取る呼ぶ側（libretro の `retro_serialize_size`）のため。
+    pub fn pack_state_bound(&self) -> Result<usize, String> {
+        let mut c = self.console.clone();
+        let mut x: u32 = 0x1985_0001;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let s = &mut c.sys;
+        for m in [
+            &mut s.main_ram,
+            &mut s.ports.staging,
+            &mut s.ports.doc_board.wave,
+            &mut s.ports.temporal.mem,
+        ] {
+            m.iter_mut().for_each(|b| *b = next() as u8);
+        }
+        for m in [&mut s.ports.acrtc.vram.0, &mut s.ports.dsp.prog] {
+            m.iter_mut().for_each(|w| *w = next() as u16);
+        }
+        let n = pack_console(&c)?.len();
+        Ok(n + n / 4 + 0x1_0000)
+    }
+
+    /// `pack_state` の形を読む。
+    pub fn unpack_state(&mut self, data: &[u8]) -> Result<(), String> {
+        use std::io::Read;
+        let body = data
+            .strip_prefix(STATE_MAGIC.as_slice())
+            .ok_or("状態の印がない（fc85 の pack_state の形ではない）")?;
+        let mut json = Vec::new();
+        flate2::read::DeflateDecoder::new(body)
+            .read_to_end(&mut json)
+            .map_err(|e| format!("状態を展開できない: {e}"))?;
+        self.load_state(&json)
+    }
+}
+
+/// `Machine::pack_state` の形にする。
+fn pack_console(c: &Console) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let json = serde_json::to_vec(c).map_err(|e| e.to_string())?;
+    let mut z =
+        flate2::write::DeflateEncoder::new(STATE_MAGIC.to_vec(), flate2::Compression::fast());
+    z.write_all(&json).map_err(|e| e.to_string())?;
+    z.finish().map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Copy, Debug, Default)]

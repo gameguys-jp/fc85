@@ -26,6 +26,7 @@
 | board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3）、音声のアナログの段（`analog`。段階 4）、番地とレジスタの表（`regmap`。`docs/spec/registers.toml` から生成 [P]（DR-100）） |
 | host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--audio-tap`（再生と `--wav` の音声。既定の `line` はアナログの段を通した LINE OUT、`digital` は DR-054 の混ぜた値）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。ベンド点（DR-065）は `--bend 命令`（`mode`、`char`、`clock`、`fifo`、`sig`、`dram`、`docbus`、`factory`。形は `bend::Bends::command`。例：`mode toggle`、`clock doc 6e6`、`clock video 0`、`fifo dac full=0`）と、フレームごとの台本 `--bend-script FILE`（1 行に「フレーム 命令」）。F2 で通常モードと Bend モードを切り替える。外部クロックのジャンパ（DR-035）の `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`・`--video-clock`（Hz）は `--bend "clock …"` の短い形。画面（窓と `--dump`）は機械の外のテレビの模型（board 層の `tv`。§03 の「ベンド点と Bend モード」）を通し、テレビの状態が変わると標準エラーに出す。DOC の SIG± の配線のジャンパ（DR-011）の `--doc-sig one`（初期の片側の配線）は `--bend "sig one"` の短い形。Bend モードでは DR-030 の警告を出さない。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（`--bend "char …"` の短い形。DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機は ACRTC のフレームの終わりまで進め、上限は CPU の 2 フレーム分。表示が止まっているか、映像のクロックが基板の半分より遅いか止まっていれば 1/60 秒分で返す（ホストは固まらない）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす。クロックのつまみ：F3 で DOC・映像・DSP・ADPCM・音声を選び、PageUp・PageDown（か `]`・`[`）で半音（Shift で 1/8 半音）ずつ回し、Home（か `\`）で基板の発振器に戻す（回すと Bend モード）。窓を開けたときと F3 を押したときに、キーの案内を出す。つまみの位置は半音単位でホストが覚え、周波数はそこから決める（基板の周期の丸めで誤差がたまらない。試験 `the_knob_returns_to_the_board_clock_without_drift`）。ブリッジの時間切れ（DR-079）は 2 秒ごとにまとめて出す |
 | 窓口（DR-092 (4)） | `fc85-api`（`emulator/crates/api`、実行ファイル `fc85-api`） | 外から仮想機を動かす（DR-097）。`Machine`（ROM を読む、フレームを進める、入力の台本、ブレークポイント、画面の PNG、音の WAV と要約、1 フレームの予算、メモリとレジスタ、状態の保存、ベンド点、m68kasm のリストのラベル）、JSON の手順（1 行に 1 つ。JSON-RPC 2.0 の形）、MCP サーバー（`--mcp`）。`run` はホストの `Console::run_frame` と同じ区切りで進めるので、止める条件に当たらなければホストと同じ状態になる。手順は [sdk/docs/emulator-api.md](../../sdk/docs/emulator-api.md) |
+| 組込み（DR-092 (4)） | `fc85-capi`（`emulator/crates/capi`、出力の名前 `fc85emu`）、`fc85-libretro`（`emulator/crates/libretro`）、`emulator/embed/` | ほかのソフトの中で仮想機を回す（DR-104）。C の ABI（見出し `crates/capi/include/fc85emu.h`）、同じ crate を wasm32 に組んだ WebAssembly（糊 `embed/fc85emu.js`、試しの頁 `embed/index.html`）、libretro のコア。どれも窓口の `Machine` の上の薄い層で、ホストと同じ進め方。説明は [sdk/docs/emulator-api.md](../../sdk/docs/emulator-api.md) §08 |
 
 ### 約束
 
@@ -46,6 +47,7 @@
 | 基板の速さ | `cargo run --release -p fc85-board --example bench`（CPU なしで仮想機の 1 秒を進める時間） |
 | 窓口を動かす | `cargo run --release -p fc85-api -- [--mcp] [--cart cart.bin]`（標準入出力。手順は sdk/docs/emulator-api.md） |
 | Web の GUI | `cargo run --release -p fc85-api -- --http [--cart cart.bin]` → http://127.0.0.1:8085/（DR-101） |
+| 組込み | `py emulator/embed/build.py [--native] [--libretro]`（WebAssembly・C の ABI・libretro のコア。DR-104）、`py emulator/embed/serve.py`（WebAssembly の試しの頁）、試験 `py -m unittest discover -s emulator/embed` |
 | 書式 | `cargo fmt --all` |
 | lint | `cargo clippy --all-targets -- -D warnings` |
 
@@ -850,3 +852,18 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | DOC の発音の記録（DR-101） | `the_voice_log_sees_oscillators_start_and_stop_without_changing_the_run` | patches のサンプルで 0・1 のオシレータが鳴り始め、右（次の音色）で止まる。出来事の時刻は並び、記録を取っても取らなくても仮想機の状態が同じ | 合格 |
 | メモリの見張りと命令の記録（DR-101） | `a_watch_stops_after_the_write_and_the_trace_shows_the_way_there` | BIOS の `bios_frame` を見張ると、VBlank の割込みが 1 足した命令の後で止まり、前と後の中身が合う。記録の最後の命令が書いた命令で、時刻は並ぶ。続けて run すると次の VBlank でまた止まる | 合格 |
 | Web の GUI（手動） | ブラウザで SAMPLE 1 | 約 59.8 フレーム毎秒で進む（`/frame` の 1 回は約 20 ms）。START で始まり、矢印で自機が動き、点が入る。止める・1 フレーム・保存と復元・ベンド点の命令が効く | 合格 |
+
+### 組込み（DR-104）
+
+コードは `emulator/crates/capi`・`emulator/crates/libretro`・`emulator/embed`。Boot ROM を使う試験は、ビルド結果がなければ飛ばす。
+
+| 項目 | 試験 | 判定基準 | 結果 |
+|---|---|---|---|
+| 窓口との一致 | `capi` の `same_picture_and_sound_as_the_api` | SAMPLE 1 を C の ABI で 120 フレーム進めた画面（320×240）と音が、窓口の `Machine::run_frames` と同じ。音は約 801 組／フレーム | 合格 |
+| 状態の往復 | `capi` の `state_round_trip_and_memory` | 保存して右を押して 30 フレーム進めた画面・音・フレームが、戻して同じに進めたものと同じ。`peek`・`poke` の往復、Boot ROM の版の語が 2 | 合格 |
+| 誤りの返し方 | `capi` の `errors_are_returned_not_raised` | NULL の仮想機、小さすぎる出力、ない範囲・空間、壊れた状態が -1 と文で返る。ROM なし（68000 がすぐ止まる）でもフレームが進む | 合格 |
+| 見出し | `capi` の `header_declares_every_export`、`test_embed.py` の `test_header_compiles_as_c99` | `fc85emu.h` の関数と Rust が出す関数が同じ名前の組、定数と PAD のビットが同じ。見出しが GCC の `-std=c99 -pedantic -Wall -Wextra -Werror` で通る | 合格 |
+| C の ABI と WebAssembly の一致 | `test_embed.py` の `test_native_and_webassembly_agree` | 共有ライブラリを ctypes で、WebAssembly を Node で、同じ手順で動かし、画面・音・状態の大きさ・状態を戻した後の結果・PC がビットまで同じ | 合格 |
+| libretro のコア | `libretro` の `a_frontend_session`、`test_embed.py` の `test_libretro_core_exports_the_api` | 呼び返しの代わりで libretro の API の順に呼ぶ：選択肢 3 つ、入力の説明 16、320×240・pitch 1280、約 801 組／フレーム、状態の往復で同じ画面と PC、Main RAM の番地が状態を戻しても・リセットしても同じ、範囲を変えると形を知らせて 256×192、横の `.bends` で Bend モード、Boot ROM がなければ失敗して画面に知らせる。共有ライブラリが libretro の関数 25 個を出す | 合格 |
+| 速さ（手動） | release で SAMPLE 1 を 600 フレーム、Chrome で WebAssembly を 120 フレーム | ネイティブは 1 フレーム約 12 ms（実時間の約 1.4 倍）。WebAssembly は約 22 ms で、実時間（16.7 ms）に届かない（OI-103）。LTO と codegen-units=1 では約 3% しか変わらない。状態は約 135 KB（JSON は約 1.3 MB）、保存に約 5 ms、上限の見積りは約 1 MB | 記録（2026-11-27） |
+| 試しの頁（手動） | `serve.py` で配った `index.html` を Chrome で開き、始める | Boot ROM の画面が出て、フレームが進む | 合格（自動操作の窓では rAF が毎秒約 1.4 回に絞られ、速さは見られなかった） |

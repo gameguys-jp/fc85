@@ -274,6 +274,19 @@ impl Session {
         Self::default()
     }
 
+    /// 作ってある仮想機で始める（組込み。ROM をファイルでなくバイト列で渡すとき。DR-104）。
+    pub fn with_machine(m: Machine) -> Self {
+        Self {
+            machine: Some(m),
+            ..Self::default()
+        }
+    }
+
+    /// 今の仮想機（なければ None。既定の ROM では作らない）。
+    pub fn current(&mut self) -> Option<&mut Machine> {
+        self.machine.as_mut()
+    }
+
     /// 仮想機（なければ既定の ROM で作る）。
     pub fn machine(&mut self) -> Result<&mut Machine, String> {
         if self.machine.is_none() {

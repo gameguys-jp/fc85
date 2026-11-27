@@ -1,0 +1,13 @@
+[package]
+name = "fc85-capi"
+description = "fc85 のエミュレータを C の ABI でほかのソフトに組み込む窓口（DR-104）。WebAssembly にも組む"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "fc85emu"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+fc85-api = { path = "../api" }

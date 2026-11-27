@@ -340,6 +340,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc85-capi"
+version = "0.1.0"
+dependencies = [
+ "fc85-api",
+]
+
+[[package]]
 name = "fc85-chips"
 version = "0.1.0"
 dependencies = [
@@ -368,6 +375,13 @@ dependencies = [
  "midir",
  "minifb",
  "serde_json",
+]
+
+[[package]]
+name = "fc85-libretro"
+version = "0.1.0"
+dependencies = [
+ "fc85-api",
 ]
 
 [[package]]

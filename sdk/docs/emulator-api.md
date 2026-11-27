@@ -1,9 +1,9 @@
 # エミュレータの窓口
 
-**v0.1**  
+**v0.2**  
 2026年11月27日
 
-> 状態：作業中の版。エミュレータを外から動かす手順（JSON の手順と MCP サーバー）を書く。仮想機の挙動は [仕様書](../../docs/spec/hardware.md) が正で、この窓口は仮想機を変えない。方針は DR-092 (4)・(5)、この版の形は DR-097。エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。
+> 状態：作業中の版。エミュレータを外から動かす手順（JSON の手順と MCP サーバー）と、ほかのソフトに組み込む口（C の ABI、WebAssembly、libretro。§08）を書く。仮想機の挙動は [仕様書](../../docs/spec/hardware.md) が正で、この窓口は仮想機を変えない。方針は DR-092 (4)・(5)、この版の形は DR-097・DR-104。エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。
 
 ## 01　概要
 
@@ -14,6 +14,7 @@
 | 動かし方 | `emulator/` で `cargo run --release -p fc85-api -- [--mcp | --http] [--cart cart.bin]`。`--mcp` を付けると MCP サーバー、`--http` で Web の GUI（§06）、付けなければ JSON の手順 |
 | ROM | `load` の `boot`・`char` を省くと、リポジトリの `firmware/*/build/` のビルド結果を読む（先に `py firmware/boot/build.py` と `py firmware/charrom/build.py`）。`--root DIR` は探す起点 |
 | Python | `sdk/tools/fc85emu.py` の `Emulator` が窓口のプログラムを子のプロセスで動かし、`call("run", frames=60)` のように手順を呼ぶ。ROM の試験の見本は `sdk/template/test_rom.py`（DR-102） |
+| 組込み | 子のプロセスでなく、同じプロセスの中で仮想機を回すときは §08（C の ABI、WebAssembly、libretro。DR-104） |
 | 決定的 | 同じ ROM・同じ設定・同じ要求の列なら、同じ結果になる。`run` は、止める条件に当たらなければ、ホスト（`fc85`）で同じフレーム数を同じ入力で進めたときと同じ状態になる（試験 `run_ends_in_the_same_state_as_the_host_frame_loop`） |
 | 版 | 手順の版は `info` の `api_version`（今は 0.1）。答えに項目を足すだけなら小さい方の数を上げ、要求や答えの形を変えたら大きい方を上げる |
 
@@ -135,4 +136,72 @@ cargo run --release -p fc85-api -- --http --cart ../sdk/samples/game/build/game.
 
 ## 07　これから足すもの
 
-DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読み書きの記録（どの命令がどのレジスタに何を書いたか）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前、C の ABI・WebAssembly・libretro（DR-092 (4)）。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。
+DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読み書きの記録（どの命令がどのレジスタに何を書いたか）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。C の ABI・WebAssembly・libretro（DR-092 (4)）は v0.2 で足した（§08。DR-104）。
+
+## 08　組み込む（C の ABI・WebAssembly・libretro）
+
+ほかのソフトの同じプロセスの中で仮想機を回す口（DR-092 (4)、DR-104）。どれも窓口の `Machine` の上の薄い層で、仮想機を変えない。1 フレームの進め方はホスト（`Console::run_frame`）と同じで、68000 が止まって（halt）もフレーム・画面・音は進む。同じ ROM・同じ設定・同じ入力の列なら、C の ABI と WebAssembly で画面・音・状態がビットまで同じになる（試験 `emulator/embed/test_embed.py`）[P]。
+
+| 口 | 置き場所 | 組み方 |
+|---|---|---|
+| C の ABI | crate `fc85-capi`（`emulator/crates/capi`）。見出し `emulator/crates/capi/include/fc85emu.h`（ROM の中で使う `fc85.h` とは別物） | `emulator/` で `cargo build --release -p fc85-capi`（か `py emulator/embed/build.py --native`）。`target/release/` に共有ライブラリ（`fc85emu.dll`・`libfc85emu.so`・`libfc85emu.dylib`）と静的なライブラリ（`fc85emu.lib`・`libfc85emu.a`） |
+| WebAssembly | 同じ crate を wasm32-unknown-unknown に組む。糊 `emulator/embed/fc85emu.js`、試しの頁 `emulator/embed/index.html` | `py emulator/embed/build.py`（`emulator/embed/build/fc85emu.wasm`。Rust の `wasm32-unknown-unknown` の target が要る）。頁は `py emulator/embed/serve.py` で配り、http://127.0.0.1:8000/ を開く |
+| libretro | crate `fc85-libretro`（`emulator/crates/libretro`） | `cargo build --release -p fc85-libretro`（か `build.py --libretro`）。`fc85_libretro.dll`・`.so`・`.dylib` をフロントエンド（RetroArch など）のコアのフォルダに置く |
+
+### C の ABI
+
+| 関数 | すること |
+|---|---|
+| `fc85_new(boot, boot_len, chars, chars_len, flags)` | 仮想機を作って電源を入れる。ROM は NULL でもよい（Boot ROM がなければ 68000 はすぐ止まる）。`flags` は `FC85_NO_DOC`（DOC の子基板を挿さない）・`FC85_DIGITAL_AUDIO`（音をチップの出力のデジタルの和にする。既定は LINE OUT）。`fc85_free` で壊す |
+| `fc85_load_cart`・`fc85_reset` | カートリッジを挿して（長さ 0 で抜いて）電源を入れ直す。同じ ROM で入れ直す |
+| `fc85_set_input(m, port_a, port_b)` | PORT_A・PORT_B（`FC85_PAD_*` の OR。上 $01、下 $02、左 $04、右 $08、A $10、B $20、C $40、START $80） |
+| `fc85_run_frames(m, n)`・`fc85_frame` | n フレーム進める。電源投入からのフレームの数 |
+| `fc85_screen(m, area, out, out_len)` | 画面を 0x00RRGGBB で左上から行ごとに書き、画素の数を返す。`area` は `FC85_AREA_ACTIVE`（256×192）・`VIEW`（320×240）・`RASTER`（342×262）。大きさは `fc85_screen_width`・`fc85_screen_height` |
+| `fc85_audio(m, out, max_frames)` | 溜まった音を L・R の順の s16 で書き、組の数を返す（48 kHz、1 フレームに約 801 組。残りは次に回す）。取り出さないと 60 秒分まで溜め、古い方から捨てる |
+| `fc85_save_state`・`fc85_load_state` | 状態を保存して返す（`fc85_free_bytes` で返す）・戻す。形は印 `FC85ST01` と、`save_state` の JSON を deflate したもの。同じ版のエミュレータで読めることだけを約束する [P]（OI-103） |
+| `fc85_peek`・`fc85_poke` | メモリをバスを通さずに読む・書く。空間は `FC85_SPACE_*`（§03 の表と同じ順：CPU、VRAM、WAVE、DSP_PROG、TEMPORAL、CHAR_ROM、PALETTE） |
+| `fc85_call(m, request)` | §02 の JSON の手順の要求を 1 行、同じ仮想機に送り、答えの行を返す（`fc85_free_string` で返す）。ブレークポイント、見張り、ベンド点、レジスタなど、ほかの手順はこちらで使う |
+| `fc85_abi_version`・`fc85_version`・`fc85_audio_rate`・`fc85_frame_rate`・`fc85_last_error` | ABI の版（今は 1）、エミュレータの版、48000、約 59.92、最後の誤りの文 |
+
+約束 [P]：
+
+- 誤りは戻り値（-1 か NULL）で知らせ、文は `fc85_last_error()`（UTF-8。同じスレッドの次の呼出しまで使える）。中で Rust が panic しても、ネイティブでは誤りとして返し、呼んだソフトを止めない。
+- 1 つの仮想機を同時に 2 つのスレッドから使わない（別々の仮想機なら別のスレッドでよい）。
+- 渡したバイト列は関数の中で写す。返された領域は対の関数で返す（`free()` では返さない）。
+- ABI の版は、関数の形を変えたら上げる。関数を足すだけなら変えない。
+
+### WebAssembly
+
+C の ABI と同じ関数を出し、取り込む関数はない（どの WebAssembly の実行環境でも読める）。大きさは約 1.5 MB。`fc85emu.js`（ES のモジュール。ブラウザでも Node でも動く）が、領域の受け渡しを包む：
+
+```js
+import { load, AREA, PAD } from "./fc85emu.js";
+const fc85 = await load("build/fc85emu.wasm");
+const m = fc85.create({ boot, chars });          // Uint8Array
+m.loadCart(cart);
+m.setInput(PAD.RIGHT | PAD.A);
+m.runFrames(1);
+ctx.putImageData(new ImageData(m.screenRGBA(AREA.VIEW), 320, 240), 0, 0);
+const pcm = m.audio();                           // Int16Array（L・R、48 kHz）
+const st = m.saveState(); m.loadState(st);
+m.call("regs");                                  // JSON の手順
+```
+
+- 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
+- WebAssembly にはファイルがないので、`fc85_call` の手順のうち `path` を使うもの（`load`、`screenshot` の `path` など）は誤りになる。ROM はバイト列で渡す。
+- 速さ [V]：開発機の Chrome で 1 フレーム約 22 ms（ネイティブの release は約 12 ms）で、実時間（16.7 ms）に届かない（OI-103）。試しの頁は、遅い機械では 1 回に 2 フレームまで進め、実時間より遅く動く。
+- 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。釦はホストと同じ（矢印、Z・X・C、Enter）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールを読まないので `serve.py` を使う。
+
+### libretro のコア
+
+| 項目 | 内容 |
+|---|---|
+| ROM | フロントエンドの system のフォルダに `fc85_boot.bin`（Boot ROM）と `fc85_char.bin`（文字 ROM）を置く（firmware の `boot.bin`・`char.bin` を名前を変えて）。Boot ROM がなければ読み込みに失敗し、画面に知らせる。ゲームはカートリッジの `.bin`。ゲームなしで始めると Boot ROM だけで動く |
+| ベンド点 | カートリッジの横に同じ名前の `.bends` があれば、1 行に 1 つのベンド点の命令（仕様書 §11。`#` から後ろは注。ホストの `--bend` と同じ形）を電源を入れるときに入れる。工場出荷と違えば Bend モードで始まる。読めない命令があれば読み込みに失敗する |
+| 入力 | RetroPad の十字、Y → A、B → B、A → C、START → START [P]。ポート 1 は PORT_A、ポート 2 は PORT_B |
+| 映像 | XRGB8888。範囲は選択肢 `fc85_area`（view 320×240、active 256×192、raster 342×262）で、変えると次のフレームから。画素の縦横比は 8:7（約 1.14。ドットは 2CLK、NTSC のテレビ。`docs/parts/HD63484.md`）をフロントエンドに知らせる [P]（ホストと Web の GUI は補正しない。DR-055 (2)） |
+| 音 | 48 kHz のステレオ。選択肢 `fc85_doc`（DOC の子基板）と `fc85_audio_tap`（line・digital）は、リセットか読み直しで効く |
+| 状態 | 頭に長さ（4 byte）を付けた `pack_state` の形。`retro_serialize_size` は読み込んだときに、大きなメモリを擬似乱数で埋めて詰めた大きさに余裕を足して決め、ゲームの間は変えない（約 1 MB。中身は約 135 KB）[P] |
+| メモリ | Main RAM（128 KiB）を `RETRO_MEMORY_SYSTEM_RAM` で見せる。状態を戻しても、リセットしても同じ番地 |
+| 守り | 中で panic したら、そのゲームを止めて記録に書き、フロントエンドは止めない |
+| まだないもの [O] | 電池で保つ RAM（本機にない）、チート、キーボード・MIDI、ベンド点の選択肢（`.bends` だけ）、実際のフロントエンドでの確かめ（OI-103） |

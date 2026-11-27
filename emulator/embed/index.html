@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fc85 WebAssembly</title>
+<!--
+  WebAssembly の仮想機（DR-104）をブラウザだけで動かす試しの頁。エミュレータのサーバーは要らないが、ファイルと
+  しては開けない（WebAssembly を fetch で読む）ので、静的に配る：
+    py emulator/embed/build.py     # build/fc85emu.wasm と Boot ROM・文字 ROM を置く
+    py emulator/embed/serve.py     # http://127.0.0.1:8000/ を開く（.js・.wasm の MIME を正しく返す）
+  build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジも欄で選ぶ。
+  ライセンスは MIT（リポジトリの LICENSE）。
+-->
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #d9d9de;
+    --accent: #2f6fdb; --warn: #c0392b; --screen: #000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f23; --ink: #ececef; --muted: #9a9aa3; --line: #34343a;
+      --accent: #6c9cff; --warn: #ff6b5e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
+  .screen { background: var(--screen); border-radius: 6px; padding: 8px; }
+  canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated;
+    image-rendering: crisp-edges; outline: none; }
+  canvas:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; margin-top: 12px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+  label { display: inline-flex; gap: 6px; align-items: center; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px;
+    background: var(--bg); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { color: var(--warn); min-height: 1.5em; }
+  .help, #stat { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>fc85 WebAssembly</h1>
+  <div class="screen"><canvas id="screen" width="320" height="240" tabindex="0"></canvas></div>
+  <div id="msg"></div>
+  <div id="stat"></div>
+  <section>
+    <div class="row">
+      <button id="start">始める</button>
+      <button id="pause" disabled>一時停止</button>
+      <button id="reset" disabled>リセット</button>
+      <button id="save" disabled>状態を保存</button>
+      <button id="load" disabled>状態を戻す</button>
+    </div>
+    <div class="row">
+      <label>Boot ROM <input type="file" id="boot" accept=".bin"></label>
+      <label>文字 ROM <input type="file" id="chars" accept=".bin"></label>
+    </div>
+    <div class="row">
+      <label>カートリッジ <input type="file" id="cart" accept=".bin"></label>
+      <label><input type="checkbox" id="doc" checked> DOC の子基板</label>
+    </div>
+    <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。</p>
+  </section>
+</main>
+<script type="module">
+import { load, AREA, FLAGS } from "./fc85emu.js";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("screen");
+const ctx = canvas.getContext("2d");
+const image = ctx.createImageData(320, 240);
+const KEYS = { ArrowUp: 0x01, ArrowDown: 0x02, ArrowLeft: 0x04, ArrowRight: 0x08,
+               KeyZ: 0x10, KeyX: 0x20, KeyC: 0x40, Enter: 0x80 };
+
+let fc85 = null, m = null, running = false, pad = 0, saved = null;
+let audio = null, nextTime = 0, last = 0, owed = 0, frames = 0, statAt = 0;
+const roms = { boot: null, chars: null, cart: null };
+
+const say = (s) => { $("msg").textContent = s; };
+
+async function fetchBytes(url) {
+  try {
+    const r = await fetch(url);
+    return r.ok ? new Uint8Array(await r.arrayBuffer()) : null;
+  } catch { return null; }
+}
+
+async function fileBytes(input) {
+  const f = input.files[0];
+  return f ? new Uint8Array(await f.arrayBuffer()) : null;
+}
+
+function build() {
+  if (m) m.free();
+  m = fc85.create({ boot: roms.boot, chars: roms.chars, flags: $("doc").checked ? 0 : FLAGS.NO_DOC });
+  if (roms.cart) m.loadCart(roms.cart);
+  saved = null;
+  if (!roms.boot) say("Boot ROM がない（68000 はすぐ止まる）。欄で選ぶ");
+}
+
+function play(pcm) {
+  if (!audio || pcm.length === 0) return;
+  const n = pcm.length / 2;
+  const buf = audio.createBuffer(2, n, fc85.audioRate);
+  const l = buf.getChannelData(0), r = buf.getChannelData(1);
+  for (let i = 0; i < n; i++) { l[i] = pcm[2 * i] / 32768; r[i] = pcm[2 * i + 1] / 32768; }
+  const now = audio.currentTime;
+  if (nextTime < now + 0.03 || nextTime > now + 0.25) nextTime = now + 0.05;   // 遅れ・溜まりすぎは詰め直す
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  src.connect(audio.destination);
+  src.start(nextTime);
+  nextTime += buf.duration;
+}
+
+function tick(t) {
+  if (!running) return;
+  // 遅い機械では 1 回に 2 フレームまで（実時間より遅く進む。頁を固めない）
+  owed = Math.min(owed + (t - last) / 1000 * fc85.frameRate, 2);
+  last = t;
+  try {
+    let n = 0;
+    while (owed >= 1) { owed -= 1; n++; }
+    if (n > 0) {
+      m.setInput(pad);
+      m.runFrames(n);
+      frames += n;
+      m.screenRGBA(AREA.VIEW, image.data);
+      ctx.putImageData(image, 0, 0);
+      play(m.audio());
+    }
+  } catch (e) {
+    running = false;
+    say(`止まった：${e.message}（読み込み直す）`);
+    return;
+  }
+  if (t - statAt > 1000) {
+    $("stat").textContent = `フレーム ${m.frame}　${(frames * 1000 / (t - statAt)).toFixed(1)} fps`;
+    frames = 0; statAt = t;
+  }
+  requestAnimationFrame(tick);
+}
+
+$("start").onclick = async () => {
+  say("");
+  try {
+    if (!fc85) fc85 = await load("build/fc85emu.wasm");
+    roms.boot = (await fileBytes($("boot"))) ?? roms.boot ?? (await fetchBytes("build/boot.bin"));
+    roms.chars = (await fileBytes($("chars"))) ?? roms.chars ?? (await fetchBytes("build/char.bin"));
+    roms.cart = await fileBytes($("cart"));
+    build();
+  } catch (e) {
+    say(`始められない：${e.message}（py emulator/embed/build.py で組む）`);
+    return;
+  }
+  audio ??= new AudioContext();
+  await audio.resume();
+  for (const id of ["pause", "reset", "save", "load"]) $(id).disabled = false;
+  running = true; last = statAt = performance.now(); owed = 0;
+  canvas.focus();
+  requestAnimationFrame(tick);
+};
+$("pause").onclick = () => {
+  running = !running;
+  $("pause").textContent = running ? "一時停止" : "続ける";
+  if (running) { last = performance.now(); requestAnimationFrame(tick); }
+};
+$("reset").onclick = () => m && m.reset();
+$("save").onclick = () => { if (m) { saved = m.saveState(); say(`保存した（${saved.length} byte）`); } };
+$("load").onclick = () => { if (m && saved) m.loadState(saved); };
+canvas.addEventListener("keydown", (e) => {
+  if (e.code in KEYS) { pad |= KEYS[e.code]; e.preventDefault(); }
+});
+canvas.addEventListener("keyup", (e) => {
+  if (e.code in KEYS) { pad &= ~KEYS[e.code]; e.preventDefault(); }
+});
+canvas.addEventListener("blur", () => { pad = 0; });
+</script>
+</body>
+</html>
