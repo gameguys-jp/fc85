@@ -193,7 +193,7 @@ ROM 作りを始める線は、ソフトから見える約束（アドレスマ�
 
 | 数字 | 意味 | 意味しないこと |
 |---|---|---|
-| `bus_errors`・`bridge_timeouts`・`doc_rule_warnings` | その `run` の間のバスエラー、DTACK で終えた時間切れ（DR-079）、DOC の窓の規約（DR-030）の警告の数 | ACRTC の規約（DR-016・DR-033）の違反は数えない。TST・BTST・CMP で 0xE0・0xE2 を 1 回読む違反も見分けない [V]（impl/emulator.md §03） |
+| `bus_errors`・`bridge_timeouts`・`doc_rule_warnings`・`acrtc_rule_warnings` | その `run` の間のバスエラー、DTACK で終えた時間切れ（DR-079）、DOC の窓の規約（DR-030）の警告、ACRTC の FIFO の規約（DR-096。満杯の書込み FIFO への書込みと、空の読出し FIFO の読出し。DR-121）の警告の数 | ACRTC の規約のうち、AR・STATUS・データの口への読み書き一体の命令と、DMA の間の FIFO へのアクセス（DR-016）は数えない。TST・BTST・CMP で 0xE0・0xE2 を 1 回読む違反も見分けない [V]（impl/emulator.md §03） |
 | `budget` の `cpu_busy` | 68000 が STOP で待つ間と、`idle` で示した番地の命令を空きとして数えた残りの割合 | 自分で VBlank のフラグを回して待つループは、`idle` で示さないと働いた時間に入る |
 | `budget` の `acrtc_busy` | ACRTC がコマンドを実行している時間の割合（命令の切れ目ごとに見る） | 描画の時間は U85 の式と表示との取り合いの模型 [P] で、式が表示との競合を含むかは [V] |
 | `budget` の `fabric_busy` | Data Fabric のどれかのチャネルが動いている時間の割合 | — |
@@ -211,7 +211,7 @@ ROM の回帰試験の要点。手順の詳細は [emulator-api.md](emulator-api
 
 1. 組むときにリストを作る（ひな形の `build.py` は `build/rom.lst` を書く。m68kasm を直に使うなら `-l`）。カートリッジの横の `.lst` は `load` が自動で読み、番地をラベルで書ける。新しい ROM は `py sdk/tools/new_rom.py` でひな形（[sdk/template/](../template/AGENTS.md)）から作ると、組立てと試験の形がそろう（DR-102）。C の ROM では `build.py` が GCC の出力から同じ形の記号の表を書く（[c.md](c.md) §10、DR-103）。
 2. `fc85-api`（JSON の手順か `--mcp`）で `load`（`cart`。`doc` を false にすると DOC の子基板なし）し、`run`（`frames`、入力の台本 `input`、`stop_on_bus_error`）で進める。
-3. `stop` が `frames`、`bus_errors`・`bridge_timeouts`・`doc_rule_warnings` が 0、`info` の `mode` が `normal` であることを見る。§06 のとおり、ACRTC の規約は窓口が数えないので、コードで守る（§03 の 6〜8）。
+3. `stop` が `frames`、`bus_errors`・`bridge_timeouts`・`doc_rule_warnings`・`acrtc_rule_warnings` が 0、`info` の `mode` が `normal` であることを見る。§06 のとおり、ACRTC の規約のうち FIFO の満杯・空のほか（読み書き一体の命令、DMA の間のアクセス）は窓口が数えないので、コードで守る（§03 の 6〜8）。
 4. 画面は `screenshot`（PNG）と `screen_hash`、音は `audio`（WAV、`peak`、`rms`）と `run` の `voices` で比べる。
 5. 予算は `run` の `budget`。自分の待ちのループは `idle` で示す。BIOS の `BIOS_WAIT_VBL` は STOP なので示さなくてよい。
 6. 不具合は `save_state`・`load_state`、`break`、`watch`（メモリの中身が変わったら止める）、`trace`（最後に実行した命令）、`regs`、`peek` で追う。同じ要求の列で再現する（§06）。Python の試験からは `sdk/tools/fc85emu.py` で同じ手順を呼べる。

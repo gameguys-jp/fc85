@@ -358,6 +358,9 @@ pub struct RunReport {
     pub last_bus_error: Option<BusErrorInfo>,
     pub bridge_timeouts: u64,
     pub doc_rule_warnings: u64,
+    /// ACRTC の FIFO の規約（DR-096）に反したアクセスの数：満杯の書込み FIFO への書込みと、空の読出し
+    /// FIFO の読出し（DR-121）。
+    pub acrtc_rule_warnings: u64,
     pub budget: Budget,
     pub audio: AudioStats,
     /// 表示の範囲（256×192）の画素の FNV-1a。前と同じ画面かを比べる。
@@ -651,6 +654,7 @@ impl Machine {
     /// フレームを進める。止める条件に当たれば途中で返す。
     pub fn run(&mut self, o: &RunOptions) -> RunReport {
         let log0 = self.console.sys.log.clone();
+        let acrtc0 = self.console.sys.ports.acrtc.acrtc.error_counts();
         if o.voices {
             self.voice_on = self.voices_now();
             self.voice_log.clear();
@@ -708,6 +712,9 @@ impl Machine {
             log.bridge_timeouts - log0.bridge_timeouts,
             log.doc_rule_warnings - log0.doc_rule_warnings,
         );
+        let acrtc1 = self.console.sys.ports.acrtc.acrtc.error_counts();
+        let acrtc_rule =
+            acrtc1.0.saturating_sub(acrtc0.0) + acrtc1.1.saturating_sub(acrtc0.1);
         let (_, _, rgb) = self.screen(Area::Active);
         let cpu = &self.console.cpu;
         RunReport {
@@ -724,6 +731,7 @@ impl Machine {
             }),
             bridge_timeouts: bridge,
             doc_rule_warnings: doc_rule,
+            acrtc_rule_warnings: acrtc_rule,
             budget,
             audio,
             screen_hash: format!("{:016x}", encode::fnv1a(&rgb)),

@@ -58,7 +58,7 @@ cd emulator && cargo build --release -p fc85-api -p fc85-host
 
 1. `main.c`（か `main.s`）を変える。
 2. `py build.py`。誤りは行番号つきで出る。
-3. `load` → `run`（入力の台本つき）→ `screenshot`・`audio`・`voices` で確かめる。`bus_errors`、`doc_rule_warnings`、`budget` を見る。
+3. `load` → `run`（入力の台本つき）→ `screenshot`・`audio`・`voices` で確かめる。`bus_errors`、`doc_rule_warnings`、`acrtc_rule_warnings`（ACRTC の FIFO の満杯・空のアクセス）、`budget` を見る。
 4. 確かめたことを `test_rom.py` の試験にする（画面の `screen_hash`、Main RAM の値、音のピークなど）。
 5. 終える前に `py -m unittest` を通す。
 

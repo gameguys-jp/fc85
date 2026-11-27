@@ -201,6 +201,43 @@ fn a_rom_of_ff_halts_and_run_stops_at_once() {
     assert_eq!(r.frames_run, 2);
 }
 
+#[test]
+fn writes_to_a_full_acrtc_fifo_are_counted_as_rule_warnings() {
+    // Boot ROM の代わりの小さな ROM：AR＝0（FIFO の入口）にして、WFR を見ずに 20 語を書く。リセットの後の
+    // ACRTC は OMR の STR＝0 で FIFO を読まないので、8 語で満杯になり、残りの 12 語は規約の違反（DR-096、DR-121）
+    let mut boot = vec![0xFFu8; 0x10000];
+    let code: [u16; 15] = [
+        0x33FC, 0x0000, 0x0020, 0x0000, // MOVE.W #0,$200000（AR）
+        0x303C, 0x0013, // MOVE.W #19,D0
+        0x33FC, 0x1234, 0x0020, 0x0002, // MOVE.W #$1234,$200002（FIFO）
+        0x51C8, 0xFFF6, // DBRA D0,上へ
+        0x60FE, // BRA.S *
+        0x4E71, 0x4E71,
+    ];
+    boot[..8].copy_from_slice(&[0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);
+    for (i, w) in code.iter().enumerate() {
+        boot[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&w.to_be_bytes());
+    }
+    let mut m = Machine::new(Config {
+        boot: Some(boot),
+        ..Default::default()
+    })
+    .unwrap();
+    let r = m.run(&RunOptions {
+        frames: 2,
+        ..Default::default()
+    });
+    assert_eq!(r.stop, "frames");
+    assert_eq!(r.bus_errors, 0);
+    assert_eq!(r.acrtc_rule_warnings, 12);
+    // 次の run は、その間の数だけ
+    let r = m.run(&RunOptions {
+        frames: 1,
+        ..Default::default()
+    });
+    assert_eq!(r.acrtc_rule_warnings, 0);
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.root = Some(root());

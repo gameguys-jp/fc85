@@ -78,7 +78,7 @@
 | `stop` | 止まった理由：`frames`（数え終えた）、`breakpoint`、`halted`（68000 の二重バスフォルト。`run_when_halted` で続けられる）、`bus_error`（`stop_on_bus_error`）、`watch`（見張りの中身が変わった） |
 | `frames_run` | 最後まで進めたフレームの数 |
 | `frame`、`cpu_clock`、`pc`、`pc_label` | 止まったときの値。`frame` は電源投入からの ACRTC のフレームの数 |
-| `bus_errors`、`last_bus_error`、`bridge_timeouts`、`doc_rule_warnings` | この実行の間の数。`last_bus_error` は番地、ラベル、書込みか |
+| `bus_errors`、`last_bus_error`、`bridge_timeouts`、`doc_rule_warnings`、`acrtc_rule_warnings` | この実行の間の数。`last_bus_error` は番地、ラベル、書込みか。`acrtc_rule_warnings` は ACRTC の FIFO の規約（DR-096）に反したアクセス（満杯の書込み FIFO への書込み、空の読出し FIFO の読出し）の数（DR-121） |
 | `budget` | 働いた割合（0〜1）の全体の値と、いちばん重いフレームの値（`_max`）：`cpu_busy`、`acrtc_busy`、`fabric_busy` |
 | `audio` | この実行の音の `samples`、`seconds`、`peak`、`rms` |
 | `screen_hash` | 表示の範囲（256×192）の画素の FNV-1a（64 bit）。同じ画面かを比べる（暗号の強さはない） |

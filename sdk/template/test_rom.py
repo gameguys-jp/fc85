@@ -60,6 +60,7 @@ class TestRom(unittest.TestCase):
             self.assertEqual(r["stop"], "frames")
             self.assertEqual(r["bus_errors"], 0)
             self.assertEqual(r["doc_rule_warnings"], 0)
+            self.assertEqual(r["acrtc_rule_warnings"], 0)
             frames = int(emu.call("peek", space="cpu", addr="v_frame", len=4)["hex"], 16)
             self.assertGreater(frames, 0, "入口に来ていない（見出しか BIOS の版を見る）")
 

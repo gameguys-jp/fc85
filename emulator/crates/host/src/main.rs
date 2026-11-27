@@ -657,6 +657,7 @@ fn trace(c: &mut Console, n: u64) {
 struct Seen {
     bus_errors: u64,
     doc_rule: u64,
+    acrtc_rule: u64,
     halted: bool,
     bridge: u64,
     /// ブリッジの時間切れを最後に出したフレーム。
@@ -712,6 +713,15 @@ fn report(c: &Console, seen: &mut Seen, frame: u64) {
             );
         }
         seen.doc_rule = l.doc_rule_warnings;
+    }
+    // ACRTC の FIFO の規約（DR-096）：満杯の書込み FIFO への書込みと、空の読出し FIFO の読出し（DR-121）
+    let (over, under) = c.sys.ports.acrtc.acrtc.error_counts();
+    if over + under != seen.acrtc_rule && c.sys.bends.mode == Mode::Normal {
+        eprintln!(
+            "ACRTC の FIFO の規約（DR-096）に反したアクセス {} 回（満杯への書込み {over}、空からの読出し {under}）",
+            over + under
+        );
+        seen.acrtc_rule = over + under;
     }
 }
 
