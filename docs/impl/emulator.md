@@ -848,4 +848,5 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | ラベル | `symbols` の単体試験 | m68kasm のリストの表から名前と番地、近いラベル＋差（`start.clr+$4`）、I/O の番地には付けない、`ラベル±差` の番地 | 合格 |
 | Web の GUI の口（DR-101） | `the_web_gui_serves_the_page_the_api_and_frames_only_to_this_host`、`http` の単体試験 | ページ、`/api` の info、`/frame` の PNG と `run` の答え。ほかの名前の Host は 403、知らない道は 404。見出しと本文の読み方、Origin が違えば断る | 合格 |
 | DOC の発音の記録（DR-101） | `the_voice_log_sees_oscillators_start_and_stop_without_changing_the_run` | patches のサンプルで 0・1 のオシレータが鳴り始め、右（次の音色）で止まる。出来事の時刻は並び、記録を取っても取らなくても仮想機の状態が同じ | 合格 |
+| メモリの見張りと命令の記録（DR-101） | `a_watch_stops_after_the_write_and_the_trace_shows_the_way_there` | BIOS の `bios_frame` を見張ると、VBlank の割込みが 1 足した命令の後で止まり、前と後の中身が合う。記録の最後の命令が書いた命令で、時刻は並ぶ。続けて run すると次の VBlank でまた止まる | 合格 |
 | Web の GUI（手動） | ブラウザで SAMPLE 1 | 約 59.8 フレーム毎秒で進む（`/frame` の 1 回は約 20 ms）。START で始まり、矢印で自機が動き、点が入る。止める・1 フレーム・保存と復元・ベンド点の命令が効く | 合格 |

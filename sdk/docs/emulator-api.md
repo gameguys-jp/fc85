@@ -41,7 +41,7 @@
 | `methods` | なし | 手順の一覧と、引数の JSON Schema |
 | `load` | `cart`、`boot`、`char`（道）、`listing`（足して読むリスト）、`doc`（子基板。既定 true）、`bends`（ベンド点の命令の列）、`audio_tap`（`line`・`digital`） | 電源を入れ直し、`info` と、読んだリスト。カートリッジと Boot ROM の横の `.lst` は自動で読む |
 | `reset` | なし | 同じ ROM と設定で電源を入れ直す（ラベルは残す） |
-| `run` | `frames`（既定 1、最大 36,000）、`pad`（PORT_A を最初から）、`input`（台本 `[[フレーム, 値], …]`。フレームはこの実行の何フレーム目か。次の行まで保つ）、`port_b`、`break`（番地の列。その命令の前で止める）、`idle`（待ちのループ。番地か `[from, to)` の列）、`stop_on_bus_error`、`run_when_halted`、`voices`（DOC の発音の記録。§04） | §04 |
+| `run` | `frames`（既定 1、最大 36,000）、`pad`（PORT_A を最初から）、`input`（台本 `[[フレーム, 値], …]`。フレームはこの実行の何フレーム目か。次の行まで保つ）、`port_b`、`break`（番地の列。その命令の前で止める）、`idle`（待ちのループ。番地か `[from, to)` の列）、`stop_on_bus_error`、`run_when_halted`、`voices`（DOC の発音の記録。§04）、`watch`（メモリの見張り。番地かラベルなら CPU の空間の 2 byte、`{"space", "addr", "len"}` で空間と長さ。合計 4,096 byte まで）、`trace`（最後に実行した命令をいくつ覚えるか。最大 4,096） | §04 |
 | `step` | `count`（既定 1） | 命令を実行し、`regs` と同じ形 |
 | `regs` | なし | `d`、`a`（A7 は今の SP）、`usp`、`ssp`、`sr`、`pc`、`pc_label`、`state`（running・stopped・halted）、`clock`、`frame` |
 | `doc` | なし | DOC の今の様子：`enabled`（有効なオシレータの数 N）と `oscillators`（0〜N−1 の `on`、`freq`、`vol`、`wave_ptr`、`wave_size`、`control`）。子基板がなければ null。読んでも DOC は変わらない |
@@ -74,7 +74,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| `stop` | 止まった理由：`frames`（数え終えた）、`breakpoint`、`halted`（68000 の二重バスフォルト。`run_when_halted` で続けられる）、`bus_error`（`stop_on_bus_error`） |
+| `stop` | 止まった理由：`frames`（数え終えた）、`breakpoint`、`halted`（68000 の二重バスフォルト。`run_when_halted` で続けられる）、`bus_error`（`stop_on_bus_error`）、`watch`（見張りの中身が変わった） |
 | `frames_run` | 最後まで進めたフレームの数 |
 | `frame`、`cpu_clock`、`pc`、`pc_label` | 止まったときの値。`frame` は電源投入からの ACRTC のフレームの数 |
 | `bus_errors`、`last_bus_error`、`bridge_timeouts`、`doc_rule_warnings` | この実行の間の数。`last_bus_error` は番地、ラベル、書込みか |
@@ -83,6 +83,11 @@
 | `screen_hash` | 表示の範囲（256×192）の画素の FNV-1a（64 bit）。同じ画面かを比べる（暗号の強さはない） |
 | `tv` | テレビの模型の状態（同期と色が取れているか。映像のクロックのベンド点） |
 | `voices`、`voices_dropped` | `voices` を付けたときだけ。DOC のオシレータが鳴り始めた・止まった出来事の列（`frame`、`cpu_clock`、`osc`、`on`、そのときの `freq`、`vol`、`wave_ptr`、`wave_size`、`control`）。最大 2,000 件で、超えた数は `voices_dropped` |
+
+| `watch_hit` | 見張りで止まったときだけ。`space`、`watch_addr`（見張りの頭）、`addr` と `label`（変わった最初の byte）、`old`・`new`（見張りの範囲の前と後。16 進）、`pc` と `pc_label`（変わったのを見つけた命令） |
+| `trace` | `trace` を付けたときだけ。最後に実行した命令の `pc`、`label`、`cpu_clock`（古い順。STOP で待つ間は数えない） |
+
+見張りの見方 [P]：命令を 1 つ実行するごとに、見張りの範囲をバスを通さずに読み、前と比べる。同じ値を書いた書込みと、読むだけのアクセスでは止まらない。Data Fabric・ACRTC・DSP が書いたときも、次の命令の後で見つかるので、`pc` はその命令になる（`trace` の最後の命令と同じ）。止まった後に続けて `run` を送ると、今の中身から見張り直す。
 
 発音の記録の見方 [P]：基板を CPU に追いつかせる区切り（64 クロック＝8 µs）ごとに、有効なオシレータの制御のレジスタの停止ビットを見て、変わったものを記録する。8 µs より短く鳴って止まった音と、止めずにレジスタだけ替えた音（同じオシレータで音程を変える）は出来事にならない。記録を取っても仮想機の状態は変わらない（試験で確かめている）。
 
@@ -130,4 +135,4 @@ cargo run --release -p fc85-api -- --http --cart ../sdk/samples/game/build/game.
 
 ## 07　これから足すもの
 
-DR-092 (5) のうち、この版にないもの [O]：記録（trace）とラベル、メモリの見張り（書いたら止める）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前、C の ABI・WebAssembly・libretro（DR-092 (4)）。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。
+DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読み書きの記録（どの命令がどのレジスタに何を書いたか）、レジスタ表の 1 ファイル（DR-092 (5)）からの名前、C の ABI・WebAssembly・libretro（DR-092 (4)）。Web の GUI の残り：ゲームパッド、メモリの表示、ブレークポイント、波形の表示。

@@ -13,7 +13,10 @@ use fc85_chips::hd68000::Size;
 use serde_json::{Value, json};
 
 use crate::encode;
-use crate::{API_VERSION, Area, Config, MAX_FRAMES, Machine, RunOptions, Space, parse_pad};
+use crate::{
+    API_VERSION, Area, Config, MAX_FRAMES, MAX_TRACE, MAX_WATCH_BYTES, Machine, RunOptions, Space,
+    Watch, parse_pad,
+};
 
 /// 1 つの答え：JSON の値と、付ける PNG（画面）。
 #[derive(Debug, Default)]
@@ -130,9 +133,7 @@ fn size_of(p: &Value) -> Result<Size, String> {
     }
 }
 
-fn hex(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02X}")).collect()
-}
+use encode::hex;
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -177,7 +178,7 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
         ),
         (
             "run",
-            "フレームを進める。止める条件（ブレークポイント、二重バスフォルト、バスエラー）に当たると途中で止まる。予算（CPU・ACRTC・Fabric の働いた割合）、音の要約、画面の要約の値を返す",
+            "フレームを進める。止める条件（ブレークポイント、二重バスフォルト、バスエラー、メモリの見張り）に当たると途中で止まる。予算（CPU・ACRTC・Fabric の働いた割合）、音の要約、画面の要約の値を返す",
             json!({"type": "object", "properties": {
                 "frames": {"type": "integer", "minimum": 0, "maximum": MAX_FRAMES, "default": 1},
                 "pad": pad,
@@ -187,7 +188,9 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
                 "idle": {"type": "array", "description": "待ちのループ。番地か [from, to)。ここの時間を CPU の空きとして数える"},
                 "stop_on_bus_error": {"type": "boolean", "default": false},
                 "run_when_halted": {"type": "boolean", "default": false},
-                "voices": {"type": "boolean", "default": false, "description": "DOC のオシレータが鳴り始め・止まったときを記録して voices で返す（8 µs ごとに停止ビットを見る。最大 2000 件）"}
+                "voices": {"type": "boolean", "default": false, "description": "DOC のオシレータが鳴り始め・止まったときを記録して voices で返す（8 µs ごとに停止ビットを見る。最大 2000 件）"},
+                "watch": {"type": "array", "description": "メモリの見張り。中身が変わったら、その命令の後で止めて watch_hit で返す。番地かラベルだけなら CPU の空間の 2 byte。{\"space\", \"addr\", \"len\"} で空間（cpu、vram、wave など）と長さ。合計 4096 byte まで", "items": {}},
+                "trace": {"type": "integer", "minimum": 0, "maximum": MAX_TRACE, "default": 0, "description": "最後に実行した命令をこの数だけ覚え、trace で返す（PC、ラベル、クロック。古い順）"}
             }}),
         ),
         (
@@ -423,6 +426,42 @@ impl Session {
         o.stop_on_bus_error = opt_bool(p, "stop_on_bus_error")?.unwrap_or(false);
         o.run_when_halted = opt_bool(p, "run_when_halted")?.unwrap_or(false);
         o.voices = opt_bool(p, "voices")?.unwrap_or(false);
+        if let Some(list) = p.get("watch").filter(|v| !v.is_null()) {
+            let list = list
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![list.clone()]);
+            let mut bytes = 0;
+            for v in &list {
+                // 番地だけなら CPU の空間の 2 byte（語）
+                let (space, at, len) = match v.as_object() {
+                    Some(m) => (
+                        m.get("space").and_then(Value::as_str).unwrap_or("cpu"),
+                        m.get("addr").ok_or("watch の addr がない")?,
+                        m.get("len").and_then(Value::as_u64).unwrap_or(2),
+                    ),
+                    None => ("cpu", v, 2),
+                };
+                let w = Watch {
+                    space: Space::parse(space)?,
+                    addr: self.addr_value(at)?,
+                    len: u32::try_from(len).map_err(|_| "watch の len が大きすぎる")?,
+                };
+                bytes += w.len;
+                if w.len == 0 || bytes > MAX_WATCH_BYTES {
+                    return Err(format!(
+                        "watch は 1 byte 以上、合計 {MAX_WATCH_BYTES} byte まで"
+                    ));
+                }
+                // 範囲が空間の中にあるかを先に確かめる
+                self.machine()?.peek(w.space, w.addr, w.len as usize)?;
+                o.watch.push(w);
+            }
+        }
+        o.trace = opt_u64(p, "trace")?.unwrap_or(0) as usize;
+        if o.trace > MAX_TRACE {
+            return Err(format!("trace は {MAX_TRACE} まで"));
+        }
         let r = self.machine()?.run(&o);
         serde_json::to_value(r).map_err(|e| e.to_string())
     }

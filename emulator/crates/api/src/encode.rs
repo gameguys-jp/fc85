@@ -100,6 +100,11 @@ pub fn unbase64(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// 大文字の 16 進（区切りなし）。
+pub fn hex(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02X}")).collect()
+}
+
 /// FNV-1a（64 bit）。画面が前と同じかをすばやく比べる値（暗号の強さはない）。
 pub fn fnv1a(data: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;

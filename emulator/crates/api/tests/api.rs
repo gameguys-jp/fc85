@@ -6,7 +6,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
 use fc85_api::protocol::{Session, handle_line};
-use fc85_api::{Config, Machine, RunOptions};
+use fc85_api::{Config, Machine, RunOptions, Space, Watch};
 use serde_json::{Value, json};
 
 fn root() -> PathBuf {
@@ -97,6 +97,64 @@ fn the_voice_log_sees_oscillators_start_and_stop_without_changing_the_run() {
     let stop = v.iter().find(|e| !e.on).unwrap();
     assert!(stop.control & 1 == 1 && stop.frame > first.frame);
     assert!(v.windows(2).all(|w| w[0].cpu_clock <= w[1].cpu_clock));
+}
+
+#[test]
+fn a_watch_stops_after_the_write_and_the_trace_shows_the_way_there() {
+    let Some(cfg) = config() else { return };
+    let mut s = session();
+    let mut m = Machine::new(cfg).unwrap();
+    // BIOS の VBlank の数（bios_frame、$1006xx の長語）は割込みが 1 足す。ラベルは Boot ROM の .lst から
+    let frame_addr = s.call("symbols", &json!({"addr": "bios_frame"}));
+    let Ok(v) = frame_addr else {
+        eprintln!("bios_frame のラベルがないので飛ばす");
+        return;
+    };
+    let addr = v.value["addr"].as_u64().unwrap() as u32;
+    m.run(&RunOptions {
+        frames: 10,
+        ..Default::default()
+    });
+    let before = m.peek(Space::Cpu, addr, 4).unwrap();
+    let r = m.run(&RunOptions {
+        frames: 5,
+        watch: vec![Watch {
+            space: Space::Cpu,
+            addr,
+            len: 4,
+        }],
+        trace: 16,
+        ..Default::default()
+    });
+    assert_eq!(r.stop, "watch");
+    assert_eq!(r.frames_run, 0);
+    let hit = r.watch_hit.unwrap();
+    assert_eq!(hit.watch_addr, addr);
+    assert_eq!(hit.old, fc85_api::encode::hex(&before));
+    let n = u32::from_str_radix(&hit.new, 16).unwrap();
+    assert_eq!(n, u32::from_str_radix(&hit.old, 16).unwrap() + 1);
+    assert_eq!(
+        fc85_api::encode::hex(&m.peek(Space::Cpu, addr, 4).unwrap()),
+        hit.new
+    );
+    // 書いた命令は記録の最後の命令
+    let trace = r.trace.unwrap();
+    assert!(!trace.is_empty() && trace.len() <= 16);
+    assert_eq!(trace.last().unwrap().pc, hit.pc);
+    assert!(trace.windows(2).all(|w| w[0].cpu_clock < w[1].cpu_clock));
+    // 続けて run すると次の VBlank でまた止まる
+    let r2 = m.run(&RunOptions {
+        frames: 5,
+        watch: vec![Watch {
+            space: Space::Cpu,
+            addr,
+            len: 4,
+        }],
+        ..Default::default()
+    });
+    assert_eq!(r2.stop, "watch");
+    assert!(r2.cpu_clock > r.cpu_clock);
+    assert!(r2.trace.is_none());
 }
 
 #[test]

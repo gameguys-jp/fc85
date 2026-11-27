@@ -16,6 +16,8 @@ pub mod mcp;
 pub mod protocol;
 pub mod symbols;
 
+use std::collections::VecDeque;
+
 use fc85_board::bend::Mode;
 use fc85_board::console::{AUDIO_RATE, BOOT_ROM_BYTES, Console, MAIN_RAM_BYTES};
 use fc85_board::fabric::{CHANNELS, Phase};
@@ -143,6 +145,18 @@ impl Space {
             }
         })
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Space::Cpu => "cpu",
+            Space::Vram => "vram",
+            Space::Wave => "wave",
+            Space::DspProg => "dsp_prog",
+            Space::Temporal => "temporal",
+            Space::CharRom => "char_rom",
+            Space::Palette => "palette",
+        }
+    }
 }
 
 /// `run` の止め方と数え方。
@@ -162,6 +176,46 @@ pub struct RunOptions {
     pub idle_pc: Vec<(u32, u32)>,
     /// DOC のオシレータが鳴り始め・止まったときを記録する（`RunReport::voices`）。
     pub voices: bool,
+    /// メモリの見張り。中身が変わったら、その命令の後で止める（`RunReport::watch_hit`）。
+    pub watch: Vec<Watch>,
+    /// 最後に実行した命令をこの数だけ覚えて返す（`RunReport::trace`。最大 `MAX_TRACE`）。
+    pub trace: usize,
+}
+
+/// メモリの見張りの 1 つ：`space` の `addr` から `len` byte。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Watch {
+    pub space: Space,
+    pub addr: u32,
+    pub len: u32,
+}
+
+/// 見張る byte の数の合計の上限と、命令の記録の上限。
+pub const MAX_WATCH_BYTES: u32 = 4096;
+pub const MAX_TRACE: usize = 4096;
+
+/// 見張りに当たったとき。
+#[derive(Clone, Debug, Serialize)]
+pub struct WatchHit {
+    pub space: &'static str,
+    /// 見張りの頭の番地と、変わった最初の byte の番地。
+    pub watch_addr: u32,
+    pub addr: u32,
+    pub label: Option<String>,
+    /// 見張りの範囲の前と後の中身（16 進）。
+    pub old: String,
+    pub new: String,
+    /// 変わったのを見つけた命令（この命令の間か、その前の基板の処理（DMA など）で変わった）。
+    pub pc: u32,
+    pub pc_label: Option<String>,
+}
+
+/// 命令の記録の 1 行。
+#[derive(Clone, Debug, Serialize)]
+pub struct TraceLine {
+    pub pc: u32,
+    pub label: Option<String>,
+    pub cpu_clock: u64,
 }
 
 /// DOC の今の様子（`Machine::doc`）。
@@ -275,7 +329,7 @@ pub struct BusErrorInfo {
 /// `run` の結果。
 #[derive(Clone, Debug, Serialize)]
 pub struct RunReport {
-    /// 止まった理由：frames（数え終えた）、breakpoint、halted（二重バスフォルト）、bus_error。
+    /// 止まった理由：frames（数え終えた）、breakpoint、halted（二重バスフォルト）、bus_error、watch。
     pub stop: &'static str,
     /// 最後まで進めたフレームの数。
     pub frames_run: u64,
@@ -300,6 +354,12 @@ pub struct RunReport {
     pub voices: Option<Vec<VoiceEvent>>,
     #[serde(skip_serializing_if = "is_zero")]
     pub voices_dropped: u64,
+    /// 見張りに当たったとき（`stop` は watch）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_hit: Option<WatchHit>,
+    /// 最後に実行した命令（古い順。`RunOptions::trace`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Vec<TraceLine>>,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -337,6 +397,11 @@ pub struct Machine {
     voice_on: u32,
     voice_log: Vec<VoiceEvent>,
     voice_dropped: u64,
+    /// 見張りの前の中身（`RunOptions::watch` と同じ順）と、当たったとき。
+    watch_old: Vec<Vec<u8>>,
+    watch_hit: Option<WatchHit>,
+    /// 命令の記録（PC、クロック）。
+    trace_buf: VecDeque<(u32, u64)>,
 }
 
 fn state_name(s: RunState) -> &'static str {
@@ -411,7 +476,49 @@ impl Machine {
             voice_on: 0,
             voice_log: Vec::new(),
             voice_dropped: 0,
+            watch_old: Vec::new(),
+            watch_hit: None,
+            trace_buf: VecDeque::new(),
         })
+    }
+
+    /// 見張りの範囲を読む。
+    fn read_watch(&self, w: &Watch) -> Vec<u8> {
+        (0..w.len)
+            .map(|i| {
+                self.read_byte(w.space, w.addr.wrapping_add(i))
+                    .unwrap_or(0xFF)
+            })
+            .collect()
+    }
+
+    /// 見張りの中身が変わったか。変わったら `watch_hit` に残し true。
+    fn check_watch(&mut self, o: &RunOptions, pc: u32) -> bool {
+        for (i, w) in o.watch.iter().enumerate() {
+            let new = self.read_watch(w);
+            if new == self.watch_old[i] {
+                continue;
+            }
+            let k = new
+                .iter()
+                .zip(&self.watch_old[i])
+                .position(|(a, b)| a != b)
+                .unwrap_or(0) as u32;
+            let addr = w.addr.wrapping_add(k);
+            let old = std::mem::replace(&mut self.watch_old[i], new.clone());
+            self.watch_hit = Some(WatchHit {
+                space: w.space.name(),
+                watch_addr: w.addr,
+                addr,
+                label: (w.space == Space::Cpu).then(|| self.label(addr)).flatten(),
+                old: encode::hex(&old),
+                new: encode::hex(&new),
+                pc,
+                pc_label: self.label(pc),
+            });
+            return true;
+        }
+        false
     }
 
     /// 鳴っている DOC のオシレータ（bit n）。子基板がなければ 0。
@@ -534,6 +641,9 @@ impl Machine {
             self.voice_log.clear();
             self.voice_dropped = 0;
         }
+        self.watch_old = o.watch.iter().map(|w| self.read_watch(w)).collect();
+        self.watch_hit = None;
+        self.trace_buf.clear();
         let mut acc = AudioAcc::default();
         let mut budget = Budget::default();
         let (mut total, mut idle, mut acrtc, mut fabric) = (0u64, 0u64, 0u64, 0u64);
@@ -605,6 +715,17 @@ impl Machine {
             tv: self.tv.status(&self.console.sys).summary(),
             voices: o.voices.then(|| std::mem::take(&mut self.voice_log)),
             voices_dropped: self.voice_dropped,
+            watch_hit: self.watch_hit.take(),
+            trace: (o.trace > 0).then(|| {
+                let buf = std::mem::take(&mut self.trace_buf);
+                buf.into_iter()
+                    .map(|(pc, cpu_clock)| TraceLine {
+                        pc,
+                        label: self.label(pc),
+                        cpu_clock,
+                    })
+                    .collect()
+            }),
         }
     }
 
@@ -632,7 +753,11 @@ impl Machine {
                 break;
             }
             let chunk = (c.cpu.clock + 64).min(limit);
-            while c.cpu.clock < chunk {
+            loop {
+                let c = &mut self.console;
+                if c.cpu.clock >= chunk {
+                    break;
+                }
                 let (pc, st) = (c.cpu.pc, c.cpu.state);
                 if st == RunState::Running && o.break_pc.contains(&pc) {
                     if self.resume_pc == Some(pc) {
@@ -644,6 +769,12 @@ impl Machine {
                     }
                 }
                 self.resume_pc = None;
+                if o.trace > 0 && st == RunState::Running {
+                    if self.trace_buf.len() >= o.trace.min(MAX_TRACE) {
+                        self.trace_buf.pop_front();
+                    }
+                    self.trace_buf.push_back((pc, c.cpu.clock));
+                }
                 let n = u64::from(c.step());
                 if st == RunState::Stopped || o.idle_pc.iter().any(|&(a, b)| (a..b).contains(&pc)) {
                     f.idle += n;
@@ -663,8 +794,12 @@ impl Machine {
                     f.total = c.cpu.clock - start;
                     return (Some("bus_error"), f);
                 }
+                if !o.watch.is_empty() && self.check_watch(o, pc) {
+                    f.total = self.console.cpu.clock - start;
+                    return (Some("watch"), f);
+                }
             }
-            c.sys.sync(chunk);
+            self.console.sys.sync(chunk);
             if o.voices {
                 self.watch_voices();
             }
