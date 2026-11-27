@@ -318,6 +318,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
+name = "fc85-api"
+version = "0.1.0"
+dependencies = [
+ "fc85-board",
+ "fc85-chips",
+ "fc85-core",
+ "flate2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fc85-board"
 version = "0.1.0"
 dependencies = [

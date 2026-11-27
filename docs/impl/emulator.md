@@ -25,6 +25,7 @@
 | chips | `fc85-chips`（`emulator/crates/chips`） | MSM5205、TMS32010、ES5503、HD63484（データの DMA のピンと表示のタイミング）、HD6850。HD68000 は段階 3 で作っている |
 | board | `fc85-board`（`emulator/crates/board`） | Data Fabric のスロットの模型、67401 の FIFO、ポートの側（Staging RAM、文字 ROM、Temporal RAM、FIFO）、ACRTC の DMA のつなぎ（port 1）、音声クロックと本体 DAC（port 2）、ADPCM のアダプタ（port 5）、DSP のアダプタ（port 3・4）、DOC 子基板と port 2 のアダプタ（P2A）、68000 から DOC のレジスタへのブリッジ（段階 3）、本体のバス（`console`。段階 3）、映像の出力段（`video`。段階 3）、音声のアナログの段（`analog`。段階 4） |
 | host | `fc85-host`（`emulator/crates/host`、実行ファイル `fc85`） | minifb の窓とキーボード、cpal の音声（DR-055）。`--boot`・`--char`・`--cart`・`--no-doc`・`--headless`・`--dump`（PPM）・`--wav`（headless の音声）・`--audio-tap`（再生と `--wav` の音声。既定の `line` はアナログの段を通した LINE OUT、`digital` は DR-054 の混ぜた値）・`--trace N`（最初の N 命令の PC と SR）・`--pad-script FILE`（headless の入力の台本。1 行に「フレーム 値」）・`--dump-at F,F..`（そのフレームの画面を `--dump` の名前に番号を足して書く）。バスエラーと DR-030 の警告は増えたときに標準エラーに出す。ベンド点（DR-065）は `--bend 命令`（`mode`、`char`、`clock`、`fifo`、`sig`、`dram`、`docbus`、`factory`。形は `bend::Bends::command`。例：`mode toggle`、`clock doc 6e6`、`clock video 0`、`fifo dac full=0`）と、フレームごとの台本 `--bend-script FILE`（1 行に「フレーム 命令」）。F2 で通常モードと Bend モードを切り替える。外部クロックのジャンパ（DR-035）の `--doc-clock`・`--dsp-clock`・`--adpcm-clock`・`--audio-clock`・`--video-clock`（Hz）は `--bend "clock …"` の短い形。画面（窓と `--dump`）は機械の外のテレビの模型（board 層の `tv`。§03 の「ベンド点と Bend モード」）を通し、テレビの状態が変わると標準エラーに出す。DOC の SIG± の配線のジャンパ（DR-011）の `--doc-sig one`（初期の片側の配線）は `--bend "sig one"` の短い形。Bend モードでは DR-030 の警告を出さない。F5 で状態を保存し、F9 で戻す。MIDI は `--midi-list`・`--midi-in N`・`--midi-out N`（midir。DR-061）。文字 ROM のソケットの線のベンドは `--char-bend A1=A2,A2=A1,D6=0,D2=Z`（`--bend "char …"` の短い形。DR-063）。既定は `firmware/` のビルド結果を読む。速さは音声のリングの残り（3 フレーム分）で合わせ、音声の装置がなければ 1/59.92 秒ごとに進める（仕様書 §12 の「仮想機の時刻を変えずにホスト側で吸収」）。仮想機は ACRTC のフレームの終わりまで進め、上限は CPU の 2 フレーム分。表示が止まっているか、映像のクロックが基板の半分より遅いか止まっていれば 1/60 秒分で返す（ホストは固まらない）。仮想機を速く回すため `cargo run --release -p fc85-host` で動かす。クロックのつまみ：F3 で DOC・映像・DSP・ADPCM・音声を選び、PageUp・PageDown（か `]`・`[`）で半音（Shift で 1/8 半音）ずつ回し、Home（か `\`）で基板の発振器に戻す（回すと Bend モード）。窓を開けたときと F3 を押したときに、キーの案内を出す。つまみの位置は半音単位でホストが覚え、周波数はそこから決める（基板の周期の丸めで誤差がたまらない。試験 `the_knob_returns_to_the_board_clock_without_drift`）。ブリッジの時間切れ（DR-079）は 2 秒ごとにまとめて出す |
+| 窓口（DR-092 (4)） | `fc85-api`（`emulator/crates/api`、実行ファイル `fc85-api`） | 外から仮想機を動かす（DR-097）。`Machine`（ROM を読む、フレームを進める、入力の台本、ブレークポイント、画面の PNG、音の WAV と要約、1 フレームの予算、メモリとレジスタ、状態の保存、ベンド点、m68kasm のリストのラベル）、JSON の手順（1 行に 1 つ。JSON-RPC 2.0 の形）、MCP サーバー（`--mcp`）。`run` はホストの `Console::run_frame` と同じ区切りで進めるので、止める条件に当たらなければホストと同じ状態になる。手順は [sdk/docs/emulator-api.md](../../sdk/docs/emulator-api.md) |
 
 ### 約束
 
@@ -43,6 +44,7 @@
 | 1 件だけ | `cargo test -p fc85-chips --test <IC の名前> <試験の名前>`（例：`--test tms32010`）。board 層は `cargo test -p fc85-board --test fabric <試験の名前>` |
 | ホストを動かす | `cargo run --release -p fc85-host -- [--boot boot.bin] [--char char.bin] [--cart cart.bin]` |
 | 基板の速さ | `cargo run --release -p fc85-board --example bench`（CPU なしで仮想機の 1 秒を進める時間） |
+| 窓口を動かす | `cargo run --release -p fc85-api -- [--mcp] [--cart cart.bin]`（標準入出力。手順は sdk/docs/emulator-api.md） |
 | 書式 | `cargo fmt --all` |
 | lint | `cargo clippy --all-targets -- -D warnings` |
 
@@ -826,3 +828,17 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 通過域 | `line_and_digital_agree_in_the_passband` | 本体 DAC の DIRECT の 375 Hz の矩形で、平らな所の LINE/デジタルが 0.990（1% 以内） | 合格 |
 | DA OUT | `da_out_shows_the_previous_capture_two_clocks_after_vck_falls` | DA OUT は V̄C̄K̄ の立下りの 2 クロック後だけ変わり、取込みから 44 クロック後に出る | 合格 |
 | 実際の音（手動） | BIOS、SAMPLE 1、SAMPLE 2 を、子基板なし・あり（両側）・あり（片側）の 9 通りで 600 フレーム、`--audio-tap line` と `digital` の両方で WAV に書く。Python（numpy、scipy）で、部品の値から組み直した模型にデジタルの WAV を通したものと LINE OUT を比べる | デジタルの WAV が変更の前とバイト単位で同じで、`verify_wav.py` の合わない標本が 0。LINE OUT に切れた標本がない。通過域の伝達が模型と合う。片側で振幅が半分になり低い音が増える | 合格（2026-11-26。デジタルの 6 個は同じ、照合は合わない 0。切れた標本 0。SAMPLE 2 の子基板なしで、LINE/デジタルの伝達の測定と模型の差は 100 Hz〜15 kHz で 0.1 dB 以内、端数の遅れ 2.6 µs を補うと 5 kHz 以下の残りは −74 dB。子基板ありの残りは 5 kHz 以下で −47 dB（上の帯域の差は、デジタルが S/H を 48 kHz の点で取る分）。片側は 100 Hz〜16 kHz で −6.0 dB、30 Hz 以下の最大が BIOS で 0.21 V、SAMPLE 2 で 0.23 V。子基板なしの最初の 2.8 ms は −1.02 V（OI-061）） |
+
+### 窓口（DR-097）
+
+コードは `emulator/crates/api`。試験は `crates/api/tests/api.rs` と各モジュールの単体試験。Boot ROM を使う試験は、ビルド結果がなければ飛ばす。
+
+| 項目 | 試験 | 判定基準 | 結果 |
+|---|---|---|---|
+| ホストとの一致 | `run_ends_in_the_same_state_as_the_host_frame_loop` | BIOS で 90 フレーム（30 フレーム目から START、40 から離す）を `run` で進めた `Console` が、ホストと同じ手順（台本の値を入れて `run_frame`）の `Console` と等しい（音の出力の溜めを除く） | 合格 |
+| ブレークポイント | `a_breakpoint_stops_before_the_instruction_and_run_resumes_past_it` | 1 命令ずつ進めて記録した 251 番目の番地で止まり、`pc` がその番地。続けて `run` すると、その番地の 1 命令目では止まらずに進む | 合格 |
+| 止まった 68000 | `a_rom_of_ff_halts_and_run_stops_at_once` | ROM が $FF のままなら二重バスフォルトで `halted` になり、0 フレームで返る。`run_when_halted` ならフレームを進める | 合格 |
+| JSON の手順 | `the_json_protocol_runs_peeks_and_restores_slots` | `poke`・`peek` の往復、保存の枠に戻すとレジスタが同じ、`screenshot` の PNG（base64）、誤りの code（-32700、-32000） | 合格 |
+| MCP | `the_mcp_server_lists_the_tools_and_returns_images` | `initialize` で相手の版を返す、通知には答えない、`tools/list` の引数が object の Schema、`screenshot` が image の内容、誤りは `isError`、知らない手順は -32601 | 合格 |
+| PNG・WAV・base64 | `encode` の単体試験 | PNG の各チャンクの CRC、zlib を戻した画素が元と同じ。WAV の大きさ。base64 は RFC 4648 の例と往復 | 合格 |
+| ラベル | `symbols` の単体試験 | m68kasm のリストの表から名前と番地、近いラベル＋差（`start.clr+$4`）、I/O の番地には付けない、`ラベル±差` の番地 | 合格 |
