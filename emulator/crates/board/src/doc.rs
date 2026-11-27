@@ -725,32 +725,65 @@ impl DocBoard {
             });
         }
         self.reply_edge = 0;
-        let mut q = 0;
-        loop {
-            let ff = (q < 4).then(|| t0 + q * PERIOD_16M);
-            let rise = self
-                .rise_pending
-                .then(|| self.fall.next().saturating_sub(self.fall.period() / 2))
-                .filter(|&r| r < end);
-            let fall = (self.fall.next() < end).then(|| self.fall.next());
-            // 同じ時刻なら E の縁を先にする（FF はセットアップの分だけ前の値を取る）
-            let e_edge = match (rise, fall) {
-                (Some(r), Some(f)) => Some(r.min(f)),
-                (r, f) => r.or(f),
-            };
-            match (ff, e_edge) {
-                (None, None) => break,
-                (Some(f), Some(e)) if e <= f => self.e_edge(e, rise == Some(e)),
-                (Some(f), _) => {
-                    let had = self.reply.is_some();
-                    self.ff_edge(f);
-                    if !had && self.reply.is_some() {
-                        self.reply_edge = q as u8;
-                    }
-                    q += 1;
-                }
-                (None, Some(e)) => self.e_edge(e, rise == Some(e)),
+        // 16 MHz の 4 つの縁と E の縁を時刻の順に。同じ時刻なら E の縁を先にする（FF はセットアップの分だけ
+        // 前の値を取る）。次の E の縁は E の縁でだけ変わる
+        let mut e = self.next_e_edge();
+        // P2A もブリッジも何も持っていなければ、16 MHz の縁で変わるのは同期化の FF だけ（E の縁でも持つものは
+        // できない）。FF が E に追いついた後の縁は何もしないので呼ばない。E の縁のないスロットは丸ごと飛ばす
+        let idle = self.idle();
+        if idle && e.0 >= end && self.calm_at(t0) {
+            return;
+        }
+        for q in 0..4 {
+            let f = t0 + q * PERIOD_16M;
+            while e.0 <= f {
+                self.e_edge(e.0, e.1);
+                e = self.next_e_edge();
             }
+            if idle && self.quiet_at(f) {
+                continue;
+            }
+            let had = self.reply.is_some();
+            self.ff_edge(f);
+            if !had && self.reply.is_some() {
+                self.reply_edge = q as u8;
+            }
+        }
+        while e.0 < end {
+            self.e_edge(e.0, e.1);
+            e = self.next_e_edge();
+        }
+    }
+
+    /// P2A もブリッジも、持っているアクセスも待たせているアクセスもない（窓を取っていなければ `owned` もない）。
+    #[inline]
+    fn idle(&self) -> bool {
+        self.stage == Stage::Idle
+            && self.queued.is_none()
+            && self.bridge.stage == Stage::Idle
+            && self.bridge.queued.is_none()
+    }
+
+    /// 16 MHz の縁 `t` で、同期化の FF がどれも値を変えず、立下りもない。
+    #[inline]
+    fn quiet_at(&self, t: Time) -> bool {
+        self.calm_at(t) || self.unseen(t)
+    }
+
+    /// `quiet_at` のうち、次の E の縁までの後の縁でも成り立つもの。
+    #[inline]
+    fn calm_at(&self, t: Time) -> bool {
+        t >= self.busy_until || self.settled(t)
+    }
+
+    /// 次の E の縁の時刻と、立上りか（立上りは、待っていれば次の立下りの半周期前）。
+    #[inline]
+    fn next_e_edge(&self) -> (Time, bool) {
+        let fall = self.fall.next();
+        if self.rise_pending {
+            (fall.saturating_sub(self.fall.period() / 2), true)
+        } else {
+            (fall, false)
         }
     }
 
@@ -944,11 +977,35 @@ impl DocBoard {
         fell
     }
 
+    /// E と同期化の 2 段が同じ値に落ち着いていて、縁 `t` のどの判定点からも変わり目が離れている。このとき
+    /// `Span::clean` の道と同じく、どの段も値を変えず（同じ値を取る）、立下りはない。`busy_until` より前の
+    /// 縁の大半（E の縁の後、2 段が追いついてから）をここで省く。
+    #[inline]
+    fn settled(&self, t: Time) -> bool {
+        let (e, q0, q1) = (self.e, self.syn[0].q(), self.syn[1].q());
+        e.level == q0.level
+            && q0.level == q1.level
+            && e.at.max(q0.at).max(q1.at) + self.span.hi + 1 < t
+    }
+
+    /// E が変わり始めたばかりで、縁 `t` のどの判定点も前の値を見る（`Span::clean` が前の値を返す）。2 段は
+    /// その前の値に落ち着いている。このときも、どの段も値を変えず、立下りはない。E の縁と同じ時刻の
+    /// 16 MHz の縁がこれにあたる。時刻が進むと成り立たなくなる（後の縁には言えない）。
+    #[inline]
+    fn unseen(&self, t: Time) -> bool {
+        let (e, q0, q1) = (self.e, self.syn[0].q(), self.syn[1].q());
+        let sp = self.span;
+        e.prev == q0.level
+            && q0.level == q1.level
+            && e.from + sp.lo > t + 1
+            && q0.at.max(q1.at) + sp.hi + 1 < t
+    }
+
     /// 16 MHz の立上り：E の同期化と、P2A・ブリッジの段。
     fn ff_edge(&mut self, t: Time) {
         // E が変わってから `SETTLE` の後は、どの段も E と同じ値で、立下りはない。その前も、どの線の変わり目も
         // 判定点から離れていれば、どの登録も同じ値を取る。どちらでもなければ FF を 1 つずつ見る
-        let fell = if t >= self.busy_until {
+        let fell = if self.quiet_at(t) {
             [false; 3]
         } else {
             let sp = self.span;

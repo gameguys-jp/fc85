@@ -189,7 +189,7 @@ m.call("regs");                                  // JSON の手順
 
 - 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 - WebAssembly にはファイルがないので、`fc85_call` の手順のうち `path` を使うもの（`load`、`screenshot` の `path` など）は誤りになる。ROM はバイト列で渡す。
-- 速さ [V]：開発機の Chrome で 1 フレーム約 22 ms（ネイティブの release は約 12 ms）で、実時間（16.7 ms）に届かない（OI-103）。試しの頁は、遅い機械では 1 回に 2 フレームまで進め、実時間より遅く動く。
+- 速さ [V]：開発機の Chrome で 1 フレーム約 15〜20 ms（ネイティブの release は約 10 ms。DR-105）。Boot ROM と SAMPLE 1 は実時間（16.7 ms）に入るが、描画や DSP の重い ROM（SAMPLE 6、SAMPLE 2）はまだ届かない（OI-103）。試しの頁は、遅い機械では 1 回に 2 フレームまで進め、実時間より遅く動く。
 - 試しの頁は `build/` の Boot ROM・文字 ROM（`build.py` が firmware の組立ての結果を写す）を読み、なければ欄で選ぶ。釦はホストと同じ（矢印、Z・X・C、Enter）。`py -m http.server` でも配れるが、Windows では .js を text/plain で返すことがあり、ブラウザがモジュールを読まないので `serve.py` を使う。
 
 ### libretro のコア

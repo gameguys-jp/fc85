@@ -258,6 +258,28 @@ impl DspPort {
 
     /// `end` より前の CLKOUT を進める。
     pub fn run(&mut self, end: Time, input: &mut Fifo, output: &mut Fifo, audio: &AudioClock) {
+        // RESET の間（RS が Low になり PRGBUS が 1 になった後）は、DSP は何もせず、ピンも変わらない。
+        // CLKOUT ごとに進めたのと同じ状態になるよう、まとめて進める
+        if self.ctrl.reset && self.rs_low && self.reset_cycles >= PRGBUS_DELAY {
+            let next = self.clk.next();
+            if next >= end {
+                return;
+            }
+            let p = self.clk.period();
+            let k = (end - 1 - next) / p + 1;
+            let last = next + (k - 1) * p;
+            self.cycles += k;
+            self.dsp.set_int(!self.io.command);
+            if let Some(b) = audio.beat_at()
+                && b <= last
+            {
+                self.tick_seen = Some(b);
+            }
+            self.io.tick = false;
+            self.bio_ff = self.bio_input(input, output);
+            self.clk.set_next(next + k * p);
+            return;
+        }
         while let Some(t) = self.clk.take_before(end) {
             self.cycles += 1;
             self.pins();
@@ -271,12 +293,7 @@ impl DspPort {
             if self.ctrl.reset {
                 self.io.tick = false;
             }
-            self.bio_ff = match self.ctrl.bio {
-                BioSel::InputReady => !input.is_empty(),
-                BioSel::OutputSpace => output.ir(),
-                BioSel::Mailbox => self.io.command,
-                BioSel::AudioTick => self.io.tick,
-            };
+            self.bio_ff = self.bio_input(input, output);
             let mut bus = Bus {
                 prog: &mut self.prog,
                 time: &mut self.prog_time,
@@ -288,6 +305,17 @@ impl DspPort {
                 bio_low: self.bio_ff,
             };
             self.dsp.tick(&mut bus);
+        }
+    }
+
+    /// BIO の FF に取る条件（CTRL.BIOSEL）。
+    #[inline]
+    fn bio_input(&self, input: &Fifo, output: &Fifo) -> bool {
+        match self.ctrl.bio {
+            BioSel::InputReady => !input.is_empty(),
+            BioSel::OutputSpace => output.ir(),
+            BioSel::Mailbox => self.io.command,
+            BioSel::AudioTick => self.io.tick,
         }
     }
 

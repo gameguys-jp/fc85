@@ -917,8 +917,44 @@ impl Fabric {
 
     // ------------------------------------------------------------------ スロット
 
+    /// 何もしていない：どのチャネルも止まっていて、要素もアクセスも CPU の要求も残っていない。このスロットの
+    /// 判断は何も決めず（候補も変わらない）、残るのはポートの側とトリガの同期化だけ。
+    #[inline]
+    fn quiet(&self) -> bool {
+        self.host_effects.is_empty()
+            && self.abort.is_none()
+            && self.active.is_none()
+            && self.scheduled.is_none()
+            && self.elem.is_none()
+            && self.tail.is_none()
+            && self.hreq.is_none()
+            && self.host_rd.is_none()
+            && self.ch.iter().all(|c| c.phase == Phase::Idle)
+    }
+
     /// 1 スロット進める。
     pub fn step_slot<P: Ports + ?Sized>(&mut self, ports: &mut P) -> SlotRecord {
+        if self.quiet() {
+            // 下の手順で、何もしていないときに残るもの（同じ状態になる）
+            let s = self.slot.is_multiple_of(2);
+            ports.run_slot(None);
+            self.prev_flag = false;
+            let trig = self.trig_in | ports.trigger_levels();
+            for c in &mut self.ch {
+                c.sync_trigger(trig);
+            }
+            let rec = SlotRecord {
+                slot: self.slot,
+                s,
+                candidate: self.dbch,
+                aop: Aop::None,
+                decision: Decision::None,
+                access: None,
+                access_done: false,
+            };
+            self.slot += 1;
+            return rec;
+        }
         if !self.host_effects.is_empty() {
             self.host_effects(ports);
         }

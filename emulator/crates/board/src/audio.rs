@@ -83,6 +83,19 @@ impl AudioClock {
 
     /// `end` より前の入力クロックの立上りを進め、拍の数を返す。
     pub fn run(&mut self, end: Time) -> u32 {
+        // 拍の来ない区間はまとめて進める（立上りごとに進めたのと同じ状態になる）
+        let next = self.clk.next();
+        if next >= end {
+            return 0;
+        }
+        let p = self.clk.period();
+        let k = (end - 1 - next) / p + 1;
+        if u64::from(self.count) + k < u64::from(self.divisor()) {
+            self.count += k as u32;
+            self.high = self.high.saturating_sub(k.min(255) as u8);
+            self.clk.set_next(next + k * p);
+            return 0;
+        }
         let mut beats = 0;
         while let Some(t) = self.clk.take_before(end) {
             self.high = self.high.saturating_sub(1);

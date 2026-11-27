@@ -359,19 +359,24 @@ impl AcrtcBridge {
         if self.active {
             self.dack_slots += 1;
         }
-        let mut q = 0;
-        loop {
-            let ff = (q < 4).then(|| t0 + q * PERIOD_16M);
-            let edge = (self.clk.next() < end).then(|| self.clk.next());
-            match (ff, edge) {
-                (None, None) => break,
-                (Some(f), Some(e)) if e < f => self.acrtc_edge(),
-                (Some(f), _) => {
-                    self.ff_edge(f, q);
-                    q += 1;
-                }
-                (None, Some(_)) => self.acrtc_edge(),
+        // 16 MHz の 4 つの縁と 2CLK の立上りを時刻の順に。同じ時刻なら 16 MHz の縁を先にする。止まった 2CLK の
+        // 次の立上りは `Time::MAX`
+        for q in 0..4 {
+            let f = t0 + q * PERIOD_16M;
+            while self.clk.next() < f {
+                self.acrtc_edge();
             }
+            if !self.active && f >= self.busy_until {
+                // `ff_edge` の落ち着いた道で、P1A が何もしていないとき
+                if q == 2 {
+                    self.rdy1 = self.dreq.level;
+                }
+                continue;
+            }
+            self.ff_edge(f, q);
+        }
+        while self.clk.next() < end {
+            self.acrtc_edge();
         }
         self.now = end;
     }

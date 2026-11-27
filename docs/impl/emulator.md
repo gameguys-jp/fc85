@@ -45,6 +45,8 @@
 | 1 件だけ | `cargo test -p fc85-chips --test <IC の名前> <試験の名前>`（例：`--test tms32010`）。board 層は `cargo test -p fc85-board --test fabric <試験の名前>` |
 | ホストを動かす | `cargo run --release -p fc85-host -- [--boot boot.bin] [--char char.bin] [--cart cart.bin]` |
 | 基板の速さ | `cargo run --release -p fc85-board --example bench`（CPU なしで仮想機の 1 秒を進める時間） |
+| 振る舞いの指紋 | リポジトリの根で `cargo run --release --manifest-path emulator/Cargo.toml -p fc85-api --example fingerprint -- [フレーム数] [回数]`（10 通りの画面・音・状態のハッシュと 1 フレームの時間。速さのための変更は、前後で全体のハッシュが同じであること。ハッシュは ROM とサンプルの組立てで変わるので、同じ組立てで比べる。DR-105） |
+| WebAssembly の速さ | リポジトリの根で `node emulator/embed/speed.mjs <fc85emu.wasm> <boot.bin> <char.bin> [cart.bin か -] [フレーム数]`（Node。DR-105） |
 | 窓口を動かす | `cargo run --release -p fc85-api -- [--mcp] [--cart cart.bin]`（標準入出力。手順は sdk/docs/emulator-api.md） |
 | Web の GUI | `cargo run --release -p fc85-api -- --http [--cart cart.bin]` → http://127.0.0.1:8085/（DR-101） |
 | 組込み | `py emulator/embed/build.py [--native] [--libretro]`（WebAssembly・C の ABI・libretro のコア。DR-104）、`py emulator/embed/serve.py`（WebAssembly の試しの頁）、試験 `py -m unittest discover -s emulator/embed` |
@@ -788,7 +790,7 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 30 分の連続（仕様書 §12 の段階 4 の条件の一つ） | 手動：ホストの `--headless --cart sdk/samples/game/build/game.bin --frames 107856 --pad-script <台本>`。台本は乱数（種 1985）で方向とボタンを 5〜40 フレームごとに替え、600 フレームごとに START | 仮想機の 30 分（107,856 フレーム）でバスエラー・CPU の停止・DR-030 の警告がない。画面と音が最後まで出る | 合格（2026-11-26。CPU 14,399,356,728 クロック、開発機で 1,159 秒。最後の画面はゲームの途中で最高点 60。音は飽和なし、ピーク ±2,692） |
 | DSP の道（SAMPLE 2） | 手動：ホストの `--headless [--no-doc] --cart sdk/samples/dsp/build/dsp.bin --frames 600 --pad-script sdk/samples/dsp/pad-demo.txt --wav <WAV> --audio-tap digital` のあと `py sdk/samples/dsp/verify_wav.py <WAV> [--doc]`（照合は DR-054 のデジタルの出力。既定の LINE OUT では合わない） | DSP のプログラムを bridge で読み込み、Staging RAM→port 3→DSP→port 4→本体 DAC（子基板なし）か波形 RAM の輪→DOC（あり）。WAV の全標本が、DSP のプログラムの Python のモデル（`model.py`）と一致する。画面の COUNT・SUM もモデルと一致する | 合格（2026-11-26。子基板なし 158,187 標本、あり 474,138 標本で合わない標本 0。バスエラー 0。DOC の側の照合はエミュレータの混ぜ方に合わせた計算 [V]） |
 | 保存と復元 | `a_snapshot_of_the_running_bios_resumes_identically` | BIOS が動いている途中で Console を JSON に保存して戻し、同じ入力で 10 フレーム進めると、CPU・基板・音声の標本（デジタルと LINE OUT）が元とすべて同じ | 合格 |
-| 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.47 秒、CPU と DOC 子基板ありで約 0.69 秒（開発機で 3 回。2026-11-26 に LINE OUT と HD63484 の表示・描画のバスの取り合いを取り込んだ後。取り込む前は 0.39 秒と 0.61 秒。LINE OUT だけでは ±2% 以内、バスの取り合いだけでは最大 +12%）。DR-091（答えの縁と預かり）は 2〜4% 遅い：前後を交互に 3 回ずつ動かした中央値で、CPU なし・子基板なしが 0.405→0.419 秒、CPU と子基板ありが 0.681→0.693 秒、ホストの 600 フレーム（画面なし）が SAMPLE 6 で 8.46→8.71 秒（2026-11-27） |
+| 速さ | `examples/bench.rs`（release） | 仮想機の 1 秒を実時間より短く進める（DR-002 の目標） | CPU なしで約 0.47 秒、CPU と DOC 子基板ありで約 0.69 秒（開発機で 3 回。2026-11-26 に LINE OUT と HD63484 の表示・描画のバスの取り合いを取り込んだ後。取り込む前は 0.39 秒と 0.61 秒。LINE OUT だけでは ±2% 以内、バスの取り合いだけでは最大 +12%）。DR-091（答えの縁と預かり）は 2〜4% 遅い：前後を交互に 3 回ずつ動かした中央値で、CPU なし・子基板なしが 0.405→0.419 秒、CPU と子基板ありが 0.681→0.693 秒、ホストの 600 フレーム（画面なし）が SAMPLE 6 で 8.46→8.71 秒（2026-11-27）。DR-105（振る舞いを変えない近道と release の LTO）の後は、CPU なし・子基板なしが 0.243 秒、CPU なし・子基板ありが 0.359 秒、CPU と子基板ありが 0.465 秒（2026-11-27） |
 
 ### 映像のクロック（ベンド点）
 
@@ -865,5 +867,6 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | 見出し | `capi` の `header_declares_every_export`、`test_embed.py` の `test_header_compiles_as_c99` | `fc85emu.h` の関数と Rust が出す関数が同じ名前の組、定数と PAD のビットが同じ。見出しが GCC の `-std=c99 -pedantic -Wall -Wextra -Werror` で通る | 合格 |
 | C の ABI と WebAssembly の一致 | `test_embed.py` の `test_native_and_webassembly_agree` | 共有ライブラリを ctypes で、WebAssembly を Node で、同じ手順で動かし、画面・音・状態の大きさ・状態を戻した後の結果・PC がビットまで同じ | 合格 |
 | libretro のコア | `libretro` の `a_frontend_session`、`test_embed.py` の `test_libretro_core_exports_the_api` | 呼び返しの代わりで libretro の API の順に呼ぶ：選択肢 3 つ、入力の説明 16、320×240・pitch 1280、約 801 組／フレーム、状態の往復で同じ画面と PC、Main RAM の番地が状態を戻しても・リセットしても同じ、範囲を変えると形を知らせて 256×192、横の `.bends` で Bend モード、Boot ROM がなければ失敗して画面に知らせる。共有ライブラリが libretro の関数 25 個を出す | 合格 |
-| 速さ（手動） | release で SAMPLE 1 を 600 フレーム、Chrome で WebAssembly を 120 フレーム | ネイティブは 1 フレーム約 12 ms（実時間の約 1.4 倍）。WebAssembly は約 22 ms で、実時間（16.7 ms）に届かない（OI-103）。LTO と codegen-units=1 では約 3% しか変わらない。状態は約 135 KB（JSON は約 1.3 MB）、保存に約 5 ms、上限の見積りは約 1 MB | 記録（2026-11-27） |
+| 速さ（手動） | release で SAMPLE 1 を 600 フレーム、Chrome で WebAssembly を 120 フレーム | ネイティブは 1 フレーム約 12 ms（実時間の約 1.4 倍）。WebAssembly は約 22 ms で、実時間（16.7 ms）に届かない（OI-103）。LTO と codegen-units=1 では約 3% しか変わらない。DR-105 の後：ネイティブは指紋の 10 通りの平均で約 10 ms。WebAssembly は Chrome（頁の中で 120 フレーム、毎フレーム音と画面を取り出す）で BIOS 約 16.2 ms、SAMPLE 1 約 15.2 ms、SAMPLE 6 約 18.3 ms、SAMPLE 2 約 19.8 ms（同じ測り方で変更前は 20.0・19.3・22.3・22.0 ms）。状態は約 135 KB（JSON は約 1.3 MB）、保存に約 5 ms、上限の見積りは約 1 MB | 記録（2026-11-27） |
+| 振る舞いの指紋（手動） | `examples/fingerprint.rs`（`fc85-api`、release、240 フレームを 3 回） | 速さのための変更の前後で、10 通りの画面・音・状態のハッシュが同じ。同じ入力で 3 回とも同じ | 合格（DR-105 の前後で全体 `1f5d10a1cd84dfd6`。2026-11-27） |
 | 試しの頁（手動） | `serve.py` で配った `index.html` を Chrome で開き、始める | Boot ROM の画面が出て、フレームが進む | 合格（自動操作の窓では rAF が毎秒約 1.4 回に絞られ、速さは見られなかった） |
