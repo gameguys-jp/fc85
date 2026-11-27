@@ -753,23 +753,22 @@ def check_hdec(pals):
 
 
 def check_hack(pals):
-    """Fabric の窓の DTACK と、DOC の窓のブリッジ（doc.rs の ff_edge の 68000 の側：S4 で /DCS を取り込み、E の
-    立下りで窓を取り、次の立下りで DTACK。サイクルが途中で終われば取り消すか、取った窓の値を捨てる）。"""
+    """Fabric の窓の同期化と DTACK（DR-098）、DOC の窓のブリッジ（doc.rs の ff_edge の 68000 の側：S4 で /DCS を
+    取り込み、E の立下りで窓を取り、次の立下りで DTACK。サイクルが途中で終われば取り消すか、取った窓の値を捨てる）。
+    Y は毎縁 VLD ∨ AREQ。q1 の縁（SCLK）だけで、CAP（Y ∧ ¬DTK）、HREQ（Y ∧ AREQ ∧ ¬HREQ ∧ ¬DTK）、DTK の立上り
+    （Y ∧ VLD、または許可のスロットの HREQ ∧ AREQ）を決める。DTK は、Fabric の窓ではストローブの間（VLD ∨ AREQ）
+    保ち、DOC の窓では BDT と同じ。"""
     p = pals['HACK']
-    names = ['AREQ', 'VLD', 'HG', 'MCLK', 'SYN1', 'SYN2', 'DCS', 'AK', 'BW', 'BC', 'BDT']
+    names = ['AREQ', 'VLD', 'SCLK', 'SYN1', 'SYN2', 'DCS', 'Y', 'CAP', 'HREQ', 'DTK', 'BW', 'BC', 'BDT']
     for v in range(1 << len(names)):
         x = bits_env(names, v)
-        if x['BW'] + x['BC'] + x['BDT'] > 1:
+        # 窓は 1 つだけ（HDEC0 の VLD・AREQ と、A 基板の /DCS）。ブリッジの状態も 1 つだけ
+        if x['AREQ'] + x['VLD'] + x['DCS'] > 1 or x['BW'] + x['BC'] + x['BDT'] > 1:
             continue
-        env = dict(AREQN=not x['AREQ'], VLDN=not x['VLD'], AOP2N=True, AOP1N=True, AOP0N=not x['HG'],
-                   MCLK=x['MCLK'], SYN1=x['SYN1'], SYN2N=not x['SYN2'], DCSN=not x['DCS'], AKN=not x['AK'],
+        env = dict(AREQN=not x['AREQ'], VLDN=not x['VLD'], SCLK=x['SCLK'], SYN1=x['SYN1'], SYN2N=not x['SYN2'],
+                   DCSN=not x['DCS'], YN=not x['Y'], CAPN=not x['CAP'], HREQN=not x['HREQ'], DTKN=not x['DTK'],
                    BWN=not x['BW'], BCN=not x['BC'], BDTN=not x['BDT'])
-        c, _, nxt = p.eval(env)
-        ak = x['AREQ'] and (x['HG'] and x['MCLK'] or x['AK'])
-        assert (not nxt['AKN']) == ak, x
-        # 許可のスロット（AOP＝001）の頭から下げる。次の SCLK の縁で ELG が見る値は AREQ ∧ ¬AK と同じ
-        assert c['HREQ'] == (x['AREQ'] and not x['AK'] and not x['HG']), x
-        assert (not c['DTKN']) == (x['VLD'] or x['AK'] and x['AREQ'] or x['BDT']), x
+        _, _, nxt = p.eval(env)
         fell = x['SYN2'] and not x['SYN1']
         st = 'C' if x['BC'] else 'W' if x['BW'] else 'D' if x['BDT'] else 'I'
         if st == 'C':
@@ -780,7 +779,140 @@ def check_hack(pals):
             nst = 'D' if x['DCS'] else 'I'
         else:
             nst = ('C' if fell else 'W') if x['DCS'] else 'I'
-        assert (not nxt['BWN'], not nxt['BCN'], not nxt['BDTN']) == (nst == 'W', nst == 'C', nst == 'D'), x
+        q1, y = x['SCLK'], x['Y']
+        want = dict(
+            Y=x['VLD'] or x['AREQ'],
+            CAP=(y and not x['DTK']) if q1 else x['CAP'],
+            HREQ=(y and x['AREQ'] and not x['HREQ'] and not x['DTK']) if q1 else x['HREQ'],
+            DTK=(q1 and (y and x['VLD'] or x['HREQ'] and x['AREQ'])
+                 or x['DTK'] and not x['BDT'] and (x['VLD'] or x['AREQ']) or nst == 'D'),
+            BW=nst == 'W', BC=nst == 'C', BDT=nst == 'D')
+        got = {k: not nxt[k + 'N'] for k in want}
+        assert got == want, (x, got, want)
+
+
+def check_req(pals):
+    """REQ0・REQ1：CAP の間の LCLK で、CTRL（bit 0 START、bit 1 STOP）と STATUS の W1C（bit 1 DONE、3 ERROR、
+    4 MISS）の書込みを、1 スロットの要求にする。STOP が先、START は止まっているチャネルだけ（DR-046 (6)）。"""
+    p = pals['REQ']
+    names = ['CAP', 'CTRL', 'STAT', 'D0', 'D1', 'D3', 'D4', 'BUSY']
+    for v in range(1 << len(names)):
+        x = bits_env(names, v)
+        if x['CTRL'] and x['STAT']:
+            continue
+        env = dict(CAPN=not x['CAP'], CTRLN=not x['CTRL'], STATN=not x['STAT'], D0=x['D0'], D1=x['D1'],
+                   D3=x['D3'], D4=x['D4'], BUSY=x['BUSY'])
+        _, _, nxt = p.eval(env)
+        c, s = x['CAP'] and x['CTRL'], x['CAP'] and x['STAT']
+        want = dict(STRQ=c and x['D0'] and not x['D1'] and not x['BUSY'], STPQ=c and x['D1'], WDQ=s and x['D1'],
+                    WEQ=s and x['D3'], WMQ=s and x['D4'])
+        assert {k: nxt[k] for k in want} == want, x
+
+
+# 68000 のバスサイクルと HACK・REQ（DR-098）。時刻は 16 MHz の縁の番号 E（スロット k の qj の縁が 4k＋j）。68000 の
+# クロックは 16 MHz の 2 分周で、立上りが q0・q2 の縁、立下りが q1・q3 の縁の t_div（15 ns 以下）後。
+# - ストローブ（読出しは S2 の /UDS・/LDS、書込みは S4）は、立上りの縁 t_s の後 t_div＋tCHSL（60 以下）で出る。
+#   HDEC0（25）を通って HACK の Y（tSU 25）に入るのは、t_s＋1 の縁（速ければ）か t_s＋2 の縁（必ず。15＋60＋25＋25
+#   ＝125）。t_s の縁には入らない。
+# - DTACK（HACK の DTK）を 68000 が認識するのは、DTK が立った縁の後の最初の立下り（S4 の終わり E0＋5 より前なら
+#   S4 の終わり）。認識の立下り F の後、S7 は F＋2、サイクルの終わりは F＋3。ストローブは S7 の後 t_div＋tCLSH
+#   （70 以下）で戻り、Y に戻りが見えるのは F＋3 か F＋4 の縁（速ければ）、F＋5 の縁（必ず。15＋70＋25＋25 ＜ 187.5）。
+# - SEQ は SCLK（q0 の縁）で HREQ を見て、見ればそのスロットの AOP を 001（CPU の A ファイルの操作）にする（ELG）。
+# - REQ は LCLK（q2 の縁の 15 ns 後。CAP は q1 の縁でしか変わらない）で、CAP と、ストローブの間の解読を取り込む。
+CPU_KINDS = {'R': (False, False), 'C': (True, False), 'S': (True, False), 'AR': (False, True), 'AW': (True, True)}
+
+
+def cpu_cycles(pals, kinds, e0, gaps, choices):
+    """バスサイクルの列を 16 MHz の縁ごとに進める。kinds：CPU_KINDS の名前（'R' は STATUS の読出し、'C' は CTRL の
+    STOP、'S' は STATUS の DONE の W1C）。e0：最初の S0 の縁。gaps：サイクルの間の空きのクロック数。choices：
+    サイクルごとの（ストローブが t_s＋1 の縁で見えるか、戻りが見える縁 F＋3〜F＋5）。返す値：サイクルごとの
+    記録と、REQ の要求の出たスロットの列。"""
+    hack, req = pals['HACK'], pals['REQ']
+    st = {n: True for n in ('YN', 'CAPN', 'HREQN', 'DTKN', 'BWN', 'BCN', 'BDTN')}
+    cyc, pulses = [], []
+    next_e0, end = e0, None
+    e = e0 - 1
+    while end is None or e < end:
+        e += 1
+        assert e < e0 + 200, (kinds, 'DTACK が来ない')
+        if e == next_e0:
+            k = len(cyc)
+            w, af = CPU_KINDS[kinds[k]]
+            early, back = choices[k]
+            cyc.append(dict(kind=kinds[k], e0=e, w=w, af=af, ts=e + (4 if w else 2), early=early, back=back,
+                            f=None, caps=[], dtks=[], grants=[]))
+        cur = cyc[-1]
+        # 68000 の立下りで DTACK を見る（DTK はこの縁の前の値）。認識したら、次の S0 か終わりが決まる
+        if cur['f'] is None and e % 2 == 1 and e >= cur['e0'] + 5 and cur['dtks'] and not st['DTKN']:
+            cur['f'] = e
+            if len(cyc) < len(kinds):
+                next_e0 = e + 3 + 2 * gaps[len(cyc) - 1]
+            else:
+                end = e + 12
+
+        def strobe(c):
+            """この縁で HACK の Y に見えるストローブ。"""
+            if e <= c['ts']:
+                return False
+            if e == c['ts'] + 1:
+                return c['early']
+            return c['f'] is None or e < c['f'] + c['back']
+
+        act = [c for c in cyc if strobe(c)]
+        assert len(act) <= 1, (kinds, e)
+        a = act[0] if act else None
+        if e % 4 == 0 and not st['HREQN']:
+            # SEQ は SCLK で HREQ を見て、このスロットを許可する
+            assert a is not None and a['af'], (kinds, e, 'HREQ')
+            a['grants'].append(e // 4)
+        if e % 4 == 2:
+            ctrl, stat = a is not None and a['kind'] == 'C', a is not None and a['kind'] == 'S'
+            _, _, rq = req.eval(dict(CAPN=st['CAPN'], CTRLN=not ctrl, STATN=not stat, D0=False, D1=True, D3=False,
+                                     D4=False, BUSY=False))
+            pulses += [(n, e // 4) for n, v in rq.items() if v]
+        old = st
+        _, _, st = hack.eval(dict(st, AREQN=not (a is not None and a['af']), VLDN=not (a is not None and not a['af']),
+                                  SCLK=e % 4 == 1, SYN1=False, SYN2N=True, DCSN=True))
+        if old['CAPN'] and not st['CAPN']:
+            assert a is not None, (kinds, e, 'CAP')
+            a['caps'].append(e)
+        if old['DTKN'] and not st['DTKN']:
+            assert a is not None, (kinds, e, 'DTK')
+            a['dtks'].append(e)
+    return cyc, pulses
+
+
+def check_cpu_cycles(pals):
+    """2 回続くバスサイクルのすべての種類、最初の S0 の位相（q0・q2）、間の空き（0・1 クロック）、ストローブの
+    見え方の選び方のすべてで、取込みのスロット c、許可のスロット g、待ち、REQ の要求の出るスロットが、S0 の
+    時刻だけで決まること（仕様書 §06 の規則）。S0 のクロックを at（偶数なら q0）、スロットを n ＝ at÷2 とすると：
+    c ＝ (at＋3＋書込み)÷2、A ファイルでは g ＝ c＋1。DTACK は q3(c) か q3(g) で認識され、待ちは 2r−at−1。"""
+    n = 0
+    for k0 in CPU_KINDS:
+        for k1 in CPU_KINDS:
+            for e0 in (8, 10):
+                for gap in (0, 1):
+                    for ch in range(36):
+                        choices = [((ch >> 0) & 1 == 1, 3 + (ch >> 1) % 3), ((ch // 6) & 1 == 1, 3 + (ch // 12) % 3)]
+                        cyc, pulses = cpu_cycles(pals, [k0, k1], e0, [gap], choices)
+                        want_pulses = []
+                        for c in cyc:
+                            at = c['e0'] // 2
+                            cap = (at + 3 + c['w']) // 2
+                            r = cap + 1 if c['af'] else cap
+                            what = (k0, k1, e0, gap, choices, c)
+                            assert c['caps'][:1] == [4 * cap + 1], what
+                            assert c['dtks'] == [4 * r + 1], what
+                            assert c['grants'] == ([r] if c['af'] else []), what
+                            assert c['f'] == 4 * r + 3, what
+                            assert (c['f'] - c['e0'] - 5) // 2 == 2 * r - at - 1, what
+                            if c['kind'] == 'C':
+                                want_pulses.append(('STPQ', cap))
+                            elif c['kind'] == 'S':
+                                want_pulses.append(('WDQ', cap))
+                        assert pulses == want_pulses, (k0, k1, e0, gap, choices, pulses)
+                        n += 1
+    return n
 
 
 PRST_PORTS = (2, 3, 4, 5, 6, 7, 10)
@@ -815,6 +947,8 @@ def check_all(pals=None):
     check_p2a(pals)
     check_hdec(pals)
     check_hack(pals)
+    check_req(pals)
+    check_cpu_cycles(pals)
     check_prst(pals)
     return n
 

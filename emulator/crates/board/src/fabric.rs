@@ -15,9 +15,19 @@
 //! 4. 4 分の 3：A ファイルの操作。PS・PD は歩進の前の番地を取り込み、次のスロットのアクセスに使う。
 //! 5. 終わり：要素の完了と DONE、トリガの同期化、延びたアクセスの時間切れ。
 //!
-//! CPU の側は `host_read`・`host_write`（窓 0x250000〜0x250FFF の中のオフセット、16 bit だけ）。
-//! A ファイルの語（SRC_ADDR・DST_ADDR・COUNT）へのアクセスは、次のスロットの頭で許可され、
-//! それまで `HostReply::Wait` を返す。結果は、許可のスロットの後に `host_poll` で受け取る。
+//! CPU の側（窓 0x250000〜0x250FFF の中のオフセット、16 bit だけ）は `host_begin` と `host_finish`。
+//! 68000 のバスサイクルの S0 のスロットと位相から、HACK・REQ の回路が決める規則（仕様書 §06、fabric.md
+//! §07、DR-098）のスロットで効かせ、待ちの数を返す。S0 のクロックを at、スロットを n ＝ at÷2 とすると、
+//! 取込みのスロットは c ＝ (at＋3＋書込み)÷2：
+//! - CTRL と STATUS の W1C は、c＋1 のスロットの頭の判断と状態の登録から効く（START を受けるかは、c の頭で
+//!   止まっていたか）。ほかの書込み（設定のレジスタ、PORT_RESET、AUDIO_N）は、ストローブの終わりの後の
+//!   c＋2 のスロットの頭から効く。
+//! - 読出しは、c のスロットの後の値（STATUS、MODULES）。
+//! - A ファイルの語（SRC_ADDR・DST_ADDR・COUNT）は、g ＝ c＋1 のスロットで許可される。
+//! - DTACK は q3(c) か q3(g) で認識され、待ちは 2r−at−1（r は c か g）。
+//!
+//! `host_read`・`host_write`・`host_poll` は、スロットの境目にすぐ効かせる道具（試験用。A ファイルは次の
+//! スロットの頭で許可する）。
 //!
 //! 変換部（ROT0–3、MSK0–1、ANX0–3）、準備の信号（RDY）、ポートの属性（ATR）は、PAL に焼く式と
 //! PROM の中身から生成した `fabric_pal` を通す（DR-084）。
@@ -305,6 +315,44 @@ pub enum HostReply {
     BusError,
 }
 
+/// 68000 のバスサイクルの始まりの答え（`host_begin`。DR-098）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostStart {
+    /// DTACK を返さない（バスエラー）。
+    BusError,
+    /// 書込み：答えと待ちの数。効果は規則のスロットで効く（答えのために基板を進めなくてよい）。
+    Done(HostReply, u32),
+    /// 読出しと A ファイル：基板を進め、`host_finish` で答えと待ちの数を受け取る。
+    Pending,
+}
+
+/// CPU の書込みのうち、後のスロットで効くもの（DR-098）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum HostEffect {
+    /// CTRL（REQ が LCLK(c) で取り込む）。START は、`check` のスロットの頭で止まっていたときだけ（REQ の BUSY）。
+    Ctrl { ch: u8, value: u16, check: u64 },
+    /// STATUS の W1C（REQ）。
+    W1c { ch: u8, value: u16 },
+    /// ストローブの終わりで変わるもの（設定のレジスタ、PORT_RESET、AUDIO_N）。
+    Strobe { offset: u16, value: u16 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct HostPending {
+    /// このスロットの頭で効く。
+    due: u64,
+    effect: HostEffect,
+}
+
+/// A ファイルでない読出し：取込みのスロット c の後の値を、68000 が S6 の終わりに取り込む。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct HostRead {
+    offset: u16,
+    capture: u64,
+    waits: u32,
+    value: Option<u16>,
+}
+
 /// チャネルの設定のレジスタ（書込み専用）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelRegs {
@@ -491,6 +539,12 @@ struct HostReq {
     reg: u8,
     write: Option<u16>,
     result: Option<HostReply>,
+    /// 許可のスロット（これより前のスロットでは許可しない）。
+    #[serde(default)]
+    grant: u64,
+    /// 待ちの数（`host_begin` のとき）。
+    #[serde(default)]
+    waits: u32,
 }
 
 /// Data Fabric。
@@ -515,6 +569,12 @@ pub struct Fabric {
     hreq: Option<HostReq>,
     trig_in: u8,
     abort: Option<u8>,
+    /// CPU の書込みのうち、後のスロットで効くもの（DR-098）。
+    #[serde(default)]
+    host_effects: Vec<HostPending>,
+    /// 値を待つ CPU の読出し（DR-098）。
+    #[serde(default)]
+    host_rd: Option<HostRead>,
 }
 
 impl Default for Fabric {
@@ -542,6 +602,8 @@ impl Fabric {
             hreq: None,
             trig_in: 0,
             abort: None,
+            host_effects: Vec::new(),
+            host_rd: None,
         }
     }
 
@@ -577,49 +639,183 @@ impl Fabric {
 
     // ------------------------------------------------------------------ CPU の側
 
-    /// CPU の 16 bit の読出し。`offset` は窓の中（0〜0xFFF）。
-    pub fn host_read<P: Ports + ?Sized>(&mut self, offset: u16, ports: &P) -> HostReply {
+    /// 窓のオフセットの種類（HDEC0 の VLD・AREQ）。`None` は DTACK を返さない。
+    fn host_class(offset: u16) -> Option<bool> {
         if offset & 1 != 0 {
-            return HostReply::BusError;
+            return None;
         }
         match offset {
-            0x000..=0x07F => {
-                let c = (offset >> 6) as usize;
-                let r = (offset & 0x3F) as u8;
-                match r {
-                    0x06 | 0x0A | 0x0C => self.request(c, r, None),
-                    0x1E => HostReply::Data(self.ch[c].status()),
-                    0x00..=0x1C => HostReply::Data(0),
-                    _ => HostReply::BusError,
-                }
-            }
-            0x100 | 0x102 => HostReply::Data(0),
-            0x104 => HostReply::Data(Self::modules(ports)),
-            _ => HostReply::BusError,
+            0x000..=0x07F => match offset & 0x3F {
+                0x06 | 0x0A | 0x0C => Some(true),
+                0x00..=0x1E => Some(false),
+                _ => None,
+            },
+            0x100 | 0x102 | 0x104 => Some(false),
+            _ => None,
         }
     }
 
-    /// CPU の 16 bit の書込み。
+    /// 68000 のバスサイクルを始める（DR-098）。`n` は S0 を含むスロット、`odd` は S0 が q2 の縁（CPU クロックの
+    /// 数が奇数）。基板は `n` のスロットまで進めてある（`n` のスロットはまだ進めていない）。
+    pub fn host_begin<P: Ports + ?Sized>(
+        &mut self,
+        n: u64,
+        odd: bool,
+        offset: u16,
+        write: Option<u16>,
+        ports: &P,
+    ) -> HostStart {
+        let Some(afile) = Self::host_class(offset) else {
+            return HostStart::BusError;
+        };
+        let at = 2 * n + odd as u64;
+        // HACK が取り込む q1 の縁のスロット：ストローブ（読出しは S2、書込みは S4）の 2 つ後の 16 MHz の縁に
+        // Y が必ず立ち、その後の最初の q1 の縁（fabric.md §07）
+        let capture = (at + 3 + write.is_some() as u64) / 2;
+        // DTACK は q1(r) の縁で立ち、q3(r) の立下りで認識される。S4 の終わりは at＋2.5 クロック
+        let waits = |r: u64| (2 * r - at - 1) as u32;
+        let c = (offset >> 6) as u8;
+        let reg = (offset & 0x3F) as u8;
+        if afile {
+            assert!(
+                self.hreq.is_none_or(|r| r.result.is_some()),
+                "CPU は前の A ファイルのアクセスの DTACK を待っている"
+            );
+            let grant = capture + 1;
+            self.hreq = Some(HostReq {
+                ch: c,
+                reg,
+                write,
+                result: None,
+                grant,
+                waits: waits(grant),
+            });
+            return HostStart::Pending;
+        }
+        match write {
+            Some(value) => {
+                let (due, effect) = match offset {
+                    0x000..=0x07F if reg == 0x1C => (
+                        capture + 1,
+                        HostEffect::Ctrl {
+                            ch: c,
+                            value,
+                            check: capture,
+                        },
+                    ),
+                    0x000..=0x07F if reg == 0x1E => (capture + 1, HostEffect::W1c { ch: c, value }),
+                    _ => (capture + 2, HostEffect::Strobe { offset, value }),
+                };
+                self.host_effects.push(HostPending { due, effect });
+                HostStart::Done(HostReply::Ack, waits(capture))
+            }
+            None if capture < self.slot => HostStart::Done(
+                HostReply::Data(self.read_reg(offset, ports)),
+                waits(capture),
+            ),
+            None => {
+                self.host_rd = Some(HostRead {
+                    offset,
+                    capture,
+                    waits: waits(capture),
+                    value: None,
+                });
+                HostStart::Pending
+            }
+        }
+    }
+
+    /// `host_begin` が `Pending` を返したバスサイクルの答えと待ちの数。DTACK のスロットが済むまでは `None`。
+    pub fn host_finish(&mut self) -> Option<(HostReply, u32)> {
+        if let Some(r) = self.host_rd {
+            let v = r.value?;
+            self.host_rd = None;
+            return Some((HostReply::Data(v), r.waits));
+        }
+        let r = self.hreq?;
+        let res = r.result?;
+        self.hreq = None;
+        Some((res, r.waits))
+    }
+
+    /// A ファイルでないレジスタの今の値（RD は引上げで、何も出さなければ 0）。
+    fn read_reg<P: Ports + ?Sized>(&self, offset: u16, ports: &P) -> u16 {
+        match offset {
+            0x000..=0x07F if offset & 0x3F == 0x1E => self.ch[(offset >> 6) as usize].status(),
+            0x104 => Self::modules(ports),
+            _ => 0,
+        }
+    }
+
+    /// 後のスロットで効く CPU の書込み（スロットの頭）。
+    #[cold]
+    #[inline(never)]
+    fn host_effects<P: Ports + ?Sized>(&mut self, ports: &mut P) {
+        let s = self.slot;
+        // REQ の START は、取込みの LCLK の前（そのスロットの頭）に止まっていたときだけ
+        for e in &mut self.host_effects {
+            if let HostEffect::Ctrl { ch, value, check } = &mut e.effect
+                && *check == s
+                && self.ch[*ch as usize].phase != Phase::Idle
+            {
+                *value &= !1;
+            }
+        }
+        let mut i = 0;
+        while i < self.host_effects.len() {
+            if self.host_effects[i].due > s {
+                i += 1;
+                continue;
+            }
+            match self.host_effects.remove(i).effect {
+                HostEffect::Ctrl { ch, value, .. } => self.ctrl(ch as usize, value),
+                HostEffect::W1c { ch, value } => self.w1c(ch as usize, value),
+                HostEffect::Strobe { offset, value } => {
+                    self.write_strobe(offset, value, ports);
+                }
+            }
+        }
+    }
+
+    /// CPU の 16 bit の読出しを、スロットの境目ですぐ行う（試験の道具）。`offset` は窓の中（0〜0xFFF）。
+    pub fn host_read<P: Ports + ?Sized>(&mut self, offset: u16, ports: &P) -> HostReply {
+        match Self::host_class(offset) {
+            None => HostReply::BusError,
+            Some(true) => self.request((offset >> 6) as usize, (offset & 0x3F) as u8, None),
+            Some(false) => HostReply::Data(self.read_reg(offset, ports)),
+        }
+    }
+
+    /// CPU の 16 bit の書込みを、スロットの境目ですぐ効かせる（試験の道具）。
     pub fn host_write<P: Ports + ?Sized>(
         &mut self,
         offset: u16,
         value: u16,
         ports: &mut P,
     ) -> HostReply {
-        if offset & 1 != 0 {
-            return HostReply::BusError;
+        match Self::host_class(offset) {
+            None => HostReply::BusError,
+            Some(true) => self.request((offset >> 6) as usize, (offset & 0x3F) as u8, Some(value)),
+            Some(false) => {
+                let c = (offset >> 6) as usize;
+                match offset {
+                    0x000..=0x07F if offset & 0x3F == 0x1C => self.ctrl(c, value),
+                    0x000..=0x07F if offset & 0x3F == 0x1E => self.w1c(c, value),
+                    _ => self.write_strobe(offset, value, ports),
+                }
+                HostReply::Ack
+            }
         }
+    }
+
+    /// 設定のレジスタ、PORT_RESET、AUDIO_N の書込み（ストローブで変わる）。
+    fn write_strobe<P: Ports + ?Sized>(&mut self, offset: u16, value: u16, ports: &mut P) {
         match offset {
             0x000..=0x07F => {
-                let c = (offset >> 6) as usize;
-                let r = (offset & 0x3F) as u8;
-                let regs = &mut self.ch[c].regs;
-                match r {
+                let regs = &mut self.ch[(offset >> 6) as usize].regs;
+                match offset & 0x3F {
                     0x00 => regs.src = value as u8 & 15,
                     0x02 => regs.dst = value as u8 & 15,
-                    // 32 bit の上位の語は使わない（DR-046 (3)）。
-                    0x04 | 0x08 => {}
-                    0x06 | 0x0A | 0x0C => return self.request(c, r, Some(value)),
                     0x0E => regs.src_step = value,
                     0x10 => regs.dst_step = value,
                     0x12 => regs.format = value as u8 & 7,
@@ -627,32 +823,26 @@ impl Fabric {
                     0x16 => regs.xor = value,
                     0x18 => regs.shift = value as u8 & 31,
                     0x1A => regs.trigger = value as u8 & 0x3F,
-                    0x1C => self.ctrl(c, value),
-                    0x1E => {
-                        let ch = &mut self.ch[c];
-                        ch.done &= value & 0x02 == 0;
-                        ch.error &= value & 0x08 == 0;
-                        ch.miss &= value & 0x10 == 0;
-                    }
-                    _ => return HostReply::BusError,
+                    // 32 bit の上位の語（0x04、0x08）は使わない（DR-046 (3)）。
+                    _ => {}
                 }
-                HostReply::Ack
             }
-            0x100 => {
-                ports.port_reset(value);
-                HostReply::Ack
-            }
-            0x102 => {
-                ports.write_audio_n(value & 0x0FFF);
-                HostReply::Ack
-            }
+            0x100 => ports.port_reset(value),
+            0x102 => ports.write_audio_n(value & 0x0FFF),
             // MODULES は読出し専用。書込みは捨てる [P]。
-            0x104 => HostReply::Ack,
-            _ => HostReply::BusError,
+            _ => {}
         }
     }
 
-    /// A ファイルのアクセスの結果。許可のスロットが済むまでは `None`。
+    /// STATUS の W1C：bit 1 DONE、bit 3 ERROR、bit 4 MISS。
+    fn w1c(&mut self, c: usize, value: u16) {
+        let ch = &mut self.ch[c];
+        ch.done &= value & 0x02 == 0;
+        ch.error &= value & 0x08 == 0;
+        ch.miss &= value & 0x10 == 0;
+    }
+
+    /// A ファイルのアクセスの結果（`host_read`・`host_write`）。許可のスロットが済むまでは `None`。
     pub fn host_poll(&mut self) -> Option<HostReply> {
         let r = self.hreq?.result?;
         self.hreq = None;
@@ -669,6 +859,8 @@ impl Fabric {
             reg,
             write,
             result: None,
+            grant: 0,
+            waits: 0,
         });
         HostReply::Wait
     }
@@ -727,6 +919,9 @@ impl Fabric {
 
     /// 1 スロット進める。
     pub fn step_slot<P: Ports + ?Sized>(&mut self, ports: &mut P) -> SlotRecord {
+        if !self.host_effects.is_empty() {
+            self.host_effects(ports);
+        }
         if let Some(p) = self.abort.take() {
             ports.abort_access(p);
         }
@@ -850,6 +1045,17 @@ impl Fabric {
         for c in &mut self.ch {
             c.sync_trigger(trig);
         }
+        // CPU の読出し：取込みのスロットの LCLK の後の値（68000 は q1 の縁の S6 の終わりに取り込む。DR-098）
+        if let Some(r) = self.host_rd
+            && r.value.is_none()
+            && r.capture <= self.slot
+        {
+            let v = self.read_reg(r.offset, ports);
+            self.host_rd = Some(HostRead {
+                value: Some(v),
+                ..r
+            });
+        }
         let rec = SlotRecord {
             slot: self.slot,
             s,
@@ -940,7 +1146,11 @@ impl Fabric {
         let mut aop = Aop::None;
         let mut decision = Decision::None;
 
-        if self.hreq.is_some_and(|r| r.result.is_none()) {
+        // HACK の HREQ（取込みの q1 の縁から）を、次の SCLK で必ず許可する
+        if self
+            .hreq
+            .is_some_and(|r| r.result.is_none() && r.grant <= self.slot)
+        {
             aop = Aop::Host;
         }
 

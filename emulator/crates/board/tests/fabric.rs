@@ -2,7 +2,7 @@
 //! 期待値は仕様書 §06、DR-046、`docs/spec/fabric.md` の記述と、そこからの手計算で取る。
 
 use fc85_board::fabric::{
-    Access, Aop, Decision, Dir, Fabric, HostReply, Phase, PortReply, Ports, SlotRecord,
+    Access, Aop, Decision, Dir, Fabric, HostReply, HostStart, Phase, PortReply, Ports, SlotRecord,
     TIMEOUT_SLOTS, fd_value, port_attr, port_ok, transform,
 };
 use fc85_board::ports::FabricPorts;
@@ -91,6 +91,13 @@ impl<P: Ports> Rig<P> {
 
     fn run(&mut self, n: usize) {
         for _ in 0..n {
+            self.step();
+        }
+    }
+
+    /// スロット `slot` の前まで進める（`slot` はまだ進めない）。
+    fn run_to(&mut self, slot: u64) {
+        while self.f.slot() < slot {
             self.step();
         }
     }
@@ -1127,4 +1134,261 @@ fn a_staging_channel_keeps_its_rate_while_the_other_channel_waits() {
         got.push((starts.len(), r.status(0)));
     }
     assert_eq!(got, vec![(100, DONE), (100, DONE)]);
+}
+
+// ---------------------------------------------------------------- CPU のバスサイクルの規則（DR-098）
+//
+// 仕様書 §06 の規則を手で計算した値と比べる。S0 のクロックを at、S0 を含むスロットを n（at ＝ 2n＋odd。odd は
+// S0 が q2 の縁）とする。HACK の Y がストローブ（読出しは S2 ＝ at＋1、書込みは S4 ＝ at＋2 の立上り）を必ず
+// 見るのは、その 1 クロック後の 16 MHz の縁。CAP・DTK はその後の最初の q1 の縁で立つので、取込みのスロットは
+// c ＝ (at＋3＋書込み)÷2。DTACK は q1(r) の縁で出て q3(r) の立下りで認識され（r は c、A ファイルは許可の
+// スロット g ＝ c＋1）、S4 の終わりは at＋2.5 クロックなので、待ちは (2r＋1.5)−(at＋2.5) ＝ 2r−at−1。
+
+/// スロット `n`、位相 `odd` に S0 を置いたバスサイクル。答えと待ちの数。
+fn cycle(
+    r: &mut Rig<FabricPorts>,
+    n: u64,
+    odd: bool,
+    off: u16,
+    w: Option<u16>,
+) -> (HostReply, u32) {
+    while r.f.slot() < n {
+        r.step();
+    }
+    match r.f.host_begin(n, odd, off, w, &r.p) {
+        HostStart::Done(a, waits) => (a, waits),
+        HostStart::Pending => loop {
+            r.step();
+            if let Some(a) = r.f.host_finish() {
+                break a;
+            }
+        },
+        HostStart::BusError => panic!("{off:#x}"),
+    }
+}
+
+#[test]
+fn bus_cycle_waits_follow_the_s0_phase() {
+    // （オフセット、書込み、S0 が q0 の待ち、q2 の待ち、許可のスロット − n）
+    // STATUS の読出し：q0 は c ＝ n＋1、待ち 2(n＋1)−2n−1 ＝ 1。q2 は c ＝ n＋2、待ち 2(n＋2)−(2n＋1)−1 ＝ 2。
+    // CTRL の書込み：c ＝ n＋2（どちらも）。待ち q0 は 3、q2 は 2。
+    // COUNT の読出し：g ＝ c＋1。q0 は g ＝ n＋2 で待ち 3、q2 は g ＝ n＋3 で待ち 4。
+    // COUNT の書込み：g ＝ n＋3。待ち q0 は 5、q2 は 4。
+    for (off, w, waits, grant) in [
+        (STATUS, None, [1, 2], None),
+        (CTRL, Some(0), [3, 2], None),
+        (COUNT, None, [3, 4], Some([2, 3])),
+        (COUNT, Some(7), [5, 4], Some([3, 3])),
+    ] {
+        for odd in [false, true] {
+            let mut r = Rig::new();
+            let n = 10;
+            let (_, got) = cycle(&mut r, n, odd, off, w);
+            assert_eq!(got, waits[odd as usize], "{off:#x} {w:?} {odd}");
+            let hosts: Vec<u64> = r
+                .trace
+                .iter()
+                .filter(|x| x.aop == Aop::Host)
+                .map(|x| x.slot)
+                .collect();
+            assert_eq!(
+                hosts,
+                grant.map(|g| vec![n + g[odd as usize]]).unwrap_or_default(),
+                "{off:#x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ctrl_and_w1c_take_effect_three_slots_after_s0() {
+    // REQ が LCLK(c)（c ＝ n＋2）で取り込み、c＋1 ＝ n＋3 のスロットの頭の判断と LCLK で効く。STATUS は n＋3 の
+    // スロットの後に変わり、n＋2 の後はまだ変わらない。
+    for odd in [false, true] {
+        // START
+        let mut r = Rig::new();
+        r.setup(
+            0,
+            Cfg {
+                trigger: NEVER,
+                ..Cfg::default()
+            },
+        );
+        r.run(2);
+        let n = r.f.slot() + 1;
+        cycle(&mut r, n, odd, CTRL, Some(1));
+        r.run_to(n + 3);
+        assert_eq!(r.status(0) & BUSY, 0, "START {odd}");
+        r.step();
+        assert_eq!(r.status(0) & BUSY, BUSY, "START {odd}");
+        // STOP（トリガを待って動いている）
+        r.run(10);
+        let n = r.f.slot() + 1;
+        cycle(&mut r, n, odd, CTRL, Some(2));
+        r.run_to(n + 3);
+        assert_eq!(r.status(0) & BUSY, BUSY, "STOP {odd}");
+        r.step();
+        assert_eq!(r.status(0) & BUSY, 0, "STOP {odd}");
+        // W1C（DONE）
+        r.setup(0, Cfg::default());
+        r.start(0);
+        r.run_until_idle(0, 40);
+        assert_eq!(r.status(0), DONE);
+        let n = r.f.slot() + 1;
+        cycle(&mut r, n, odd, STATUS, Some(DONE));
+        r.run_to(n + 3);
+        assert_eq!(r.status(0), DONE, "W1C {odd}");
+        r.step();
+        assert_eq!(r.status(0), 0, "W1C {odd}");
+    }
+}
+
+#[test]
+fn status_reads_see_the_state_after_the_capture_slot() {
+    // DONE が立つスロット k（そのスロットの LCLK の後に STATUS が変わる）を先に調べ、S0 を k の前後に置いて
+    // 読む。値は c ＝ n＋1（q0）か n＋2（q2）のスロットの後のもので、c ≥ k なら DONE が見える。
+    let mut base = Rig::new();
+    base.setup(
+        0,
+        Cfg {
+            count: 3,
+            ..Cfg::default()
+        },
+    );
+    base.start(0);
+    let mut probe = Rig {
+        f: base.f.clone(),
+        p: base.p.clone(),
+        trace: Vec::new(),
+    };
+    while probe.status(0) & DONE == 0 {
+        probe.step();
+    }
+    let k = probe.f.slot() - 1;
+    for n in k - 3..=k {
+        for odd in [false, true] {
+            let mut r = Rig {
+                f: base.f.clone(),
+                p: base.p.clone(),
+                trace: Vec::new(),
+            };
+            let (got, _) = cycle(&mut r, n, odd, STATUS, None);
+            let c = n + 1 + odd as u64;
+            let done = if c >= k { DONE } else { BUSY };
+            assert_eq!(got, HostReply::Data(done), "k {k} n {n} {odd}");
+        }
+    }
+}
+
+#[test]
+fn start_is_taken_only_if_the_channel_was_stopped_at_the_capture_slot() {
+    // START は LCLK(c)（c ＝ n＋2）の BUSY、つまりスロット c の頭の段階を見る。転送が終わって段階が止まる
+    // スロットを k（その LCLK の後に BUSY が消える）とすると、c ≥ k＋1（n ≥ k−1）なら受け付けて n＋3 で
+    // 再設定を始め、c ≤ k なら動作中の START として捨てる。
+    let mut base = Rig::new();
+    base.setup(
+        0,
+        Cfg {
+            count: 3,
+            ..Cfg::default()
+        },
+    );
+    base.start(0);
+    let mut probe = Rig {
+        f: base.f.clone(),
+        p: base.p.clone(),
+        trace: Vec::new(),
+    };
+    while probe.status(0) & BUSY != 0 {
+        probe.step();
+    }
+    let k = probe.f.slot() - 1;
+    for n in k - 3..=k {
+        for odd in [false, true] {
+            let mut r = Rig {
+                f: base.f.clone(),
+                p: base.p.clone(),
+                trace: Vec::new(),
+            };
+            cycle(&mut r, n, odd, CTRL, Some(1));
+            let check = k.max(n + 3) + 2;
+            r.run_to(check);
+            let want = if n + 1 >= k { BUSY } else { 0 };
+            assert_eq!(r.status(0) & BUSY, want, "k {k} n {n} {odd}");
+        }
+    }
+}
+
+#[test]
+fn stop_then_start_back_to_back_restarts_the_channel() {
+    // STOP（S0 が n の q0、待ち 3）に続けて START を書くと、START の S0 は n＋3 の q2 で、c ＝ n＋5。STOP は
+    // n＋3 で効くので、START は止まったチャネルとして受け付けられ、n＋6 で再設定を始める。
+    let mut r = Rig::new();
+    r.setup(
+        0,
+        Cfg {
+            trigger: NEVER,
+            ..Cfg::default()
+        },
+    );
+    r.start(0);
+    r.run(10);
+    assert_eq!(r.status(0), BUSY | WAIT);
+    let n = r.f.slot() + 1;
+    let (_, waits) = cycle(&mut r, n, false, CTRL, Some(2));
+    assert_eq!(waits, 3);
+    // 7 クロックのサイクルの次の S0 は 4n＋14 の縁（n＋3 の q2）
+    cycle(&mut r, n + 3, true, CTRL, Some(1));
+    r.run_to(n + 4);
+    assert_eq!(r.status(0) & BUSY, 0);
+    r.run_to(n + 6);
+    assert_eq!(r.status(0) & BUSY, 0);
+    r.step();
+    assert_eq!(r.status(0) & BUSY, BUSY);
+}
+
+#[test]
+fn config_writes_take_effect_after_the_strobe() {
+    // 設定のレジスタは、ストローブの終わり（S7 ＝ q1(c＋1) の後）に変わる。実機では c＋1 の LCLK から c＋2 の
+    // SCLK までのどこかなので、エミュレータは c＋2 ＝ n＋4 のスロットの頭に置く。
+    for odd in [false, true] {
+        let mut r = Rig::new();
+        r.run(4);
+        let n = 5;
+        cycle(&mut r, n, odd, FORMAT, Some(3));
+        r.run_to(n + 4);
+        assert_eq!(r.f.regs(0).format, 0, "{odd}");
+        r.step();
+        assert_eq!(r.f.regs(0).format, 3, "{odd}");
+    }
+}
+
+#[test]
+fn trigger_needs_four_slots_before_start() {
+    // TRIGGER の発生源を、入力が High のもの（1：VBlank）へ替えると、選択器の後の同期化に立上りが伝わる。
+    // TRIGGER（S0 のスロット nT）は nT＋4 の頭で変わり、U36 が LCLK(nT＋4)、STS が LCLK(nT＋5) で取り込み、
+    // 立上りを LCLK(nT＋6) で数える。止まっている間は数えない。START（S0 のスロット nS）は nS＋3 で段階を
+    // 変えるので、nS ≥ nT＋4 なら立上りは数えられない。続けて書くと（TRIGGER の待ちの後の S0 は nT＋3 の q2）
+    // 数えられ、転送がトリガなしで進む。
+    for (d, odd, want) in [
+        (3, true, DONE),
+        (4, false, BUSY | WAIT),
+        (4, true, BUSY | WAIT),
+    ] {
+        let mut r = Rig::new();
+        r.setup(
+            0,
+            Cfg {
+                trigger: 0,
+                ..Cfg::default()
+            },
+        );
+        r.f.set_trigger_inputs(1 << 1);
+        r.run(4);
+        let nt = r.f.slot() + 1;
+        cycle(&mut r, nt, false, TRIGGER, Some(1));
+        cycle(&mut r, nt + d, odd, CTRL, Some(1));
+        r.run(40);
+        assert_eq!(r.status(0), want, "d {d} {odd}");
+    }
 }

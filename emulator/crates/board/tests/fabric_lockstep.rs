@@ -4,12 +4,14 @@
 //! 比べるもの：スロットの記録（`SlotRecord`）、STATUS、段階、割込み、CPU への応答、ポートへの働きかけ
 //! （模型のポートは呼ばれた順の記録、`FabricPorts` は中身の全部）。判断・状態・アクセスの制御・CPU の窓は
 //! 門の模型（DR-089）。
-//! CPU の 2 回のアクセスの間には 1 スロット以上おく（門の模型の前提。fabric_gate/mod.rs の冒頭）。
+//! CPU のバスサイクル（DR-098）は、S0 を前のサイクルの終わりから 0〜1 クロックあけて置き（S0 の位相が q0・q2 に
+//! なる）、門の模型の HACK がストローブを見る縁の、実機で決まらない 2 か所を擬似乱数で選ぶ。答えと待ちの数を
+//! 突き合わせる。
 
 mod fabric_gate;
 
 use fabric_gate::GateFabric;
-use fc85_board::fabric::{Access, Dir, Fabric, HostReply, PortReply, Ports};
+use fc85_board::fabric::{Access, Dir, Fabric, HostReply, HostStart, PortReply, Ports};
 use fc85_board::ports::FabricPorts;
 
 const SRC: u16 = 0x00;
@@ -73,7 +75,7 @@ impl Compare for FabricPorts {
 }
 
 /// 網羅の目安：突き合わせたスロットのうち、それぞれのことが起きた数。
-const COVER: [&str; 31] = [
+const COVER: [&str; 37] = [
     "スロット",
     "アクセス",
     "Start",
@@ -105,10 +107,22 @@ const COVER: [&str; 31] = [
     "転送中の PORT_RESET",
     "2 チャネルが動作",
     "割込み",
+    "S0 が q0",
+    "S0 が q2",
+    "続けたバスサイクル",
+    "ストローブが早く見える",
+    "戻りが F＋3 で見える",
+    "戻りが F＋5 で見える",
 ];
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Cover([u64; COVER.len()]);
+
+impl Default for Cover {
+    fn default() -> Self {
+        Self([0; COVER.len()])
+    }
+}
 
 impl Cover {
     fn add(&mut self, o: &Cover) {
@@ -137,6 +151,10 @@ struct Lock<P: Compare> {
     pg: P,
     cover: Cover,
     prev_status: [u16; 2],
+    /// S0 の位相と、HACK がストローブを見る縁の選び方。
+    rng: Rng,
+    /// 次の S0 に使える最初の 16 MHz の縁（前のサイクルの終わり）。
+    ready: u64,
 }
 
 impl<P: Compare> Lock<P> {
@@ -148,6 +166,8 @@ impl<P: Compare> Lock<P> {
             pg: p,
             cover: Cover::default(),
             prev_status: [0; 2],
+            rng: Rng::new(0xB05),
+            ready: 0,
         }
     }
 
@@ -248,44 +268,60 @@ impl<P: Compare> Lock<P> {
         self.g.set_trigger_inputs(v);
     }
 
-    /// A ファイルの許可を待つ。
-    fn wait_poll(&mut self) -> HostReply {
-        for _ in 0..4 {
+    /// 68000 のバスサイクル。S0 は前のサイクルの終わりか今のスロットの頭の後に、0〜1 クロックあけて置く。
+    /// 答えと待ちの数を突き合わせる。
+    fn cycle(&mut self, off: u16, w: Option<u16>) -> HostReply {
+        let gap = self.rng.below(2);
+        let e0 = self.ready.max(4 * self.f.slot()) + 2 * gap;
+        let (n, odd) = (e0 / 4, e0 % 4 == 2);
+        while self.f.slot() < n {
             self.step();
-            let (a, b) = (self.f.host_poll(), self.g.host_poll());
-            assert_eq!(a, b, "A ファイルの応答");
-            if let Some(r) = a {
-                return r;
-            }
         }
-        panic!("A ファイルの許可が来ない");
+        let early = self.rng.one_in(2);
+        let back = 3 + self.rng.below(3);
+        let a = self.f.host_begin(n, odd, off, w, &self.pf);
+        let b = self.g.host_begin(n, odd, off, w, early, back);
+        let mut fa = match a {
+            HostStart::BusError => {
+                assert!(!b, "{off:#x} の DTACK");
+                self.ready = e0 + 8;
+                return HostReply::BusError;
+            }
+            HostStart::Done(r, waits) => Some((r, waits)),
+            HostStart::Pending => None,
+        };
+        assert!(b, "{off:#x} の DTACK");
+        self.count("S0 が q0", !odd);
+        self.count("S0 が q2", odd);
+        self.count("続けたバスサイクル", e0 == self.ready);
+        self.count("ストローブが早く見える", early);
+        self.count("戻りが F＋3 で見える", back == 3);
+        self.count("戻りが F＋5 で見える", back == 5);
+        let mut fb = None;
+        for _ in 0..8 {
+            if fa.is_some() && fb.is_some() {
+                break;
+            }
+            self.step();
+            fa = fa.or_else(|| self.f.host_finish());
+            fb = fb.or_else(|| self.g.host_finish());
+        }
+        let (r, waits) = fa.expect("動作の模型の答えが来ない");
+        assert_eq!(
+            Some((r, waits)),
+            fb,
+            "{off:#x} {w:?} の答えと待ち（S0 の縁 {e0}）"
+        );
+        self.ready = e0 + 2 * (4 + u64::from(waits));
+        r
     }
 
-    /// CPU の書込み。応答を突き合わせ、次のアクセスまで 1 スロット進める。
     fn write(&mut self, off: u16, v: u16) -> HostReply {
-        let a = self.f.host_write(off, v, &mut self.pf);
-        let b = self.g.host_write(off, v, &mut self.pg);
-        assert_eq!(a, b, "書込み {off:#x}");
-        let r = if a == HostReply::Wait {
-            self.wait_poll()
-        } else {
-            a
-        };
-        self.step();
-        r
+        self.cycle(off, Some(v))
     }
 
     fn read(&mut self, off: u16) -> HostReply {
-        let a = self.f.host_read(off, &self.pf);
-        let b = self.g.host_read(off, &self.pg);
-        assert_eq!(a, b, "読出し {off:#x}");
-        let r = if a == HostReply::Wait {
-            self.wait_poll()
-        } else {
-            a
-        };
-        self.step();
-        r
+        self.cycle(off, None)
     }
 
     fn setup(&mut self, ch: u16, c: [u16; 9]) {

@@ -346,13 +346,13 @@ pub struct ElgOut {
 /// ELG（PAL20L8A）。このスロットの頭の判断：A ファイルの操作の種類（AC2–AC0）、新しい要素（GR）、書込み（GW）、要素が残るか（KEEP）、STALL の評価（STV、STL）。出力は負の論理
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn elg(infn: bool, q1n: bool, epcn: bool, crunn: bool, cran: bool, crldn: bool, carmn: bool, ready: bool, goks: bool, addrs: bool, sokd: bool, cd: bool, hreq: bool, addrd: bool) -> ElgOut {
-    let grn = !(infn & cd & !cran & !carmn & ready & goks & !hreq);
-    let ac2n = !((infn & cd & !cran & !carmn & ready & goks & !hreq & !addrs) | (!infn & !crunn & q1n & cd & sokd & !addrd & !epcn & !hreq) | (!infn & !crunn & !q1n & !hreq) | (!crldn & cd & !hreq));
-    let ac1n = !((infn & cd & !cran & !carmn & ready & goks & !hreq & addrs) | (!infn & !crunn & q1n & cd & sokd & addrd & !hreq));
-    let ac0n = !((hreq) | (!infn & !crunn & q1n & cd & sokd & addrd) | (cd & !crldn));
-    let gwn = !((!infn & !crunn & q1n & cd & sokd & !addrd & epcn) | (!infn & !crunn & q1n & cd & sokd & !hreq));
-    let keepn = !((infn & cd & !cran & !carmn & ready & goks & !hreq) | (!infn & !crunn & !q1n & hreq) | (!infn & !crunn & q1n & !cd) | (!infn & !crunn & q1n & !sokd) | (!infn & !crunn & q1n & addrd & hreq) | (!infn & !crunn & q1n & !epcn & hreq) | (!infn & !crunn & q1n & !epcn & addrd & !hreq));
+pub fn elg(infn: bool, q1n: bool, epcn: bool, crunn: bool, cran: bool, crldn: bool, carmn: bool, ready: bool, goks: bool, addrs: bool, sokd: bool, cd: bool, hreqn: bool, addrd: bool) -> ElgOut {
+    let grn = !(infn & cd & !cran & !carmn & ready & goks & hreqn);
+    let ac2n = !((infn & cd & !cran & !carmn & ready & goks & hreqn & !addrs) | (!infn & !crunn & q1n & cd & sokd & !addrd & !epcn & hreqn) | (!infn & !crunn & !q1n & hreqn) | (!crldn & cd & hreqn));
+    let ac1n = !((infn & cd & !cran & !carmn & ready & goks & hreqn & addrs) | (!infn & !crunn & q1n & cd & sokd & addrd & hreqn));
+    let ac0n = !((!hreqn) | (!infn & !crunn & q1n & cd & sokd & addrd) | (cd & !crldn));
+    let gwn = !((!infn & !crunn & q1n & cd & sokd & !addrd & epcn) | (!infn & !crunn & q1n & cd & sokd & hreqn));
+    let keepn = !((infn & cd & !cran & !carmn & ready & goks & hreqn) | (!infn & !crunn & !q1n & !hreqn) | (!infn & !crunn & q1n & !cd) | (!infn & !crunn & q1n & !sokd) | (!infn & !crunn & q1n & addrd & !hreqn) | (!infn & !crunn & q1n & !epcn & !hreqn) | (!infn & !crunn & q1n & !epcn & addrd & hreqn));
     let stvn = !(infn & cd & !cran);
     let stln = !(!carmn & !ready);
     ElgOut {
@@ -1089,41 +1089,79 @@ const HACK_BWN_T: u64 = 0xf1f1fff1fff1fff1;
 /// HACK の BCN の真理値表（番地の bit は SYN1、SYN2N、DCSN、BWN、BCN、BDTN の順）。
 const HACK_BCN_T: u64 = 0xfefe1110fffe1110;
 
-/// HACK（PAL16R4A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+/// HACK（PAL16R8A）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HackOut {
-    /// 登録出力：AKN
-    pub akn: bool,
+    /// 登録出力：YN
+    pub yn: bool,
+    /// 登録出力：CAPN
+    pub capn: bool,
+    /// 登録出力：HREQN
+    pub hreqn: bool,
+    /// 登録出力：DTKN
+    pub dtkn: bool,
     /// 登録出力：BWN
     pub bwn: bool,
     /// 登録出力：BCN
     pub bcn: bool,
     /// 登録出力：BDTN
     pub bdtn: bool,
-    /// 組合せの出力：HREQ
-    pub hreq: bool,
-    /// 組合せの出力：DTKN
-    pub dtkn: bool,
 }
 
-/// HACK（PAL16R4A）。68000 の DTACK（16 MHz の縁ごと）。Fabric の窓：A ファイルを使わないアクセスはすぐ（VLD）、A ファイルのアクセスは SEQ の許可（AOP＝001）のスロットの q3 の縁で返す（AK）。HREQ は ELG への要求で、許可のスロットの頭から下げる（AOP＝001）。DOC の窓のブリッジ（DR-035、DR-050）：/DCS を取り込んで窓を待ち（BW）、同期化した E の立下りで次の窓を取り（BC。P2A より先）、その窓の終わりの立下りで DTACK を出す（BDT）
+/// HACK（PAL16R8A）。68000 の DTACK と A ファイルの要求（16 MHz の縁ごと。DR-098）。Y は窓のアクセス（VLD ∨ AREQ）の同期化で、毎縁取り込む。q1 の縁（SCLK が High の間の縁）だけで、Y から次を決める：取込みの印（CAP：DTACK の前の Y。1 スロットの間 1 で、要求の PAL が LCLK で見る）、A ファイルの要求（HREQN：ELG へ。SEQ はそれを見た SCLK で必ず許可する（AOP＝001））、DTACK（DTKN）。DTACK は、A ファイルを使わないアクセスでは取込みの q1 の縁、A ファイルのアクセスでは許可のスロットの q1 の縁で出し、ストローブが戻るまで保つ。DOC の窓のブリッジ（DR-035、DR-050）：/DCS を取り込んで窓を待ち（BW）、同期化した E の立下りで次の窓を取り（BC。P2A より先）、その窓の終わりの立下りで DTACK を出す（BDT。DTKN にも同じ縁で出す）
 /// クロックは C16。
 #[inline]
 #[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
-pub fn hack(areqn: bool, vldn: bool, aop2n: bool, aop1n: bool, aop0n: bool, mclk: bool, syn: u32, syn2n: bool, dcsn: bool, akn: bool, bwn: bool, bcn: bool, bdtn: bool) -> HackOut {
-    let hreq = !((areqn) | (!akn) | (aop2n & aop1n & !aop0n));
-    let dtkn = !((!vldn) | (!akn & !areqn) | (!bdtn));
-    let akn_d = !((!areqn & aop2n & aop1n & !aop0n & mclk) | (!areqn & !akn));
+pub fn hack(areqn: bool, vldn: bool, sclk: bool, syn: u32, syn2n: bool, dcsn: bool, yn: bool, capn: bool, hreqn: bool, dtkn: bool, bwn: bool, bcn: bool, bdtn: bool) -> HackOut {
+    let yn_d = !((!vldn) | (!areqn));
+    let capn_d = !((sclk & !yn & dtkn) | (!sclk & !capn));
+    let hreqn_d = !((sclk & !yn & !areqn & hreqn & dtkn) | (!sclk & !hreqn));
+    let dtkn_d = !((sclk & !yn & !vldn) | (sclk & !hreqn & !areqn) | (!dtkn & bdtn & !vldn) | (!dtkn & bdtn & !areqn) | (!bcn & !syn2n & !dcsn & ((syn & 0x2) == 0x0)) | (!bdtn & !dcsn));
     let bwn_d = { let i = (syn >> 1 & 0x1) << 0 | (syn2n as u32) << 1 | (dcsn as u32) << 2 | (bwn as u32) << 3 | (bcn as u32) << 4 | (bdtn as u32) << 5; HACK_BWN_T >> i & 1 != 0 };
     let bcn_d = { let i = (syn >> 1 & 0x1) << 0 | (syn2n as u32) << 1 | (dcsn as u32) << 2 | (bwn as u32) << 3 | (bcn as u32) << 4 | (bdtn as u32) << 5; HACK_BCN_T >> i & 1 != 0 };
     let bdtn_d = !((!bcn & !syn2n & !dcsn & ((syn & 0x2) == 0x0)) | (!bdtn & !dcsn));
     HackOut {
-        akn: akn_d,
+        yn: yn_d,
+        capn: capn_d,
+        hreqn: hreqn_d,
+        dtkn: dtkn_d,
         bwn: bwn_d,
         bcn: bcn_d,
         bdtn: bdtn_d,
-        hreq,
-        dtkn,
+    }
+}
+
+/// REQ（PAL16R6A-2）の出力。登録出力はクロックの後のピンの値、組合せの出力は今のピンの値。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReqOut {
+    /// 登録出力：STRQ
+    pub strq: bool,
+    /// 登録出力：STPQ
+    pub stpq: bool,
+    /// 登録出力：WDQ
+    pub wdq: bool,
+    /// 登録出力：WEQ
+    pub weq: bool,
+    /// 登録出力：WMQ
+    pub wmq: bool,
+}
+
+/// REQ（PAL16R6A-2）。CPU の要求の登録（DR-098）。チャネルごとに 1 個で、REQ0・REQ1 は同じ式。LCLK で、HACK の取込みの印（CAP）と、U5–U6 の CTRL（0x1C）・STATUS（0x1E）の書込みの解読（CTRLN、STATN）と ID のビットから、START・STOP の要求（STRQ、STPQ）と STATUS の W1C の要求（WDQ：DONE、WEQ：ERROR、WMQ：MISS）を 1 スロット出す。STOP が先。START はチャネルが止まっているとき（つなぎの BUSY ＝ P2 ∨ P1 が 0）だけ
+/// クロックは LCLK。
+#[inline]
+#[allow(clippy::too_many_arguments, clippy::identity_op, clippy::nonminimal_bool)]
+pub fn req(capn: bool, ctrln: bool, statn: bool, d: u32, busy: bool) -> ReqOut {
+    let strq_d = !((capn) | (ctrln) | ((d & 0x1) == 0x0) | ((d & 0x2) == 0x2) | (busy));
+    let stpq_d = !((capn) | (ctrln) | ((d & 0x2) == 0x0));
+    let wdq_d = !((capn) | (statn) | ((d & 0x2) == 0x0));
+    let weq_d = !((capn) | (statn) | ((d & 0x8) == 0x0));
+    let wmq_d = !((capn) | (statn) | ((d & 0x10) == 0x0));
+    ReqOut {
+        strq: strq_d,
+        stpq: stpq_d,
+        wdq: wdq_d,
+        weq: weq_d,
+        wmq: wmq_d,
     }
 }
 

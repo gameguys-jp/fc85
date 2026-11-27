@@ -1,9 +1,9 @@
 # Data Fabric の回路と部品表（最終試作機）
 
-**v0.12**  
+**v0.13**  
 2026年11月27日
 
-> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)、[DR-085](../decisions.md)、[OI-082](../open-issues.md)、[OI-083](../open-issues.md)、[OI-084](../open-issues.md)、[DR-088](../decisions.md)、[DR-089](../decisions.md)、[DR-090](../decisions.md)、[OI-087](../open-issues.md)、[OI-088](../open-issues.md)、[OI-089](../open-issues.md)、[DR-091](../decisions.md)、[OI-090](../open-issues.md)
+> 状態：作業中の版。1985年の最終試作機の Data Fabric（2 チャネル）を、PAL と 74LS・74S で組む回路の案と部品表。動作の定義は [仕様書](hardware.md) §06 と [DR-046](../decisions.md)。この文書は、その動作を満たす回路を示し、部品の数と面積を [board.md](board.md) に渡す。値はすべて [P] か [V]。関連：[DR-010](../decisions.md)、[DR-024](../decisions.md)、[DR-041](../decisions.md)、[DR-043](../decisions.md)、[DR-046](../decisions.md)、[DR-047](../decisions.md)、[OI-050](../open-issues.md)、[OI-051](../open-issues.md)、[OI-052](../open-issues.md)、[DR-048](../decisions.md)、[OI-054](../open-issues.md)、[DR-050](../decisions.md)、[DR-084](../decisions.md)、[DR-085](../decisions.md)、[OI-082](../open-issues.md)、[OI-083](../open-issues.md)、[OI-084](../open-issues.md)、[DR-088](../decisions.md)、[DR-089](../decisions.md)、[DR-090](../decisions.md)、[OI-087](../open-issues.md)、[OI-088](../open-issues.md)、[OI-089](../open-issues.md)、[DR-091](../decisions.md)、[OI-090](../open-issues.md)、[DR-098](../decisions.md)、[OI-092](../open-issues.md)
 
 ## 01　前提と範囲
 
@@ -16,6 +16,7 @@
 - 順序と状態の PAL のうち、A ファイルの操作（AFC）と判断と状態（CST、ELG、SEQ、ELS、EVT、ADC、CHS、STS）は式を書いた [P]（DR-085）。式から生成した関数をつないだ門の模型（`emulator/crates/board/tests/fabric_gate/mod.rs`）を、段階 2 のエミュレータのスロットの模型（`fabric.rs`、[emulator.md](../impl/emulator.md) §03）と並べて動かし、スロットごとの記録が一致することを確かめた。
 - アクセスの制御（TIM、DPA、OPA、OPB、STB0–1、P1A、P2A、U38、NX・OP）と CPU の窓（HDEC0–1、HACK、PRST）も式を書いた [P]（DR-089）。門の模型はこれらの式もつなぎ、判断・状態・アクセスの制御・CPU の窓のすべてが PAL の式になった。P1A・P2A・STB は、fabric_logic.py の仕様の定義（ポートの模型 acrtc.rs・doc.rs の 16 MHz の縁の動き）と、届きうる入力と状態の全部で突き合わせた。
 - スロットの中の時刻は、DR-091 で 1985年の PAL と TTL の遅れ（データブックの最大値）で閉じた（03 の時間の予算）。LCLK を q2 の縁（MCLK と同じ）へ早め、桁上げ（CY）を加算器ではなく A バスの 0 の検出から取り、AFC の番地を SCLK のレジスタにし、q1〜q3 の縁で来たポートの答えを次のスロットに数える。延びたアクセス（port 1、DOC の port 2）の終わりが最大 1 スロット遅れ、スロットの記録（`SlotRecord`）が変わった [P]（OI-087）。
+- CPU のバスサイクルとスロットの関係は、DR-098 で決めた。HACK を 16 MHz の縁ごとの PAL16R8A にして、CPU のアクセスを q1 の縁でだけ取り込み、CTRL・STATUS の書込みは REQ0–1（PAL16R6A-2）が LCLK で 1 スロットの要求にする。待ちの数と、アクセスが効くスロットは、S0 のスロットと位相（q0 か q2）だけで決まる（仕様書 §06 の「CPU のアクセスの時刻」）。要求の FF（74LS74・74LS175）の 4 個がなくなり、127 個になった [P]（OI-088）。
 - 部品の型番は MMI の 1983年の PAL ハンドブックと 1985年のデータブック（[review-digital.md](../parts/review-digital.md) の MMIPAL83、MMI85）と、74LS・74S の標準品から選んだ。日立の同等品の有無は [V]（09）。
 
 ## 02　構成
@@ -60,9 +61,9 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 | 時点 | 起きること |
 |---|---|
 | スロットの頭（SCLK↑） | SEQ が判断を取り込む：このスロットの A ファイルの操作（AOP）と、次のスロットのアクセス。AFC0・AFC1 が、同じ入力から A ファイルの番地と信号を取り込む（DR-091）。NX が、次のアクセス（ポート、向き、チャネル、FORMAT、W16、LG、FLAG、TWO）と STALL の評価を、判断バスから取り込む（DR-089）。OP は、空いていれば NX から、このスロットのアクセスを取り込む（判断は 1 つ前のスロットの頭）。P1A・P2A は、前のスロットの q1〜q3 で預かった答えを、このスロットの答え（P1R・P2R）にする。IL は、前のスロットで終わった読出しの FD を取り込む（/EN ＝ DNRQ）[P]（DR-085、DR-091） |
-| q0〜q1 | A ファイルを読み、加算器が落ち着く。A バスの 0 の検出（U65–U67）が桁上げ（CY）を出す。W のアクセスでは ANX が FD に出す（OP から約 110 ns で落ち着く。IL 20 ns、ROT 2 段 50 ns、ANX 25 ns、緩衝器 12 ns）。STB がポートのアクセスの信号を出す |
-| 中ほど（MCLK↑・LCLK↑） | RDY が、このスロットの判断バスのチャネル（次のスロットの頭の候補）の準備を取り込む。PS か PD が A バスの番地を、SL が和を取り込む。CPU の読出しでは U7–U8 が A バスを取り込む。CHS・STS・ELS が、桁上げ（CY）とこのスロットの出来事（アクセスの完了、ERROR、CPU の要求）から、チャネルと要素の状態を取り込む。OPB が、アクセスの終わり（ODN）、時間切れ（TOR）、読出しの完了（DNRQ）を取り込む。U36 がトリガの 1 段目を取り込む。その後、CPU の要求の FF を消す [P]（DR-085、DR-091） |
-| q3（WPH） | A ファイルの書込み（/AWE ＝ AWQN ∨ 16 MHz で q3 の後半）。HACK が、A ファイルの窓の許可のスロットで CPU に DTACK を返す（AK）。FIFO への書込みの信号（SI）は q2〜q3 [V] |
+| q0〜q1 | A ファイルを読み、加算器が落ち着く。A バスの 0 の検出（U65–U67）が桁上げ（CY）を出す。W のアクセスでは ANX が FD に出す（OP から約 110 ns で落ち着く。IL 20 ns、ROT 2 段 50 ns、ANX 25 ns、緩衝器 12 ns）。STB がポートのアクセスの信号を出す。q1 の縁（SCLK が High の間の縁）で、HACK が CPU のアクセスを取り込み（CAP）、DTACK を出し、A ファイルを求める（HREQ）[P]（DR-098） |
+| 中ほど（MCLK↑・LCLK↑） | RDY が、このスロットの判断バスのチャネル（次のスロットの頭の候補）の準備を取り込む。PS か PD が A バスの番地を、SL が和を取り込む。CPU の読出しでは U7–U8 が A バスを取り込む。CHS・STS・ELS が、桁上げ（CY）とこのスロットの出来事（アクセスの完了、ERROR、CPU の要求）から、チャネルと要素の状態を取り込む。OPB が、アクセスの終わり（ODN）、時間切れ（TOR）、読出しの完了（DNRQ）を取り込む。U36 がトリガの 1 段目を取り込む。REQ0–1 が、HACK の取込みの印（CAP）と CTRL・STATUS の書込みから、CPU の要求を取り込む（次の LCLK まで 1 スロット。DR-098 の前は、CPU のストローブで要求の FF に入れ、LCLK の後に消していた）[P]（DR-085、DR-091、DR-098） |
+| q3（WPH） | A ファイルの書込み（/AWE ＝ AWQN ∨ 16 MHz で q3 の後半）。FIFO への書込みの信号（SI）は q2〜q3 [V]。DR-098 の前は、HACK が A ファイルの窓の許可のスロットの q3 の縁で DTACK を返していた（AK） |
 | スロットの終わり | R のアクセスで、ポートが FD に出した値を、次の SCLK で IL が取り込む。FIFO から読むときは、読出しの信号（SO）を q3 に出し、その前に取り込む [V] |
 
 - FIFO の満杯・空の信号は、書込み・読出しの信号の終わりから変わる。スロット m のアクセスの結果は、スロット m+1 の中ほどの取込みで見える。このため、満杯・空の信号を持つポートにアクセスするスロットと、その次のスロットの頭では、新しい要素を始めない（DR-046 (2)）。
@@ -99,6 +100,17 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 | 準備 → 頭の判断 | RDY（MCLK）→ READY → ELG → SEQ（SCLK） | 125 | 15＋25＋25＋25＝90 | 35 |
 | 判断バス → 属性 → 頭の判断 | SEQ（SCLK）→ 74LS173 → DPA → ELG → SEQ | 250 | 15＋27＋25＋25＋25＝117 | 133 |
 | START の検査 | CHS（LCLK）→ CST（CRLD、CK0）→ つなぎ（USEL）→ U32 → ATR → U33 → つなぎ（OKS）→ CHS（次の LCLK） | 250 | 15＋25＋15＋27＋28＋43＋15＋25＝193 | 57 |
+| CPU のストローブ → Y（DR-098） | 68000 の /UDS・/LDS（ストローブを出す 68000 の立上りの縁から t_div＋tCHSL 60）→ HDEC0 → HACK の Y（2 つ後の 16 MHz の縁、tSU 25） | 125 | t_div＋60＋25＋25 | 15−t_div |
+| 取込みの印 → 要求（DR-098） | HACK の CAP（q1 の縁）→ REQ0–1（LCLK、A-2 品の tSU 35） | 62.5＋15＝77.5 | 15＋35＝50 | 27.5 |
+| CPU の書込みの解読 → 要求（DR-098） | /UDS・/LDS（t_div 15＋tCHSL 60）→ HDEC0 → HDEC1 → U5–U6（74LS138 の選択 41）→ REQ0–1（LCLK） | 4×62.5＋15＝265 | 75＋25＋35＋41＋35＝211 | 54 |
+| CPU の要求 → 頭の判断（DR-098） | REQ0–1（LCLK、A-2 品の tCO 25）→ CST → ELG → SEQ（SCLK） | 125 | 25＋25＋25＋25＝100 | 25 |
+| START の要求 → START の検査（DR-098） | REQ の STRQ（LCLK）→ CST（CRLD）→ つなぎ（USEL）→ U32 → ATR → U33 → つなぎ（OKS）→ CHS（次の LCLK） | 250 | 25＋25＋15＋27＋28＋43＋15＋25＝203 | 47 |
+| STOP の要求 → 打切り（DR-098） | REQ の STPQ（LCLK）→ OPA の ABT → 74S32（ABQ）→ P1A・P2A（q0 の縁） | 125−15＝110 | 25＋25＋7＋25＝82 | 28 |
+| STOP の要求 → OP の写し（DR-098） | STPQ（LCLK）→ OPA の OPLD → P1A の DACK・L2、P2A の WQ（q0 の縁） | 110 | 25＋25＋25＝75 | 35 |
+| A ファイルの要求 → 頭の判断（DR-098） | HACK の HREQ（q1 の縁）→ ELG → SEQ・AFC0–1（次の SCLK） | 3×62.5＋15＝202.5 | 15＋25＋25＝65 | 137.5 |
+| DTACK（DR-098） | HACK の DTK（q1 の縁）→ A 基板の DTACK の集め → 68000（q3 の縁から t_div の立下り、tASI 20） | 125＋t_div | 15＋集め＋20 | 90＋t_div−集め |
+| STATUS の読出し（DR-098） | CHS・STS（LCLK）→ つなぎ（BUSY）→ U9–U10 → RD → U3–U4 → 68000（DTACK を認識した立下りの 2 つ後の 16 MHz の縁から t_div の立下り、tDICL 15） | 3×62.5−15＝172.5 | 15＋22＋18＋18＋15＝88 | 84.5 |
+| A ファイルの読出し → CPU（DR-098） | U7–U8（LCLK。74LS374 の CLK→Q 28 で数えた）→ RD → U3–U4 → 68000（同じ立下り、tDICL 15） | 172.5 | 28＋18＋15＝61 | 111.5 |
 
 - DR-090 の表では、LCLK を q3 に置き、LCLK から次の SCLK までの 62.5 ns に、PAL を 1 段通すだけの経路（24 ピンの A 品で 15＋25＋25＝65 ns）も入らなかった。1985年には 24 ピンの B 品も A-2 品もない（PAL.md）。DR-091 で、LCLK を q2 の縁（MCLK と同じ）へ早めて 125 ns にし、ほかを次のように直した [P]。
   - 桁上げ（CY）：加算器の C4 は、A ファイル → 74S283×4 → EVT → CHS で LCLK に入らないので、A バスの 0 の検出（74S02×2・74S30、U65–U67）から取る。CY を使うのは COUNT の更新と再設定の 3 段目（B ＝ 0xFFFF、Cin ＝ 0）だけで、そこでは CY ＝ A ≠ 0 が加算器の桁上げと同じ（05）。
@@ -107,12 +119,15 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
   - ポートの答え：q1〜q3 の縁で来た答えは P1A・P2A が預かり、次のスロットの q0 の縁で P1R・P2R にする（03 の上）。DR-090 の「port 1 の答え（q2 の縁）→ CHS」「port 2 の答え（q3 の縁）→ 同じ LCLK」は、q0 の縁から LCLK までの経路（上の表の「ポートの答え → 状態」）になった。
   - CHS の NBSY・NRUN（次の段階）は、EVT の BLK を通すと CY → EVT → CHS → STS が 70＋25＋25＋25＝145 ns で入らない。BLK を除いた部分（NBSYX、NRUN0）を CHS が出し、STS が BLK と合わせる。
   - P1A（PAL16R6A）、P2A（PAL16R8A）、HACK（PAL16R4A）を、A-2 品から A 品（tSU 25）にした。A-2 品（tCO 25、tSU 35）では、P1A の L2 から P2A の q1 の縁までが 25＋35＝60 ns で余裕が 2.5 ns しかない。同期化の後の入力（下の表）と、q3 の印からの打切りの余裕も小さい（5.5 ns）。
-  - OP の写し：P2A は q1 の縁でアクセスを見るが、OP（74LS377、SCLK）の P0・W からは 15＋27＋25＝67 ns で入らない（DR-089 の回路からあった不足で、DR-090 の表になかった）。P2A が要る 2 つ、port 2 の延びたアクセスが OP にあるか（L2）と向き（WQ）を、OP の写しとして、OP に入る q0 の縁（WPH ∧ OPLD）で NX から取り込む。L2 は P1A の空いた登録の出力（DACK と同じ入力：NXLG ∧ ¬NXP0 ∧ OPVD）、WQ は P2A の空いた登録の出力（入力は OPLD と NX の向き）。P2A は OP の P0・W と OPA の LA を見なくなった。部品は増えない。OP と写しは同じ OPLD で取り込むので中身は同じ。ただし OPLD は、q0 の縁と SCLK の間に CPU の STOP の要求で変わりうる（DACK と同じ。OI-088）[V]。74F377 は、74F（FAST）が日立の 1984年の早見表になく、1985年の国内での入手も確かめられないので使わない（[review-digital.md](../parts/review-digital.md) §4.2）。
-- START の検査は 2 スロットにまたがる経路として数えた。判断バスは、再設定を待つチャネルを DBCH に選んだ次のスロットから再設定の間 SEQ が DBCH を保つので変わらない。U32 の選択（USEL ＝ INF ∨ CRLD∧CK0）は、前の LCLK に登録した ELS の INF と CHS の段階から決まる。START の要求が、すでに DBCH のチャネルに来たとき（そのスロットで再設定の段 0 を始める）は、CRLD が要求の FF から来る（OI-088）。
+  - OP の写し：P2A は q1 の縁でアクセスを見るが、OP（74LS377、SCLK）の P0・W からは 15＋27＋25＝67 ns で入らない（DR-089 の回路からあった不足で、DR-090 の表になかった）。P2A が要る 2 つ、port 2 の延びたアクセスが OP にあるか（L2）と向き（WQ）を、OP の写しとして、OP に入る q0 の縁（WPH ∧ OPLD）で NX から取り込む。L2 は P1A の空いた登録の出力（DACK と同じ入力：NXLG ∧ ¬NXP0 ∧ OPVD）、WQ は P2A の空いた登録の出力（入力は OPLD と NX の向き）。P2A は OP の P0・W と OPA の LA を見なくなった。部品は増えない。OP と写しは同じ OPLD で取り込むので中身は同じ。ただし OPLD は、q0 の縁と SCLK の間に CPU の STOP の要求で変わりうる（DACK と同じ。OI-088）[V]。DR-098 で、STOP の要求（REQ の STPQ）は LCLK でだけ変わるようになり、この食い違いはなくなった（上の表の「STOP の要求 → OP の写し」）[P]。74F377 は、74F（FAST）が日立の 1984年の早見表になく、1985年の国内での入手も確かめられないので使わない（[review-digital.md](../parts/review-digital.md) §4.2）。
+- START の検査は 2 スロットにまたがる経路として数えた。判断バスは、再設定を待つチャネルを DBCH に選んだ次のスロットから再設定の間 SEQ が DBCH を保つので変わらない。U32 の選択（USEL ＝ INF ∨ CRLD∧CK0）は、前の LCLK に登録した ELS の INF と CHS の段階から決まる。START の要求が、すでに DBCH のチャネルに来たとき（そのスロットで再設定の段 0 を始める）は、CRLD が要求の FF から来る（OI-088）。DR-098 で、要求は REQ の STRQ（LCLK）になった（上の表の「START の要求 → START の検査」）。
 - B ファイルを出さないスロット（B ＝ 0xFFFF：COUNT の更新と再設定）は、74LS670 の出力の禁止（35）の後、B バスが引上げで High になる。15＋35＋立上り＋52＋10 で、立上りが 13 ns 以下なら入る。引上げの抵抗と B バスの負荷で決まる（680 Ω・20 pF なら約 6 ns）[V]。
 - A ファイルの書込みの保持は、TIM・AFC0・74S157 の最小の遅れ − 74S32 の最大の遅れ（7 ns）で、資料に最小の遅れがない [V]。データ（SL、U12–U13）は /AWE の終わりの 100 ns 以上前に落ち着く（tDSW 25）。
 - 余裕が 10 ns 以下の経路（STS → 頭の判断、桁上げ → BLK、和のラッチ、B ファイル）は、配線の遅れとクロックの分配のずれで足りなくなりうる [V]。
 - CPU の側の要求（STRQ・STPQ・W1C の FF、HDEC の AREQ）は、CPU のストローブで変わり、SCLK と同期化しないまま CST・ELG に入る。ストローブと SCLK の位相は、ウェイトの数で半スロットずつずれる [V]（OI-088）。
+- DR-098 で、CPU の側の要求は HACK（16 MHz）と REQ0–1（LCLK）の登録を通るようにした。CST・ELG・SEQ・CHS・STS・EVT・OPA に入るのは、REQ の出力（LCLK）と HACK の HREQ（q1 の縁）だけで、上の表の「（DR-098）」の行で閉じる。68000 のクロックは 16 MHz の 2 分周で、その縁は 16 MHz の縁から t_div 遅れる（q0・q2 の縁が立上り、q1・q3 の縁が立下り）。「CPU のストローブ → Y」は t_div ≤ 15 ns を要る：分周の FF を 74S74（CLK→Q 最大 9 ns と見た。値と日立の品は [V]）にして 68000 の CLK を直接駆動し、ほかの配線とクロックの分配のずれを 6 ns 以内にする [P][V]。これが閉じないと、Y がストローブを見る縁が 1 つ遅れ、待ちと効くスロットが変わりうる（07）。
+- 「DTACK」の行の集め（A 基板の DTACK の OR）の遅れは A 基板の回路で決まる [V]。DTK は q1 の縁で変わり、同じ縁の後の 68000 の立下り（t_div 後）で認識されてはいけない。DTK の変化（HACK の tCO の最小＋集めの最小）が t_div の最大より遅いことが要るが、資料に最小の遅れがない [V]（OI-092）。
+- 設定のレジスタ（74LS173・374・174）、B ファイル、PORT_RESET、AUDIO_N は、DR-085 から CPU の書込みの信号（U5–U6、HDEC1）の終わりで変わる。その時刻はストローブの戻り（68000 の立下りから tCLSH 70 以内）と解読の遅れ（HDEC0 25＋HDEC1 35＋74LS138 41）で決まり、スロットに対して決まらない（07）。68000 の書込みデータの保持（DS↑ から tSHDO 30 以上）より解読の遅れが長いと、データが変わった後に取り込む [V]（OI-092）。
 
 非同期の入力（1 段で Fabric のクロックに取り込むもの）の余裕。余裕は、取り込む縁から次のレジスタまでの時間 − 取り込む FF の CLK→Q − 間の組合せ − 次のレジスタの tSU で、メタステーブルが収まるのに使える時間 [P]（DR-088、DR-090、DR-091）。
 
@@ -124,12 +139,12 @@ Fabric は 16 MHz から作る 4 つの位相（q0〜q3、各 62.5 ns）で動�
 | トリガのレベル | U36（74LS74、LCLK） | STS の SYN2（次の LCLK） | 250−40−25＝185 | |
 | DOC の E | SYN1（74ALS74、16 MHz。DR-088） | P2A の SYN2 と 3 つの預かりの段、HACK の BW・BC・BDT（次の縁、tSU 25） | 62.5−18−25＝19.5 | **30 未満** |
 | ACRTC の DTACK・DONE | ブリッジの 74LS175（2 段目、16 MHz） | P1A（次の縁、tSU 25） | 62.5−25−25＝12.5 | **30 未満** |
-| CPU の /UDS・/LDS・R/W・番地（16 MHz と同期。位相はウェイトでずれる） | HDEC0 → HACK（16 MHz） | AK | 位相による | **OI-088** |
-| CPU の CTRL・STATUS の書込み | 要求の FF（74LS74・74LS175） | CST・CHS・STS | 位相による | **OI-088** |
+| CPU の /UDS・/LDS・R/W・番地（16 MHz の 2 分周の 68000 から。DR-098） | HDEC0 → HACK の Y（16 MHz） | HACK の CAP・HREQ・DTK（q1 の縁だけ。tSU 25） | 62.5−15−25＝22.5（下の注） | **30 未満** |
 
 - 74ALS74 の CLK→Q は 18 ns（最大）と仮定した [V]。DOC の E は、外部クロックのジャンパで 16 MHz と無関係になるときだけ非同期になる（DR-088）。
 - DR-091 で P1A・P2A・HACK を A 品にし、ACRTC のブリッジの 2 段目から P1A までは 2.5 ns から 12.5 ns に、DOC の E の SYN1 から P2A・HACK までは 9.5 ns から 19.5 ns になった [P]。エミュレータの同期化の模型（DR-088）の PAL の判定点と遅れは、A 品の tSU（最大 25 ns）の範囲に入るので変えていない（OI-086）。
 - トリガのレベルの U36 は、LCLK（q2 の縁）で取り込み、STS が次の LCLK で 2 段目を取る。LCLK が q3 から q2 に移っても、間は 1 スロットのまま。
+- CPU のストローブは 16 MHz と同じ源なので、Y がストローブを見る縁は遅れの範囲で決まる（07）。Y が決まらないうるのは、ストローブが出た次の縁（q1 か q3）と、戻った 1〜2 つ後の縁（q2・q3）で、次の縁は q1 ではないので CAP・HREQ・DTK は Y を見ず、その次の縁で Y は取り直される。22.5 ns は、上の表の「CPU のストローブ → Y」が破れて、q0 の縁で Y が決まらず、次の q1 の縁で使うときの余裕 [P]（DR-098）。DTK の保持の項は VLD・AREQ を直接見るので、ストローブが戻る縁で決まらないうるが、そのとき 68000 は DTACK を見ておらず、CAP・HREQ が DTK を見る q1 の縁の前に取り直される。
 
 ## 04　変換部
 
@@ -363,9 +378,10 @@ PIN MCLK S0 S1 S2 S3 D0 D1 D2 D3 RDY1 RDY2 GND GND OR4 OR10 IR3 SRDY DRDY NC NC 
 | 動作（COUNT の更新で最後と分かった。新しい要素を始めない） | 011 | | 101・110・111 | 再設定の段 0・1・2 |
 
 - 要素（ELS）：INF の間、Q1＝0 は W を決めていない段階（Q0 は読出しが済んだ）、Q1＝1 は W を決め、W の後の COUNT の更新を待つ段階（Q0 は W が済んだ）。W と COUNT の更新を決めた要素は、書込みの残り（TL）に移る。TL は W が済むと消え、最後の要素なら BLK を出す。要素があるとき DBCH は要素のチャネルで、ACH も同じ。
-- つなぎ（74LS 系）[P]：USEL ＝ INF ∨ CRLD∧CK0。HOLD ＝ S ∧ CRUN ∧（判断バスの SRC が 0）。OKS ＝（DOC があれば OKD、なければ OKN）∧ U33。IMM ＝ TRIGGER の発生源が 0。STATUS の BUSY ＝ P2 ∨ P1。CPU への許可は AOP＝001（HACK が見る）。
+- つなぎ（74LS 系）[P]：USEL ＝ INF ∨ CRLD∧CK0。HOLD ＝ S ∧ CRUN ∧（判断バスの SRC が 0）。OKS ＝（DOC があれば OKD、なければ OKN）∧ U33。IMM ＝ TRIGGER の発生源が 0。STATUS の BUSY ＝ P2 ∨ P1（REQ0–1 も見る。DR-098）。CPU への許可は AOP＝001（DR-098 で HACK は AOP を見なくなった。SEQ は HREQ を見た SCLK で必ず許可する）。
 - DR-089 で、S のスロットの規則・番地の有無・FB は DPA が判断バスの SRC・DST から直接作る（下の「アクセスの制御」）。U32 → ATR を通らないので、頭の判断の経路が短くなる。ELG の入力の SOK・ADDR・FB は、読出し元の側の GOKS（S の規則と FB の待ち）・ADDRS と、書込み先の側の SOKD・ADDRD になった（新しい要素を始めてよいときは USEL＝0、要素があるときは USEL＝1 なので、どちらの側かは決まっている）。CD は OPA が出す。
 - CPU の要求の FF [P]：CTRL の書込みは、STOP（ID1）なら STPQ、START（ID0）で段階が 000 なら STRQ に入る（チャネルごとに 74LS74）。STATUS の W1C は WDQ・WEQ・WMQ（チャネルごとに 74LS175）。CST・CHS・STS・EVT が次のスロットで使い、LCLK（DR-091 で q2 の縁）の後に消す。STOP の要求のあるチャネルのアクセスは、次の頭で OP と NX から捨て、延びたアクセスは打ち切る（OPA の ABT を P1A・P2A へ）。68000 のバスサイクルは 2 スロット以上なので、CPU の次のアクセスは、要求を使った LCLK の後になる。要求の FF が SCLK と同期していないことは OI-088 [V]。
+- DR-098 で、要求の FF（U37、U59 の 74LS74、U60–U61 の 74LS175）を、チャネルごとの REQ0–1（PAL16R6A-2、LCLK）に替えた。REQ は、HACK の取込みの印（CAP）が 1 の LCLK で、U5–U6 の CTRL・STATUS の書込みの解読と ID のビットから要求を取り込み、次の LCLK で消す（CAP は 1 スロットだけ 1）。START はつなぎの BUSY（P2 ∨ P1。LCLK の前の CHS）が 0 のときだけ取り込む。要求は、取り込んだ次のスロットの頭の判断と、そのスロットの LCLK で効く [P]。
 - 確かめたこと：CHS の段階・OK・DONE・ERROR と STS（2^17 通り）は届きうる入力と状態の組の全部、SEQ の AOP は操作の種類と段の全部で、fabric_logic.py の仕様の定義と一致する。全体は、式から生成した関数をつないだ門の模型（`emulator/crates/board/tests/fabric_gate/mod.rs`）とエミュレータのスロットの模型（`fabric.rs`）を並べて動かし、スロットの記録、STATUS、段階、割込み、CPU への応答、ポートへの働きかけが、すべてのスロットで一致した（fabric.rs の試験と同じ転送の筋書き、DOC 子基板の延びるアクセス、擬似乱数の CPU の手順とポート 64 通り × 8,000 スロット）[P]。DR-089 で、アクセスの制御と CPU の窓も式にし、延びたアクセスの時間切れ（port 1、DOC の port 2）、port 1 の DONE の印の食い違い、延びたアクセスの途中の STOP、port 9 の 2 スロットのアクセス、転送中の PORT_RESET の筋書きを足した。fabric.rs の側は 1 か所を直した：NX が判断のときの FORMAT を持つので、アクセスの幅と変換の FORMAT を判断のときの値にした（OI-084 (1)）[P]。
 
 ```
@@ -383,23 +399,23 @@ PIN P2N0 P1N0 P0N0 P2N1 P1N1 P0N1 STRQ0 STRQ1 STPQ0 STPQ1 DBCHN GND ARMXN0 ARMXN
 /ORUNN = /DBCHN*/P1N0*/P0N0*/STPQ0 + DBCHN*/P1N1*/P0N1*/STPQ1
 
 ; ELG (PAL20L8A)  このスロットの頭の判断：A ファイルの操作の種類（AC2–AC0）、新しい要素（GR）、書込み（GW）、要素が残るか（KEEP）、STALL の評価（STV、STL）。出力は負の論理
-PIN INFN Q1N EPCN CRUNN CRAN CRLDN CARMN READY GOKS ADDRS SOKD GND CD HREQ GRN AC2N AC1N AC0N GWN KEEPN STVN STLN ADDRD VCC
-/GRN = INFN*CD*/CRAN*/CARMN*READY*GOKS*/HREQ
-/AC2N = INFN*CD*/CRAN*/CARMN*READY*GOKS*/HREQ*/ADDRS
-+ /INFN*/CRUNN*Q1N*CD*SOKD*/ADDRD*/EPCN*/HREQ
-+ /INFN*/CRUNN*/Q1N*/HREQ
-+ /CRLDN*CD*/HREQ
-/AC1N = INFN*CD*/CRAN*/CARMN*READY*GOKS*/HREQ*ADDRS
-+ /INFN*/CRUNN*Q1N*CD*SOKD*ADDRD*/HREQ
-/AC0N = HREQ + /INFN*/CRUNN*Q1N*CD*SOKD*ADDRD + CD*/CRLDN
-/GWN = /INFN*/CRUNN*Q1N*CD*SOKD*/ADDRD*EPCN + /INFN*/CRUNN*Q1N*CD*SOKD*/HREQ
-/KEEPN = INFN*CD*/CRAN*/CARMN*READY*GOKS*/HREQ
-+ /INFN*/CRUNN*/Q1N*HREQ
+PIN INFN Q1N EPCN CRUNN CRAN CRLDN CARMN READY GOKS ADDRS SOKD GND CD HREQN GRN AC2N AC1N AC0N GWN KEEPN STVN STLN ADDRD VCC
+/GRN = INFN*CD*/CRAN*/CARMN*READY*GOKS*HREQN
+/AC2N = INFN*CD*/CRAN*/CARMN*READY*GOKS*HREQN*/ADDRS
++ /INFN*/CRUNN*Q1N*CD*SOKD*/ADDRD*/EPCN*HREQN
++ /INFN*/CRUNN*/Q1N*HREQN
++ /CRLDN*CD*HREQN
+/AC1N = INFN*CD*/CRAN*/CARMN*READY*GOKS*HREQN*ADDRS
++ /INFN*/CRUNN*Q1N*CD*SOKD*ADDRD*HREQN
+/AC0N = /HREQN + /INFN*/CRUNN*Q1N*CD*SOKD*ADDRD + CD*/CRLDN
+/GWN = /INFN*/CRUNN*Q1N*CD*SOKD*/ADDRD*EPCN + /INFN*/CRUNN*Q1N*CD*SOKD*HREQN
+/KEEPN = INFN*CD*/CRAN*/CARMN*READY*GOKS*HREQN
++ /INFN*/CRUNN*/Q1N*/HREQN
 + /INFN*/CRUNN*Q1N*/CD
 + /INFN*/CRUNN*Q1N*/SOKD
-+ /INFN*/CRUNN*Q1N*ADDRD*HREQ
-+ /INFN*/CRUNN*Q1N*/EPCN*HREQ
-+ /INFN*/CRUNN*Q1N*/EPCN*ADDRD*/HREQ
++ /INFN*/CRUNN*Q1N*ADDRD*/HREQN
++ /INFN*/CRUNN*Q1N*/EPCN*/HREQN
++ /INFN*/CRUNN*Q1N*/EPCN*ADDRD*HREQN
 /STVN = INFN*CD*/CRAN
 /STLN = /CARMN*/READY
 
@@ -625,17 +641,27 @@ PIN C16 SYN1 L2N OPLDN NXW ABQN WPHN BWN NC GND GND SYN2N S1N S0N RDHN PNDN P2RN
 CHS・STS の登録する状態と式は、上の「順序と状態の PAL」の表とブロック [P]（DR-085）。CHS は段階・START の検査・DONE・ERROR を、STS はトリガと STALL を持つ。STATUS の BUSY・WAIT は CHS・STS の出力から作る。
 
 - START の検査：再設定の 1 スロット目で読出し元を、2 スロット目で書込み先を、ATR（DOC の有無で OKD か OKN）と U33 で調べる。3 スロット目で、どちらかが使えなければ ERROR、COUNT の設定値が 0（CY＝0）なら DONE にする（DR-046 (9)）。
-- トリガ：U34・U35（74LS151）が TRIGGER の発生源を選び、U36（74LS74）と STS の 2 段で同期化し、立上りで 1 件だけ保留する。保留中の立上りは MISS（DR-018、DR-046 (8)）。発生源 6・7 の入力は Low に固定し、トリガは来ない。選択器が同期化の前にあるので、TRIGGER の発生源を替えたとき、選んだ入力が High なら立上りとして伝わる。チャネルが止まっている間の立上りは数えないので、TRIGGER を書いてから 3 スロット以上あけて START する [P]（エミュレータの模型で確かめた。[emulator.md](../impl/emulator.md) §03）。
+- トリガ：U34・U35（74LS151）が TRIGGER の発生源を選び、U36（74LS74）と STS の 2 段で同期化し、立上りで 1 件だけ保留する。保留中の立上りは MISS（DR-018、DR-046 (8)）。発生源 6・7 の入力は Low に固定し、トリガは来ない。選択器が同期化の前にあるので、TRIGGER の発生源を替えたとき、選んだ入力が High なら立上りとして伝わる。チャネルが止まっている間の立上りは数えないので、TRIGGER を書いてから 3 スロット以上あけて START する [P]（エミュレータの模型で確かめた。[emulator.md](../impl/emulator.md) §03）。DR-098 で、TRIGGER の書込みの S0 から START の S0 まで 4 スロット以上と言い直した（07。TRIGGER と CTRL を 1 回の 32-bit の書込みで続けて書くと 3 スロットになり、最初の立上りを数えるかは実機で決まらない）[P]。
 - 割込み：IRQ ＝ IRQ_EN0∧(DONE0∨ERROR0) ∨ IRQ_EN1∧(DONE1∨ERROR1) をつなぎのゲートで作り、レベル 3 へ（DR-028）。
 
 ## 07　CPU のインタフェース
 
 - 窓は 0x250000〜0x250FFF（仕様書 §05。/FCS は A 基板の解読から）。レジスタは 16-bit のアクセスだけに答える。8-bit のアクセス、チャネル 2・3、各チャネルの 0x20〜0x3E、0x250106 以降には DTACK を返さず、A 基板のバスの時間切れでバスエラーになる（DR-046 (10)）。
-- 書込み：SRC・DST・FORMAT・SHIFT・MASK・XOR・TRIGGER は ID からそのまま取り込む（HDEC と U5–U6）。STEP は B ファイルの書込みポートへ（番地は HA6 と HA4）。CTRL は要求の FF（STRQ・STPQ）を通して CST・CHS へ、STATUS の W1C は要求の FF（WDQ・WEQ・WMQ）を通して CHS・STS へ（06。DR-085）。SRC_ADDR・DST_ADDR・COUNT は HACK が SEQ に A ファイルを求め（HREQ）、許可（HGNT）のスロットで書く。PORT_RESET は PRST がポートごとの初期化の信号に直す。AUDIO_N は書込みの信号だけを出し、音声クロックの分周器（board.md の ADPCM・本体 DAC のブロック）が取り込む。
-- 読出し：作業値は A ファイルから U7–U8 を通して（2〜3 ウェイト [V]）、STATUS は U9–U10、MODULES は U11 から。ほかのレジスタと 32-bit の上位の語は、RD に何も出さないので 0 が読める。
-- DTACK：A ファイルを使わないアクセスは HACK がすぐ返す。A ファイルのアクセスは、許可のスロットの q3 の縁（3/4）で返す。
-- DR-089 で式を書いた [P]。式は下のブロック（[tools/fabric/pal/host.pal](../../tools/fabric/pal/host.pal)）。HDEC0 は、窓の解読に 15 本の入力が要るので PAL20L8A にした（HDEC1 は PAL16L8A-2 のまま）。HDEC0 が DTACK をすぐ返すアクセス（VLD）、A ファイルのアクセス（AREQ：0x06・0x0A・0x0C）、チャネルと全体のレジスタの範囲を出し、HDEC1 が書込みの信号と STATUS の読出しの許可を出す。オフセット 0x12〜0x1E の書込みは U5–U6（74LS138。A6 でチャネル、A3–A1 で語）。HACK は AK（許可のスロットの q3 の縁で立ち、AREQ が落ちるまで保つ）と HREQ（AREQ ∧ ¬AK ∧ ¬許可。DR-091 で、許可のスロットの頭から下げ、q3 の縁の AK を待たずに ELG が次の判断をできるようにした）、DTACK、DOC の窓のブリッジの 3 つのレジスタを持つ。AK は MCLK が High の間の縁、つまり q3 の縁で立つ（DR-089 の「LCLK の縁」は、LCLK が q3 の縁で立っていたときの言い方で、時刻は変わらない）。HACK は A 品（PAL16R4A）にした（03）。PRST は PORT_RESET の bit 2–7、10 と電源投入の RESN から、ポートごとの初期化の信号を出す。
+- 書込み：SRC・DST・FORMAT・SHIFT・MASK・XOR・TRIGGER は ID からそのまま取り込む（HDEC と U5–U6）。STEP は B ファイルの書込みポートへ（番地は HA6 と HA4）。CTRL は要求の FF（STRQ・STPQ）を通して CST・CHS へ、STATUS の W1C は要求の FF（WDQ・WEQ・WMQ）を通して CHS・STS へ（06。DR-085）。DR-098 で、要求の FF は REQ0–1 になった（06）。SRC_ADDR・DST_ADDR・COUNT は HACK が SEQ に A ファイルを求め（HREQ）、許可（HGNT）のスロットで書く。PORT_RESET は PRST がポートごとの初期化の信号に直す。AUDIO_N は書込みの信号だけを出し、音声クロックの分周器（board.md の ADPCM・本体 DAC のブロック）が取り込む。
+- 読出し：作業値は A ファイルから U7–U8 を通して（2〜3 ウェイト [V]。DR-098 で 3〜4 ウェイト）、STATUS は U9–U10、MODULES は U11 から。ほかのレジスタと 32-bit の上位の語は、RD に何も出さないので 0 が読める。
+- DTACK：A ファイルを使わないアクセスは HACK がすぐ返す。A ファイルのアクセスは、許可のスロットの q3 の縁（3/4）で返す。DR-098 で、どちらも q1 の縁で返すようにした（下の「CPU のバスサイクル」）。
+- DR-089 で式を書いた [P]。式は下のブロック（[tools/fabric/pal/host.pal](../../tools/fabric/pal/host.pal)）。HDEC0 は、窓の解読に 15 本の入力が要るので PAL20L8A にした（HDEC1 は PAL16L8A-2 のまま）。HDEC0 が DTACK をすぐ返すアクセス（VLD）、A ファイルのアクセス（AREQ：0x06・0x0A・0x0C）、チャネルと全体のレジスタの範囲を出し、HDEC1 が書込みの信号と STATUS の読出しの許可を出す。オフセット 0x12〜0x1E の書込みは U5–U6（74LS138。A6 でチャネル、A3–A1 で語）。HACK は AK（許可のスロットの q3 の縁で立ち、AREQ が落ちるまで保つ）と HREQ（AREQ ∧ ¬AK ∧ ¬許可。DR-091 で、許可のスロットの頭から下げ、q3 の縁の AK を待たずに ELG が次の判断をできるようにした）、DTACK、DOC の窓のブリッジの 3 つのレジスタを持つ。AK は MCLK が High の間の縁、つまり q3 の縁で立つ（DR-089 の「LCLK の縁」は、LCLK が q3 の縁で立っていたときの言い方で、時刻は変わらない）。HACK は A 品（PAL16R4A）にした（03）。DR-098 で PAL16R8A にし、AK と AOP の入力をなくした（下の「CPU のバスサイクル」）。PRST は PORT_RESET の bit 2–7、10 と電源投入の RESN から、ポートごとの初期化の信号を出す。
 - 確かめたこと：HDEC0–1 は窓の番地・幅・向きの全部で仕様書 §06 の窓と、HACK・PRST は入力と状態の全部で、fabric_logic.py の仕様の定義と一致する [P]。
+
+### CPU のバスサイクル（DR-098）
+
+- 68000 のクロック（8 MHz）は 16 MHz の 2 分周で、立上りは q0 か q2 の縁、立下りは q1 か q3 の縁の t_div 後（03）。S0 の立上りのクロックを at（16 MHz の縁で 2·at）、S0 を含むスロットを n、位相を q0（at が偶数）か q2（奇数）とする。読出しのストローブは S2（at＋1）、書込みは S4（at＋2）の立上りで出る（tCHSL 60 以内）。DTACK は S4 の終わり（at＋2.5）の立下りから見る。認識した立下りを F とすると、S7 は F の 2 つ後の 16 MHz の縁で、サイクルは 3 つ後の縁で終わる。
+- HACK（PAL16R8A、16 MHz の縁ごと）：Y ＝ VLD ∨ AREQ を毎縁取り込む。ストローブを出した縁の次の縁で見るかは決まらないが、2 つ後の縁では必ず見る（03 の「CPU のストローブ → Y」）。CAP・HREQ・DTK は q1 の縁（SCLK が High の間の縁）でだけ Y から決め、ほかの縁では保つ。q1 の縁で Y＝1 かつ DTK＝0 なら、そのスロットを取込みのスロット c とし、CAP を 1 スロット出す。A ファイルを使わないアクセス（VLD）は同じ縁で DTK を出す。A ファイルのアクセス（AREQ）は HREQ を出し、SEQ が次の SCLK で必ず許可する（許可のスロット g ＝ c＋1）。DTK は q1(g) の縁で出す。DTK は VLD か AREQ がある間保つ（ストローブが戻った 1〜3 つ後の縁で落ちる）。
+- ストローブを確かに見る縁は q0 か q2 で、次の縁で見ても q1 の縁より前なので、c はストローブの位相だけで決まる：c ＝ ⌊(at＋3＋w)／2⌋（w は書込みで 1、読出しで 0）。DTACK は q1(r) の縁で出て、q3(r) の縁の後の立下りで認識される（r ＝ c、A ファイルは r ＝ g）。待ちの数は 2r−at−1：A ファイルを使わない読出しは q0 で 1、q2 で 2。書込みは 3 と 2。A ファイルの読出しは 3 と 4、書込みは 5 と 4 [P]。
+- 効く時刻：CTRL（START・STOP）と STATUS の W1C は REQ が LCLK(c) で取り込み、スロット c＋1 の頭の判断と LCLK で効く。書込みでは位相によらず c ＝ n＋2 なので、n＋3。START は LCLK(c) の BUSY（スロット c の頭の段階）が止まっているときだけ取り込む。読出しの値は、STATUS はスロット c の LCLK の後の値、A ファイルはスロット g で読んだ値（U7–U8 が LCLK(g) で取り込む）。A ファイルの書込みはスロット g の q3 の縁 [P]。
+- 設定のレジスタ、B ファイル、PORT_RESET、AUDIO_N は、書込みの信号の終わり（ストローブの戻りと解読の遅れ）で変わる。最も早くて q1(c＋1) の縁の後、最も遅くて SCLK(c＋2) の少し前（ストローブの戻り q1(c＋1)＋t_div＋70、解読 101 で q0(c＋2) の 1.5 ns 前）に変わる。トリガの選択（U34–U35 → U36）は LCLK(c＋2) に、判断は SCLK(c＋3) に必ず間に合う。LCLK(c＋1) から LCLK(c＋2) までの取込みと c＋2 の頭の判断が、古い値と新しい値のどちらを見るかは決まらない（止まっているチャネルの設定は判断に使わないので、動作中の書換え（Bend）でだけ効く）[P][V]（OI-092）。エミュレータは c＋2 の頭で変える。PORT_RESET の初期化の信号（PRST）は書込みの信号の間出る。
+- TRIGGER の発生源の替えと START：TRIGGER（S0 のスロット nT）の新しい値を U36 が取るのは LCLK(nT＋3) か LCLK(nT＋4)、STS が立上りを数えるのはその 2 つ後の LCLK。START（S0 のスロット nS）で段階が変わるのは LCLK(nS＋3)。nS ≥ nT＋4 なら、替えたときの立上りは止まっている間に来て数えない。TRIGGER と CTRL を 1 回の 32-bit の書込みで続けて書くと nS ＝ nT＋3（位相 q2）になり、数えるかは決まらない（エミュレータは数える）[P]。
+- 確かめたこと：fabric_logic.py が、HACK と REQ の式を、2 つ続けたバスサイクル（STATUS の読出し、CTRL の STOP、STATUS の W1C、A ファイルの読出しと書込み）× S0 の位相 2 × 間の空き 0〜1 クロック × Y がストローブを見る縁と戻りを見る縁の選び方 36 通りの 3,600 通りで 16 MHz の縁ごとに動かし、取込みの縁、DTK の縁、許可、認識の縁、待ちの数、REQ の要求が上の式どおりで、選び方によらないことを確かめた [P]。
 
 ```
 ; HDEC0 (PAL20L8A)  CPU の窓（/FCS、16-bit のアクセス、A11–A1）の解読：DTACK をすぐ返すアクセス（VLD）、A ファイルのアクセス（AREQ：0x06・0x0A・0x0C）、チャネルのレジスタの範囲（CH）、全体のレジスタの範囲（GL：0x100〜0x104）、A ファイルの読出しの許可（RAF：U7–U8）、MODULES（RMOD：U11）、読出しの緩衝器（RDEN：U3–U4）
@@ -667,14 +693,24 @@ PIN CHN GLN RW A6 A4 A3 A2 A1 NC GND NC W1XN WSRCN WDSTN WBFN WPRSTN WAUDN RST0N
 /RST0N = /CHN*RW*/A6*A4*A3*A2*A1
 /RST1N = /CHN*RW*A6*A4*A3*A2*A1
 
-; HACK (PAL16R4A)  68000 の DTACK（16 MHz の縁ごと）。Fabric の窓：A ファイルを使わないアクセスはすぐ（VLD）、A ファイルのアクセスは SEQ の許可（AOP＝001）のスロットの q3 の縁で返す（AK）。HREQ は ELG への要求で、許可のスロットの頭から下げる（AOP＝001）。DOC の窓のブリッジ（DR-035、DR-050）：/DCS を取り込んで窓を待ち（BW）、同期化した E の立下りで次の窓を取り（BC。P2A より先）、その窓の終わりの立下りで DTACK を出す（BDT）
-PIN C16 AREQN VLDN AOP2N AOP1N AOP0N MCLK SYN1 SYN2N GND GND DCSN NC AKN BWN BCN BDTN HREQ DTKN VCC
-/AKN := /AREQN*AOP2N*AOP1N*/AOP0N*MCLK + /AREQN*/AKN
+; HACK (PAL16R8A)  68000 の DTACK と A ファイルの要求（16 MHz の縁ごと。DR-098）。Y は窓のアクセス（VLD ∨ AREQ）の同期化で、毎縁取り込む。q1 の縁（SCLK が High の間の縁）だけで、Y から次を決める：取込みの印（CAP：DTACK の前の Y。1 スロットの間 1 で、要求の PAL が LCLK で見る）、A ファイルの要求（HREQN：ELG へ。SEQ はそれを見た SCLK で必ず許可する（AOP＝001））、DTACK（DTKN）。DTACK は、A ファイルを使わないアクセスでは取込みの q1 の縁、A ファイルのアクセスでは許可のスロットの q1 の縁で出し、ストローブが戻るまで保つ。DOC の窓のブリッジ（DR-035、DR-050）：/DCS を取り込んで窓を待ち（BW）、同期化した E の立下りで次の窓を取り（BC。P2A より先）、その窓の終わりの立下りで DTACK を出す（BDT。DTKN にも同じ縁で出す）
+PIN C16 AREQN VLDN SCLK SYN1 SYN2N DCSN NC NC GND GND YN CAPN HREQN DTKN BWN BCN BDTN NC VCC
+/YN := /VLDN + /AREQN
+/CAPN := SCLK*/YN*DTKN + /SCLK*/CAPN
+/HREQN := SCLK*/YN*/AREQN*HREQN*DTKN + /SCLK*/HREQN
+/DTKN := SCLK*/YN*/VLDN + SCLK*/HREQN*/AREQN + /DTKN*BDTN*/VLDN + /DTKN*BDTN*/AREQN
++ /BCN*/SYN2N*/SYN1*/DCSN + /BDTN*/DCSN
 /BWN := /DCSN*BWN*BCN*BDTN*SYN2N + /DCSN*BWN*BCN*BDTN*SYN1 + /BWN*/DCSN*SYN2N + /BWN*/DCSN*SYN1
 /BCN := /SYN2N*/SYN1*/DCSN*BWN*BCN*BDTN + /SYN2N*/SYN1*/DCSN*/BWN + /BCN*SYN2N + /BCN*SYN1
 /BDTN := /BCN*/SYN2N*/SYN1*/DCSN + /BDTN*/DCSN
-/HREQ = AREQN + /AKN + AOP2N*AOP1N*/AOP0N
-/DTKN = /VLDN + /AKN*/AREQN + /BDTN
+
+; REQ (PAL16R6A-2)  CPU の要求の登録（DR-098）。チャネルごとに 1 個で、REQ0・REQ1 は同じ式。LCLK で、HACK の取込みの印（CAP）と、U5–U6 の CTRL（0x1C）・STATUS（0x1E）の書込みの解読（CTRLN、STATN）と ID のビットから、START・STOP の要求（STRQ、STPQ）と STATUS の W1C の要求（WDQ：DONE、WEQ：ERROR、WMQ：MISS）を 1 スロット出す。STOP が先。START はチャネルが止まっているとき（つなぎの BUSY ＝ P2 ∨ P1 が 0）だけ
+PIN LCLK CAPN CTRLN STATN D0 D1 D3 D4 BUSY GND GND NC STRQ STPQ WDQ WEQ WMQ NC NC VCC
+/STRQ := CAPN + CTRLN + /D0 + D1 + BUSY
+/STPQ := CAPN + CTRLN + /D1
+/WDQ := CAPN + STATN + /D1
+/WEQ := CAPN + STATN + /D3
+/WMQ := CAPN + STATN + /D4
 
 ; PRST (PAL16L8A-2)  PORT_RESET の書込み（WPRST）と ID のビットから、ポートごとの初期化の信号（2：本体 DAC の FIFO、3・4：DSP の FIFO、5：ADPCM の FIFO とアダプタ、6・7：Temporal RAM のポインタ、10：音声入力の FIFO）。電源投入の RESN でも出す
 PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N RST10N NC VCC
@@ -691,7 +727,8 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 |---|---:|---:|---:|---:|
 | HDEC0 | 15 | 7 | 7／7 | 0 |
 | HDEC1 | 8 | 8 | 2／7 | 2 |
-| HACK | 9 | 6 | 3／7・4／8 | 1 |
+| HACK | 6 | 7 | 6／8 | 3 |
+| REQ0・REQ1 | 8 | 5 | 5／8 | 3 |
 | PRST | 9 | 7 | 2／7 | 2 |
 
 ## 08　ポートの側
@@ -716,7 +753,8 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 | CPU のインタフェース | U3–U4 | 74LS240 | 2 | 内部の読出しバス RD から CPU へ（反転。RD は引上げで、何も出さないと 0 が読める） |
 | CPU のインタフェース | HDEC0 | PAL20L8A | 1 | 番地の解読：DTACK をすぐ返すアクセス、A ファイルの要求、レジスタの範囲、読出しの選択（DR-089 で 16L8A-2 から） |
 | CPU のインタフェース | HDEC1 | PAL16L8A-2 | 1 | レジスタの書込みの信号、STATUS の読出しの許可 |
-| CPU のインタフェース | HACK | PAL16R4A | 1 | DTACK。A ファイルのアクセスでは SEQ の許可を待つ。DOC の窓のブリッジの 3 つのレジスタ（DR-089。DR-091 で 16R4A-2 から） |
+| CPU のインタフェース | HACK | PAL16R8A | 1 | DTACK。CPU のアクセスの取込み（CAP）と A ファイルの要求（HREQ）。DOC の窓のブリッジの 3 つのレジスタ（DR-089。DR-091 で 16R4A-2 から 16R4A、DR-098 で 16R8A） |
+| CPU のインタフェース | REQ0–REQ1 | PAL16R6A-2 | 2 | CTRL の要求（STRQ、STPQ）と STATUS の W1C の要求（WDQ、WEQ、WMQ）を LCLK で（ch0、ch1。DR-098） |
 | CPU のインタフェース | U5–U6 | 74LS138 | 2 | チャネルごとに、オフセット 10〜1E の書込みの信号 |
 | 読出しの経路 | U7–U8 | 74LS534 | 2 | A ファイルの読出しのラッチ（反転。A バス → RD。CPU のサイクルの終わりまで保つ） |
 | 読出しの経路 | U9–U10 | 74LS240 | 2 | STATUS（ch0、ch1）→ RD |
@@ -762,9 +800,7 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 | 順序と状態 | ATR | 63S281A | 1 | ポートの属性（256×8 PROM） |
 | 順序と状態 | U33 | 74LS151 | 1 | ポートがあるか（port 8〜15 の /PRES を選ぶ） |
 | 順序と状態 | U34–U35 | 74LS151 | 2 | トリガの発生源を選ぶ（ch0、ch1） |
-| 順序と状態 | U36–U37 | 74LS74 | 2 | トリガの同期化の 1 段目（ch0、ch1）、ch0 の CTRL の要求（STRQ0、STPQ0）。桁上げのラッチは DR-085 でなくした |
-| 順序と状態 | U59 | 74LS74 | 1 | ch1 の CTRL の要求（STRQ1、STPQ1）（DR-085） |
-| 順序と状態 | U60–U61 | 74LS175 | 2 | STATUS の W1C の要求（WDQ、WEQ、WMQ。ch0、ch1）（DR-085） |
+| 順序と状態 | U36 | 74LS74 | 1 | トリガの同期化の 1 段目（ch0、ch1）。桁上げのラッチは DR-085 でなくした。CPU の要求の FF（U37、U59 の 74LS74、U60–U61 の 74LS175。DR-085）は DR-098 で REQ0–REQ1 に替えた |
 | 順序と状態 | U62–U63 | 74LS32・74LS08 ほか | 2 | つなぎ：USEL・OKS・HOLD（SRC＝0）・LG・F4・RDY2（DOC ∨ 本体 DAC の IR）のゲート（DR-085、DR-089。FLAG の FF と SOK・CD は DPA・OPA へ移した。ゲートの数は [V]） |
 | 順序と状態 | U68 | 74S32 | 1 | 打切りを q0 の縁だけに（ABQ ＝ ABT∧WPH）、A ファイルの書込み（/AWE ＝ AWQN ∨ 16 MHz）（DR-091） |
 | 順序と状態 | U38 | 74LS163 | 1 | 時間切れ（延びたアクセスの間の LCLK を数え、16 スロット目に TOUT。DR-089 で 74LS393 から） |
@@ -781,23 +817,24 @@ PIN WPRSTN D2 D3 D4 D5 D6 D7 D10 RESN GND NC RST2N RST3N RST4N RST5N RST6N RST7N
 | ポートの側 | U53–U55 | 74LS21 | 3 | 67401 を 4 個並べた FIFO の IR・OR の AND |
 | ポートの側 | U56 | 74LS245 | 1 | port 6・7：Temporal RAM とのデータ |
 | ポートの側 | U57 | 74LS245 | 1 | port 8、10〜15：拡張の端子とのデータ |
-| **合計** | | | **129** | PAL 33（24 ピン 22、20 ピン 11）、TTL と PROM 96。ほかに 67401×14 |
+| **合計** | | | **127** | PAL 35（24 ピン 22、20 ピン 13）、TTL と PROM 92。ほかに 67401×14 |
 
 | 区分 | 個数 | うち PAL |
 |---|---:|---:|
-| CPU のインタフェース | 9 | 3 |
+| CPU のインタフェース | 11 | 5 |
 | 読出しの経路 | 5 | 0 |
 | 番地と COUNT | 24 | 0 |
 | 変換 | 12 | 8 |
 | 設定のレジスタ | 18 | 0 |
-| 順序と状態 | 44 | 20 |
+| 順序と状態 | 40 | 20 |
 | ポートの側 | 17 | 2 |
-| 合計 | 129 | 33 |
+| 合計 | 127 | 35 |
 
 - 見積り（DR-041、board.md §02 v0.4）の 90〜130 個の中で、B 基板の見積りが外れる目安の約 110 個を下回った（DR-050 で 1 個足して 109 個）。ただし、順序と状態の PAL は式を書くと 1〜3 個増える可能性がある [V]（OI-050）。
 - DR-085 で判断と状態の式を書くと、PAL が 4 個（CST、ELS、EVT、ADC）、TTL が 7 個（NX0–NX1、CPU の要求の FF 3 個、つなぎ 2 個）増え、120 個になった。目安の約 110 個を超える。基板への影響（面積、電流、board.md の見積り）は OI-082 [V]。アクセスの制御と STB、HDEC、HACK、TIM、P1A、P2A、PRST の式はまだなので、さらに増える可能性がある。
 - DR-088・DR-089 で式を書き終え、124 個になった。PAL が 3 個（DPA、OPA、OPB）、TTL が 1 個（SYN1 の 74ALS74）増え、HDEC0 は 20 ピンから 24 ピンへ、P2A は 16R4A-2 から 16R6A-2 へ替わった。FLAG の FF と SOK・CD のゲートは PAL に入り、LG・F4・RDY2 のゲートが加わって、つなぎ（U62–U63）の数は変わらない [P]。時間の予算（03）の直し方によっては、さらに 2〜3 個増える（OI-087）[V]。
 - DR-091 で時間の予算（03）を閉じ、129 個になった。TTL が 5 個増えた：A バスの 0 の検出（U65–U66 の 74S02、U67 の 74S30）、A ファイルの語の bit 0 の選択（U64、74S157）、打切りと /AWE の OR（U68、74S32）。PAL の数は変わらず、AFC0 は 20 ピンから 24 ピン（PAL20R6A）へ、AFC1 は PAL16R8A、P1A・P2A・HACK は A-2 品から A 品へ替わった。SL0–SL1 は 74ALS534 にした（数は変わらない）。P2A が q1 の縁で見る OP の中身は、P1A・P2A の空いた登録の出力に写した [P]。OI-087 の見積り（2〜3 個）より多いのは、AFC0 の中で語の bit 0 を組み合わせると登録の帰還で遅れる（74S157 を足した）のと、打切りと /AWE に 16 MHz の相のゲートが要ったため。
+- DR-098 で CPU の側の要求を同期化し、127 個になった。要求の FF の 4 個（U37、U59 の 74LS74、U60–U61 の 74LS175）を、チャネルごとの REQ0–REQ1（PAL16R6A-2）の 2 個に替え、HACK を PAL16R4A から PAL16R8A にした。要求の登録は 1 チャネルに 5 個（STRQ、STPQ、WDQ、WEQ、WMQ）で、2 チャネルの 10 個は PAL 1 個（登録は最大 8 個）に入らないので、チャネルごとに 1 個にした。入力は CAP、CTRL・STATUS の解読、ID の 4 本、BUSY の 8 本 [P]。
 - 74LS534（U7–U8）は、1985年以前の TI・Motorola・National の資料に見つからない（74ALS534 はある。[PAL.md](../parts/PAL.md) の付記）。74LS374 と反転の組か 74ALS534 にするかは [V]（OI-050）。SL0–SL1 は DR-091 で 74ALS534 にした（tSU 10 が要る）。
 - 数の大半は、レジスタ（74LS374・173・174 が 30 個）、緩衝器（74LS240・244・245 が 19 個）、A ファイルの経路（20 個）で、PAL にまとめても減らない。PAL をさらに増やして TTL を減らす手当て（board.md §09 の ①）の余地は小さい。
 - 部品の出典：PAL20L8A・20R8A・20R6A・20R4A は MMI の 1985年のデータブック p.5-31 [D MMI85]、PAL16L8・16R4・16R8 の A 品と半電力の A-2 品（電源電流 最大 90 mA）は 1983年の PAL ハンドブック [D MMIPAL83]、63S281A（256×8、3 ステート、20 ピン）は同じデータブック p.3-17 [D MMI85]。74S189、74LS670、74LS534、74S283 は 1985年に日立の品があったかを確かめていない [V]（OI-050）。DR-091 で足した 74S02・74S30・74S32・74S157 は TI の 1985年の本 [D TITTL85V2]、74ALS534 は TI の 1984年の本 [D TITTL84V1]（PAL.md の付記）。74ALS534 が日立の HD74ALS（1984年の早見表で 16 品種。早見表に品種の一覧はない）に入るかは確かめられない [V]。
@@ -821,6 +858,8 @@ DR-085 で 11 個増えた（120 個。24 ピンの PAL 3 個、20 ピンの PAL
 DR-088・DR-089 で 4 個増えた（124 個。24 ピンの PAL 2 個、20 ピンの PAL 1 個、74ALS74 1 個。HDEC0 は 20 ピンから 24 ピンへ）。Data Fabric は中央で約 30 cm²（4 層の係数 0.85 で約 26 cm²）増える。B 基板は、この節の数え方で約 1,151 cm²（枠の約 107%）、board.md の数え方（DOC のブリッジ 4 個と DR-050 の 1 個を含む）で約 1,179 cm²（枠の約 109%）になり、中央の見積りで約 100 cm² あふれる。2 枚の合計は約 2,160 cm² で、枠とほぼ同じになる。+5 V の電流は、典型で約 0.5 A、最大で約 0.7 A 増え、Data Fabric は 67401 を含めて典型 約 8.6 A、最大 約 13.0 A（PAL の典型は最大の約 7 割と仮定 [V]）。手当ては board.md §09 と OI-082 [P]。
 
 DR-091 で 5 個増えた（129 個。74S157・74S02×2・74S30・74S32。AFC0 は 20 ピンから 24 ピンへ）。Data Fabric は中央で約 34 cm²（4 層の係数 0.85 で約 29 cm²）増える。B 基板は、この節の数え方で約 1,180 cm²（枠の約 109%）、board.md の数え方で約 1,208 cm²（枠の約 112%）になり、中央の見積りで約 130 cm² あふれる。2 枚の合計は約 2,190 cm²（枠の約 101%）で、約 30 cm² あふれる。+5 V の電流は、TTL の 5 個で典型 約 125 mA・最大 約 210 mA（74S157 50・78、74S02 22・37、74S30 4・8、74S32 28・50 mA。TITTL85V2 の ICCH と ICCL の平均）、A-2 品から A 品への 3 個と AFC0 で最大 約 300 mA（典型 約 210 mA）、Data Fabric は 67401 を含めて典型 約 8.9 A、最大 約 13.5 A になる。74ALS534 は 74LS534 より少し減るが、数えていない [V]。手当ては board.md §09 と OI-082 [P]。
+
+DR-098 で 2 個減った（127 個。20 ピンの PAL 2 個を足し、74LS74×2・74LS175×2 を除いた。HACK は 16R4A から 16R8A で、ピンの数と電流は同じ）。Data Fabric は中央で約 13 cm²（4 層の係数 0.85 で約 11 cm²）減る。B 基板は board.md の数え方で約 1,197 cm²（枠の約 111%）、2 枚の合計は約 2,178 cm²（枠の約 101%）。+5 V の電流は、REQ0–REQ1（A-2 品、1 個 最大 90 mA、典型 約 63 mA）で増え、74LS74（1 個 典型 4、最大 8 mA）と 74LS175（典型 11、最大 18 mA）で減り、典型 約 +0.1 A、最大 約 +0.13 A。Data Fabric は 67401 を含めて典型 約 9.0 A、最大 約 13.6 A（PAL 35 個で典型 約 4.4 A、最大 約 6.4 A）。手当ては board.md §09 と OI-082 [P]。
 
 board.md v0.4 の見積り（約 840 cm²）より約 16 cm² 小さい。B 基板（4 層、外形 400×270 mm＝1,080 cm²）は次のとおり。B のほかのブロック（Temporal RAM、DSP、ADPCM・本体 DAC・音声クロック）は board.md §02 の値で、両面基板で約 425 cm²。
 
@@ -855,6 +894,7 @@ OI-050 にまとめる。
    - DR-085 で、AFC と判断と状態（CST、ELG、SEQ、ELS、EVT、ADC、CHS、STS）の式を書き、門の模型で突き合わせた。残りは、アクセスの制御（NX・OP の制御、2 スロットのアクセス、時間切れ、port 1 の DONE の照合）と STB、HDEC、HACK、TIM、P1A、P2A、PRST。基板への影響は OI-082、判断の経路の時間は OI-083、門の模型と実機の差は OI-084。
    - DR-089 で残りの式を書き、門の模型で突き合わせた。残るのは、時間の予算が閉じないこと（OI-087）、CPU の側の要求の同期化（OI-088）、P2A の打切りとブリッジの置き場所（OI-089）。
    - DR-091 で時間の予算を閉じた（OI-087）。残るのは、余裕が 10 ns 以下の経路と配線・クロックの分配の遅れ、A ファイルの書込みの保持、B バスの引上げの立上り（03 の [V]。OI-090）、OI-088、OI-089。
+   - DR-098 で CPU の側の要求を同期化した（OI-088）。残るのは、68000 のクロックの分周の遅れ（t_div ≤ 15 ns）、DTACK の集めと q1 の縁の立下りとの競り合い、設定のレジスタが変わる時刻の幅と書込みデータの保持（OI-092）。
 2. スロットの中の時刻（03）：67401 の SI・SO の幅と満杯・空の信号の遅れ、Staging RAM の書込み、ACRTC の DACK、74S189 の書込みの時間を、AC 特性で確かめる。DR-091 の答えの預かりで、port 1 の読出しの値をブリッジが次のスロットの終わりまで保てるかも確かめる。
 3. 74S189、74LS670、74LS534、74S283、63S281A、PAL の日立の同等品と、1985年の国内での入手性。DR-091 の 74ALS534（SL）も。
 4. 24 ピンの細い DIP の面積の仮定（1.2 倍）。

@@ -11,7 +11,8 @@
 //!   スロットの頭と同じ格子にある [P]（DOC のブリッジと同じ）。
 //! - 1 回のバスサイクルは、S0 の時刻を含むスロットまで基板を進めてから答える（`sync`）。読み書きの効果は
 //!   その時刻に起きたとする。ずれは 1 スロット（250 ns）以内 [P]。ACRTC は T1 の 2CLK を含むスロット、
-//!   DOC と Fabric の A ファイルは DTACK まで、スロットの列で進める。
+//!   DOC は DTACK まで、スロットの列で進める。Data Fabric は、S0 のスロットと位相から HACK・REQ の回路が
+//!   決めるスロットで効かせ、読出しは DTACK のスロットまで進める（DR-098）。
 //! - 待ちは仕様と DR の規則から計算する。バスの時間切れ（DR-052）：AS↓ の後の CPU クロックの立上りを
 //!   64 数えて BERR を出す。BERR を S0 から 65.5 クロックの立下りで認識し、サイクルは 67 クロックで終わる。
 //! - 割込み（DR-028）：要因をレベルにまとめ、74LS148 で IPL にする。応答はすべてオートベクタ（VPA）。
@@ -27,7 +28,7 @@ use crate::bend::{Bends, FifoPins, Mode, RomLines, SyncStages};
 use crate::doc;
 use crate::dram::DramEnv;
 use crate::dsp::{BioSel, DspCtrl};
-use crate::fabric::{Fabric, HostReply};
+use crate::fabric::{Fabric, HostReply, HostStart};
 use crate::ports::FabricPorts;
 use crate::vclock::MainRamRefresh;
 
@@ -746,36 +747,38 @@ impl System {
         ok(0, 0)
     }
 
-    /// Data Fabric のレジスタ（DR-046 (10)、fabric.md §09）。A ファイルは許可のスロットの 3/4 で DTACK。
+    /// Data Fabric のレジスタ（DR-046 (10)、fabric.md §07）。HACK・REQ の規則（DR-098）：効くスロットと待ちは
+    /// S0 のスロットと位相で決まる。書込みは答えのために基板を進めず、読出しと A ファイルは DTACK のスロットまで
+    /// 進める。
     fn fabric_regs(&mut self, at: u64, addr: u32, size: Size, write: Option<u16>) -> Access {
         self.sync(at);
         if size == Size::Byte {
             return None;
         }
         let off = (addr - 0x25_0000) as u16;
-        let r = match write {
-            Some(v) => self.fabric.host_write(off, v, &mut self.ports),
-            None => self.fabric.host_read(off, &self.ports),
+        // S0 を含むスロット（基板が先に進んでいれば、そのぶん前）
+        let (s0, now, slot) = (at * PERIOD_8M, self.ports.now(), self.fabric.slot());
+        let n = if s0 >= now {
+            slot + (s0 - now) / SLOT
+        } else {
+            slot.saturating_sub((now - s0).div_ceil(SLOT))
         };
-        let r = match r {
-            HostReply::Wait => loop {
+        let r = match self
+            .fabric
+            .host_begin(n, at & 1 != 0, off, write, &self.ports)
+        {
+            HostStart::BusError => return None,
+            HostStart::Done(r, waits) => (r, waits),
+            HostStart::Pending => loop {
                 self.step_slot();
-                if let Some(r) = self.fabric.host_poll() {
-                    let dtack = self.ports.now() - SLOT / 4;
-                    let (_, waits) = doc::host_recognize(at * PERIOD_8M, dtack);
-                    break match r {
-                        HostReply::Data(v) => return ok(v, waits),
-                        HostReply::Ack => return ok(0, waits),
-                        r => r,
-                    };
+                if let Some(r) = self.fabric.host_finish() {
+                    break r;
                 }
             },
-            r => r,
         };
         match r {
-            HostReply::Ack => ok(0, 0),
-            HostReply::Data(v) => ok(v, 0),
-            _ => None,
+            (HostReply::Data(v), waits) => ok(v, waits),
+            (_, waits) => ok(0, waits),
         }
     }
 
