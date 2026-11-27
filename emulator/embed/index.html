@@ -78,6 +78,7 @@
       <label>カートリッジのファイル <input type="file" id="cart" accept=".bin"></label>
     </div>
     <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。
+      ゲームパッドは、十字か左の棒、下の釦 = A、右 = B、左 = C、START（つないで釦を押すと読み始める）。
       サンプルを選び直すと、その場で読み込み直す。サンプルの使い方は sdk/samples/&lt;名前&gt;/README.md。
       「速さを測る」は、今の場面を写した別の仮想機を 240 フレーム止まらずに進めた 1 フレームの時間（実時間は約 16.7 ms）。
       読み込んでから十数秒は、ブラウザが機械語を組み直すので遅い。</p>
@@ -273,17 +274,49 @@ $("bench").onclick = () => {
   worker.postMessage({ type: "bench", frames: 240 });
 };
 
-function sendPad(next) {
+// 入力：キーボード（画面を押してから）とゲームパッド（標準の配置。DR-116）の OR を PORT_A にする
+let keyPad = 0, gamePad = 0;
+function sendPad() {
+  const next = keyPad | gamePad;
   if (next !== pad && worker) worker.postMessage({ type: "input", pad: next });
   pad = next;
 }
 canvas.addEventListener("keydown", (e) => {
-  if (e.code in KEYS) { sendPad(pad | KEYS[e.code]); e.preventDefault(); }
+  if (e.code in KEYS) { keyPad |= KEYS[e.code]; sendPad(); e.preventDefault(); }
 });
 canvas.addEventListener("keyup", (e) => {
-  if (e.code in KEYS) { sendPad(pad & ~KEYS[e.code]); e.preventDefault(); }
+  if (e.code in KEYS) { keyPad &= ~KEYS[e.code]; sendPad(); e.preventDefault(); }
 });
-canvas.addEventListener("blur", () => sendPad(0));
+canvas.addEventListener("blur", () => { keyPad = 0; sendPad(); });
+
+/** ゲームパッド（Gamepad API の標準の配置）：十字（12〜15）か左の棒、下の釦（0）= A、右（1）= B、
+ *  左（2）= C、START（9）。つながっている間、描画の周期で読む。 */
+const PAD_BUTTONS = [[12, 0x01], [13, 0x02], [14, 0x04], [15, 0x08], [0, 0x10], [1, 0x20], [2, 0x40], [9, 0x80]];
+function gamepadBits() {
+  let bits = 0;
+  for (const g of navigator.getGamepads ? navigator.getGamepads() : []) {
+    if (!g || !g.connected) continue;
+    for (const [i, bit] of PAD_BUTTONS) if (g.buttons[i] && g.buttons[i].pressed) bits |= bit;
+    const x = g.axes[0] ?? 0, y = g.axes[1] ?? 0;
+    if (y < -0.5) bits |= 0x01;
+    if (y > 0.5) bits |= 0x02;
+    if (x < -0.5) bits |= 0x04;
+    if (x > 0.5) bits |= 0x08;
+  }
+  return bits;
+}
+let polling = false;
+function pollGamepads() {
+  const bits = gamepadBits();
+  if (bits !== gamePad) { gamePad = bits; sendPad(); }
+  const any = navigator.getGamepads && [...navigator.getGamepads()].some((g) => g && g.connected);
+  polling = Boolean(any);
+  if (polling) requestAnimationFrame(pollGamepads);
+  else if (gamePad) { gamePad = 0; sendPad(); }
+}
+window.addEventListener("gamepadconnected", () => {
+  if (!polling) { polling = true; requestAnimationFrame(pollGamepads); }
+});
 </script>
 </body>
 </html>
