@@ -2,8 +2,9 @@
  *
  * 画面に題、フレームの数、PORT_A の値を出し、方向キーで四角（「*」と呼ぶ）を 8 画素ずつ動かす。START で
  * 「*」を真ん中に戻す。文字 ROM の記号の字形はまだそろっていない（描いていない字は市松模様になる）ので、
- * 文字列には英字・数字・空白を使う。ここから書き足して自分の ROM にする。ACRTC の図形・Data Fabric・DOC・ADPCM
- * を C から使う関数は acrtc.h・fabric.h・doc.h・adpcm.h（sdk/docs/c.md §09）。音・映像・DSP の使い方の手本は
+ * 文字列には英字・数字・空白を使う。ここから書き足して自分の ROM にする。ACRTC の図形・Data Fabric・DOC・ADPCM・
+ * パレットと HBlank の割込み・DSP を C から使う関数は acrtc.h・fabric.h・doc.h・adpcm.h・video.h・dsp.h
+ * （sdk/docs/c.md §09）。音・映像・DSP の使い方の手本は
  * sdk/samples/ の各サンプル（README.md。サンプルはアセンブラ）。
  *
  * 番地とビットの名前は fc85.h、BIOS は bios.h（sdk/docs/bios-abi.md）、ROM が守ることは sdk/docs/guarantees.md。

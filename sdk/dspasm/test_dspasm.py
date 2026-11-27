@@ -521,6 +521,20 @@ class SourceTest(unittest.TestCase):
                 self.assertEqual(f.read(), bytes.fromhex("7E33F90000007F80"))
             self.assertTrue(os.path.getsize(lst) > 0)
 
+    def test_c_array(self):
+        # --c-array：C の見出し（DR-109）。語は 8 つずつ、語数の定数つき
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "a.dsp")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write("\tLACK\t1\n\tB\t0\n")
+            out = os.path.join(d, "a.h")
+            self.assertEqual(dspasm.main([src, "-o", out, "--c-array", "prog"]), 0)
+            with open(out, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("#define prog_WORDS 3U", text)
+            self.assertIn("static const uint16_t prog[3] = {\n    0x7E01, 0xF900, 0x0000,\n};", text)
+            self.assertEqual(dspasm.main([src, "-o", out, "--c-array", "9bad"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

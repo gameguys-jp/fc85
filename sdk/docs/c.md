@@ -1,9 +1,9 @@
 # C で ROM を書く
 
-**v0.2**  
+**v0.3**  
 2026年11月27日
 
-> fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
+> fc85 のカートリッジを C で書くための手引き（DR-103）。GCC は外の道具として使い、SDK には入れない（DR-092 (3)）。SDK が持つのは、起動のコード、リンカの設定、小さな実行時ライブラリ、BIOS を呼ぶ関数、ACRTC・Data Fabric・DOC・ADPCM を使う関数（§09、DR-106）、パレットと HBlank の割込み・DSP を使う関数（§09、DR-109）、組立ての道具。番地とレジスタは `sdk/include/fc85.h`（生成物。DR-100）、BIOS は `sdk/c/include/bios.h`、BIOS の約束は `bios-abi.md`、ROM が守ることは `guarantees.md` が正。アセンブラ（m68kasm）で書く ROM もそのまま使える。
 
 ## 01　はじめ方
 
@@ -66,7 +66,7 @@ FC85_CART("MY ROM          ");
 
 ## 05　C で使えるもの
 
-- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
+- **ヘッダ**：GCC の OS なしのヘッダ（`stdint.h`、`stddef.h`、`stdbool.h`、`stdarg.h`、`stdalign.h`、`stdnoreturn.h`、`iso646.h`）と、SDK の `limits.h`、`string.h`、`bios.h`、`fc85.h`、`acrtc.h`、`fabric.h`、`doc.h`、`adpcm.h`、`video.h`、`dsp.h`（§09）。`stdio.h`・`stdlib.h` などはない（インクルードで止まる）。
 - **string.h**：`memcpy`、`memmove`、`memset`、`memcmp`、`strlen`、`strcmp`、`strcpy`（`sdk/c/string.c`）。両方が偶数番地なら長語ずつ写す。Main RAM と Staging RAM だけに使う（MMIO の窓には幅と回数が決まらないので使わない）。
 - **整数**：32 bit の掛け算・割り算（`sdk/c/runtime.S`）と 64 bit（`long long`）のシフト・掛け算・割り算（`sdk/c/runtime64.c`）は、GCC が呼ぶ関数を SDK が持つ。名前は GCC の実行時ライブラリと同じで、中身はここで書いた。16×16 の掛け算と 32÷16 の割り算は 68000 の命令（MULU・DIVU）になる。64 bit の割り算は 1 bit ずつ引くので遅い。
 - **0 で割る**：DIVU の 0 除算の例外（ベクタ 5）になり、BIOS が赤い画面で止まる（`bios-abi.md` §03）。
@@ -119,7 +119,7 @@ C の ROM にアセンブラを混ぜるときは、GNU as の書き方の `.S`�
 
 ## 09　周辺の関数
 
-`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（中身は `sdk/c/` の同じ名前の .c）[P]（DR-106）。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
+`acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`（DR-106）と `video.h`・`dsp.h`（DR-109）（中身は `sdk/c/` の同じ名前の .c。HBlank の割込みの入口は `video_irq.S`）[P]。組立ての道具が実行時の関数と一緒に組み、使わない関数はリンクで落ちる。`guarantees.md` §03 の規約のうち、手順で守れるものは関数の中で守る。手順は Boot ROM（ACRTC。`bios-abi.md` §05）とサンプル（Fabric・DOC・ADPCM。`sdk/samples/game`）で確かめたものと同じ。どの関数も再入できない（割込みの処理と、割り込まれた側の両方から同じ装置を使わない）。
 
 ```c
 #include "acrtc.h"
@@ -207,6 +207,49 @@ adpcm_play(0x4000, sizeof s_shot, ADPCM_CTL_8K);  /* 鳴らす。毎フレーム
 - `ctrl` は標本化（`ADPCM_CTL_8K`・`6K`・`4K`）と並び（`ADPCM_CTL_LOW_FIRST`）。ほかのビットは落とす。S1・S2 を両方 1 にすると S2 を落とす（両方 1 は Bend の操作。§03 の 20）。
 - `adpcm_play` と `adpcm_update` は同じ流れ（どちらも割込みの外か、どちらも同じ割込みの処理）から呼ぶ。
 
+### 映像（`video.h`）
+
+| 関数 | すること | 返す値 |
+|---|---|---|
+| `video_set_color(n, rgb)` | パレットの色 n（0〜15）を `$0RGB` にする（裏のパレット） | なし |
+| `video_set_palette(rgb, first, count)` | パレットの first から count 語を書く | なし |
+| `video_direct(on)` | `PAL_CTRL` の DIRECT（Bend）。1 なら書いた色が表へ直接入り、ラインの途中から効く | なし |
+| `video_line()` | 今のラスタ（VSYNC の始まりから。`VIDEO_LINE`） | 番号 |
+| `video_hblank(hook, line)` | HBlank の割込みを始める。line が 0 以上ならそのラスタだけ（`LINE_CMP`）、負なら毎ライン。割込みのたびに hook を呼ぶ | なし |
+| `video_hblank_at(line)` | 比べるラスタを替える（hook の中で次の区切りを決める） | なし |
+| `video_hblank_off()` | HBlank の割込みを止め、ベクタ 30 を前の処理に戻す | なし |
+
+- パレットは裏の 16 語で、表示は HSYNC の始まりに表へ写した値を使う（2CLK に 1 語ずつ。DR-027、DR-069）。書いた色は、写しが通った次のラインから効く。
+- HBlank の割込みはレベル 6 で、VBlank（BIOS の処理）と同じ線。`video_hblank` はジャンプ表のベクタ 30 に小さな入口（`video_irq.S`）を置く。入口は HBL の保留だけを消し（許可のビットはそのまま）、hook を呼び、BIOS の処理へつなぐ。BIOS は VBlank を受けて `bios_frame` を進めるので、`bios_wait_vbl` もそのまま使える（`bios-abi.md` の「処理を差し替える」）。hook は割込みの中（マスク 6）で呼ばれる C の関数。短くし、ほかの装置の関数（ACRTC の FIFO など）を割り込まれた側と取り合わない。
+- ラスタの番号は VSYNC の始まりから。BIOS の案B の画面では、画面の y＝0 はラスタ `VIDEO_TOP_RASTER`（43）で、1 フレームは `VIDEO_RASTERS`（262）ラスタ。
+- ラスタ L の HBlank の割込みで書いた色は、ラスタ L＋2 から効く [V]：HBlank の始まりから次のラインの写しまでは 22 ドット（約 4 µs）で、68000 の割込みの応答が間に合わない。画面の y から色を替えたいなら、`VIDEO_TOP_RASTER + y − 2` で比べる。1 フレームに何か所も替えるときは、hook の中で `video_hblank_at` で次のラスタを決め、VBlank のフック（`bios_vbl_hook`）で最初の色と最初のラスタに戻す。
+- DIRECT（`video_direct(1)`。Bend、DR-027）では、書いた色が表へ直接入るので、ラスタ L の HBlank の割込みで書いた色は、ラスタ L＋1 の途中から効く [V]（試験では x＝145 の辺り。割り込まれた命令で数ドット動く）。書込みのストローブの間は、そのドットが書いた色になる（点状のノイズ）。DIRECT の間は写しが止まり、書いた色は裏に入らないので、DIRECT を解くと次のラインから裏の色に戻る [P]。
+
+```c
+static void split(void)                           /* ラスタ 103 の HBlank */
+{
+    video_set_color(0, 0x0F00);                   /* 画面の y＝62 から背景を赤に */
+}
+static void top(void) { video_set_color(0, 0x000F); }
+bios_vbl_hook = top;                              /* VBlank で青に戻す */
+video_hblank(split, VIDEO_TOP_RASTER + 60);
+```
+
+### DSP（`dsp.h`）
+
+| 関数 | すること | 返す値 |
+|---|---|---|
+| `dsp_load(code, words, zero_rest)` | DSP を RESET にし、PRGBUS を待ち、プログラム窓の 0 番地から code の words 語を書く。zero_rest なら残りを 0 にする。書いた範囲を読み返す。DSP は RESET のまま | 違った語の数（0 で正しい）。PRGBUS が来なければ −1 |
+| `dsp_start(ctrl)` | RESET を解いて 0 番地から動かす。ctrl は BIO の選び方（`DSP_CTRL_BIO_*`）と `DSP_CTRL_IRQ_EN` | なし |
+| `dsp_reset()` | RESET にする（プログラム窓が開く） | なし |
+| `dsp_command(cmd, reply, tries)` | メールボックスに cmd を書き、応答を待って reply に入れる。tries 回（1 回 約 3〜5 µs）見る | 応答が来たら 1、時間切れなら 0 |
+| `dsp_status()` | `DSP_STATUS` | 値 |
+| `dsp_clear_flags()` | UNDERRUN・OVERRUN の印を消す（W1C） | なし |
+
+- 手順はサンプル（`sdk/samples/dsp/main.s`）と同じ（DR-029）。PRGBUS＝0 の間にプログラム窓に触るとバスエラーなので、`dsp_load` が待つ。音や値の流れは Data Fabric の port 3（入力 FIFO）と port 4（出力 FIFO）で、`fabric.h` で組む。
+- DSP のプログラムは dspasm で組み、`--c-array 名前` で C の見出しにする：`py sdk/dspasm/dspasm.py prog.dsp -o prog.h --c-array prog -I sdk/include` は `static const uint16_t prog[]` と語数 `prog_WORDS` を書く。`#include "prog.h"` して `dsp_load(prog, prog_WORDS, 1)`。
+- メールボックスの約束（コマンドと応答の意味）は ROM と DSP のプログラムで決める。DSP の側は `IN x,DSP_PA_MAILBOX` で読み、`OUT x,DSP_PA_RESPONSE` で答える（`sdk/include/dsp.inc`。試験の `sdk/c/tests/echo.dsp` が小さな例）。
+
 ## 10　組立ての出力と調べ方
 
 `build.py` は `build/` に次を書く。
@@ -223,13 +266,13 @@ adpcm_play(0x4000, sizeof s_shot, ADPCM_CTL_8K);  /* 鳴らす。毎フレーム
 
 ## 11　頼ってよいこと・いけないこと
 
-- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音を確かめる）。
+- 頼ってよい [P]：§03 の配置、§04 の見出し、§05 の関数の結果（`sdk/c/test_c.py` が Python の計算と突き合わせる。32 bit 48 組、64 bit 28 組）、§07 の関数が BIOS の約束どおりにレジスタを渡すこと、§09 の関数が規約の手順を守ること（`sdk/c/test_devices.py` が、逆アセンブルで I/O の窓に読み書き一体の命令がないことを、エミュレータで VRAM・Staging RAM・波形 RAM・DOC・音・HBlank で替えた色の区切り・DSP のメールボックスの往復を確かめる）。
 - 頼ってはいけない：GCC が出す命令の並びと時間。GCC の版や最適化（`-Os`、`-O2`）で変わる。時間が要るところは `VIDEO_LINE` か `bios_frame` で測るか、アセンブラ（`.S`）で書く（`guarantees.md` §05）。
 - 確かめた GCC：Ubuntu 22.04 の `gcc-m68k-linux-gnu`（GCC 11.4）[V]。ほかの版と `m68k-elf` はまだ試していない。
 
 ## 12　まだないもの
 
 - 浮動小数点、`printf` 相当、ヒープ [O]。
-- DSP、Temporal RAM、ACRTC の DMA（port 1）での描画、パレットと映像の割込みを C から使う関数 [O]。今は `fc85.h` のレジスタで書き、サンプル（`sdk/samples/`、アセンブラ）を手本にする。
+- Temporal RAM、ACRTC の DMA（port 1）での描画を C から使う関数 [O]。今は `fc85.h` のレジスタと `fabric.h` で書き、サンプル（`sdk/samples/patches`、アセンブラ）を手本にする。パレットと HBlank の割込み・DIRECT、DSP の関数は v0.3 で足した（§09、DR-109）。
 - C で書いたサンプル [O]。
 - エミュレータを C から使う窓口（C の ABI。DR-092 (4)）は別のもの。

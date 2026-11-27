@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106）の試験。`py -m unittest discover -s sdk/c` で走る。
+"""周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109）の試験。
+`py -m unittest discover -s sdk/c` で走る。
 
 1. GCC があれば、試験の ROM（tests/dev_test.c）を組み、逆アセンブルを見る：周辺の関数は I/O の窓に読み書き
    一体の命令（CLR、BSET、ADDQ など）を使わない（guarantees.md §03 の 3・6）。奇数番地への語・長語の
@@ -7,7 +8,8 @@
 2. GCC とエミュレータの窓口（fc85-api）と Boot ROM があれば、ROM を動かし、VRAM・Staging RAM・DOC の様子・
    音を確かめる。期待値は台帳と仕様書から：ACRTC の画素の並び（1 語に 4 画素、左が下位）と、ALINE は終わりの
    点を描かない・AFRCT は両端を含む（HD63484.md）、Fabric の変換（AND MASK → XOR。仕様書 §06）、
-   ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。
+   ADPCM の長さ（1 byte に 2 ニブル、8 kHz・4 kHz）、DOC の 0xE1（(N−1)×2）。HBlank の割込みで替えた色 0 の
+   区切り（画面の PNG。DIRECT ではラスタの途中で変わる）、DSP のメールボックスの往復（tests/echo.dsp を dspasm --c-array で C の見出しにする）。
 """
 
 import os
@@ -19,10 +21,12 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "sdk", "tools"))
+sys.path.insert(0, os.path.join(ROOT, "sdk", "dspasm"))
 
+import dspasm  # noqa: E402
 import m68kgcc  # noqa: E402
 
-DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c"]
+DEVICE_SOURCES = ["acrtc.c", "fabric.c", "doc.c", "adpcm.c", "video.c", "dsp.c"]
 IO = (0x200000, 0x300000)            # I/O の窓（registers.md）
 STAGING = 0x120000
 FRAME_HZ = 59.92
@@ -35,6 +39,30 @@ FUNC = re.compile(r"^[0-9a-f]{8} <([A-Za-z_]\w*)>:$")
 DEF = re.compile(r"^(?:static\s+)?[A-Za-z_][\w \t*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\n\{", re.M)
 
 TC = m68kgcc.find_toolchain()
+
+
+def png_rows(data):
+    """fc85-api の画面の PNG（RGB 8 bit、フィルタなし）→ 行ごとの [(r, g, b)]。"""
+    import struct
+    import zlib
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, w, h = 8, b"", 0, 0
+    while pos < len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        if kind == b"IHDR":
+            w, h = struct.unpack(">II", body[:8])
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + n
+    raw = zlib.decompress(idat)
+    stride = 1 + 3 * w
+    rows = []
+    for y in range(h):
+        row = raw[y * stride:(y + 1) * stride]
+        assert row[0] == 0, "フィルタなしのはず"
+        rows.append([tuple(row[1 + 3 * x:4 + 3 * x]) for x in range(w)])
+    return rows
 
 
 def functions(dis):
@@ -118,7 +146,12 @@ class TestDeviceHelpers(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.bin = os.path.join(cls.tmp.name, "dev.bin")
-        m68kgcc.build([os.path.join(HERE, "tests", "dev_test.c")], cls.bin, ROOT)
+        # DSP のプログラムを C の見出しにする（dspasm --c-array）
+        header = os.path.join(cls.tmp.name, "echo_dsp.h")
+        rc = dspasm.main([os.path.join(HERE, "tests", "echo.dsp"), "-o", header, "--c-array", "echo_dsp",
+                          "-I", os.path.join(ROOT, "sdk", "include")])
+        assert rc == 0, "echo.dsp が組めない"
+        m68kgcc.build([os.path.join(HERE, "tests", "dev_test.c")], cls.bin, ROOT, include_dirs=[cls.tmp.name])
         with open(os.path.splitext(cls.bin)[0] + ".dis", encoding="utf-8") as f:
             cls.dis = f.read()
         cls.funcs = functions(cls.dis)
@@ -175,6 +208,14 @@ class TestDeviceHelpers(unittest.TestCase):
             to_phase(3)
             doc = emu.call("run", frames=30, stop_on_bus_error=True)
             self.assertEqual(doc["bus_errors"], 0)
+            to_phase(4)
+            emu.call("run", frames=2, stop_on_bus_error=True)    # 区切りのあるフレームを丸ごと描かせる
+            screen = png_rows(emu.screenshot())
+            to_phase(5)
+            emu.call("run", frames=2, stop_on_bus_error=True)
+            direct = png_rows(emu.screenshot())
+            to_phase(6)
+            emu.call("run", frames=2, stop_on_bus_error=True)
             self.assertEqual(peek("bios_exc_vector", 2)[0], 0, "例外で止まった")
             self.assertEqual(peek("done", 2)[0], 0xC0DE, "終わりまで来ていない")
 
@@ -244,6 +285,40 @@ class TestDeviceHelpers(unittest.TestCase):
                 for o in st["oscillators"][16:20]:
                     self.assertEqual((o["on"], o["control"]), (False, 0xF1))
                 self.assertGreater(max(doc["audio"]["peak"]), 1000, "DOC が鳴った")
+
+            with self.subTest("映像"):
+                v = peek("r_video", 2, 6)
+                self.assertEqual(v[0], 7, "VBL_EN・HBL_EN・LINE_CMP")
+                self.assertEqual(v[1], 1, "ベクタ 30 を差し替えた")
+                self.assertEqual(v[3], 4, "BIOS の VBlank（bios_frame）はつないだ先で進む")
+                self.assertEqual(v[2], 2 * 4, "1 フレームに 2 回（SPLIT1 と SPLIT2）")
+                self.assertEqual(v[4:], [1, 1], "止めると VBL_EN だけ、ベクタは BIOS の処理に戻る")
+                # 何も描いていない列 x＝250 の色 0 の移り変わり
+                col = [row[250] for row in screen]
+                runs = []
+                for y, c in enumerate(col):
+                    if not runs or runs[-1][1] != c:
+                        runs.append((y, c))
+                blue, red, green = (0, 0, 255), (255, 0, 0), (0, 255, 0)
+                # ラスタ L の HBlank で書いた色は L＋2 から：HBlank の始まりから次のラインの写しまで 22 ドット（約 4 µs）
+                # で、68000 の割込みの応答が間に合わない。画面の y＝60・120 のラスタで比べ、62・122 から変わる
+                self.assertEqual(runs, [(0, blue), (62, red), (122, green)], "区切り")
+                # DIRECT（Bend）：表へ直接書くので、ラスタ L＋1（y＝61・121）の途中で変わる
+                for y, before, after in ((61, blue, red), (121, red, green)):
+                    row = direct[y]
+                    x = row.index(after)
+                    self.assertEqual(direct[y - 1][250], before)
+                    self.assertTrue(0 < x < 250, f"y={y} の途中で変わる（x={x}）")
+                    self.assertEqual(row[0], before)
+                    self.assertEqual(row[255], after)
+                    self.assertEqual(direct[y + 1][0], after)
+
+            with self.subTest("DSP"):
+                d = peek("r_dsp", 2, 8)
+                self.assertEqual(d[0], 0, "dsp_load は読み返して違いなし")
+                self.assertEqual(d[1:5], [1, 0x1235, 1, 0x0000], "メールボックスの語＋1 が返る")
+                self.assertEqual(d[5], 0, "応答を読むと RESPONSE が下がる")
+                self.assertEqual(d[6], 0, "RESET の間は答えない（時間切れ）")
 
 
 if __name__ == "__main__":

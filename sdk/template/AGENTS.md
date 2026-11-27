@@ -1,6 +1,6 @@
 # ROM の作業の手引き（エージェントと人のため）
 
-**v0.3**  
+**v0.4**  
 2026年11月27日
 
 > このフォルダは fc85 のカートリッジ（ROM）を 1 本作るところ。`sdk/tools/new_rom.py` がひな形（`sdk/template/`）から作った。ここに書くのは作り方・試し方・守ることの要点で、正は SDK の文書（§06）。エージェント（Claude Code、ほかの道具）も人も、この順で作業する。
@@ -74,7 +74,7 @@ cd emulator && cargo build --release -p fc85-api -p fc85-host
 - **ACRTC**：FIFO は SR の WFR・RFR を見てから読み書きし、待ちの数に頼らない（DR-096）。描画は VBlank の直後にまとめる。
 - **時間**：呼出しの時間、起動のフレーム数、命令の待ちの数に頼らない。時間が要るなら `VIDEO_LINE` か `bios_frame` で測る。
 - **字**：文字 ROM の記号と一部の漢字の字形はまだそろっていない（描いていない字は市松模様）。
-- **C**：浮動小数点・`malloc`・`printf` はない（整数と固定小数点で書く）。ACRTC・DOC の窓に `|=`・`&=` を使わない（値を作って `=` で書く）。割込みの関数は `fc85_set_vector` と `__attribute__((interrupt_handler))`、VBlank のフックはふつうの関数でよい。GCC が出す命令の時間に頼らない（`sdk/docs/c.md` §05〜§11）。ACRTC の図形・Data Fabric・DOC・ADPCM は `acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h` の関数を使うと、規約の手順を関数が守る（`sdk/docs/c.md` §09）。
+- **C**：浮動小数点・`malloc`・`printf` はない（整数と固定小数点で書く）。ACRTC・DOC の窓に `|=`・`&=` を使わない（値を作って `=` で書く）。割込みの関数は `fc85_set_vector` と `__attribute__((interrupt_handler))`、VBlank のフックはふつうの関数でよい。GCC が出す命令の時間に頼らない（`sdk/docs/c.md` §05〜§11）。ACRTC の図形・Data Fabric・DOC・ADPCM・パレットと HBlank の割込み・DSP は `acrtc.h`・`fabric.h`・`doc.h`・`adpcm.h`・`video.h`・`dsp.h` の関数を使うと、規約の手順を関数が守る（`sdk/docs/c.md` §09）。HBlank の割込みで替えた色は、比べたラスタの 2 つ後から効く。
 
 ## 06　読むもの
 

@@ -1004,6 +1004,20 @@ def assemble_line(line, pc=0, symbols=None):
     return a.encode(mnu, args)
 
 
+def c_array_text(img, name, source):
+    """組んだ語（big-endian のバイト列）を、C の見出し（static const uint16_t name[]）にする。DR-109。"""
+    words = [int.from_bytes(img[i:i + 2], "big") for i in range(0, len(img), 2)]
+    lines = [f"/* dspasm が {source} から作った TMS32010 のプログラム（{len(words)} 語）。dsp_load() で書く（dsp.h） */",
+             "#include <stdint.h>",
+             "",
+             f"#define {name}_WORDS {len(words)}U",
+             f"static const uint16_t {name}[{max(len(words), 1)}] = {{"]
+    for i in range(0, len(words), 8):
+        lines.append("    " + ", ".join(f"0x{w:04X}" for w in words[i:i + 8]) + ",")
+    lines.append("};")
+    return "\n".join(lines) + "\n"
+
+
 def _parse_num(s):
     s = s.strip()
     if s.startswith("$"):
@@ -1021,7 +1035,12 @@ def main(argv=None):
     ap.add_argument("--base", default="0", help="出力の先頭の語の番地（既定 0）")
     ap.add_argument("--size", help="出力の語数（足りない分は --fill で埋める）")
     ap.add_argument("--fill", default="0", help="空きを埋める語（既定 0x0000）")
+    ap.add_argument("--c-array", metavar="NAME",
+                    help="出力をバイナリでなく C の見出しにする（static const uint16_t NAME[]、語数 NAME_WORDS。DR-109）")
     args = ap.parse_args(argv)
+    if args.c_array is not None and not re.fullmatch(r"[A-Za-z_]\w*", args.c_array):
+        print(f"誤り: C の名前でない: {args.c_array}", file=sys.stderr)
+        return 1
     defines = {}
     for d in args.define:
         k, _, v = d.partition("=")
@@ -1038,8 +1057,12 @@ def main(argv=None):
     except AsmError as e:
         print(f"誤り: {e}", file=sys.stderr)
         return 1
-    with open(args.output, "wb") as f:
-        f.write(img)
+    if args.c_array is not None:
+        with open(args.output, "w", encoding="utf-8", newline="\n") as f:
+            f.write(c_array_text(img, args.c_array, os.path.basename(args.source)))
+    else:
+        with open(args.output, "wb") as f:
+            f.write(img)
     if args.listing:
         with open(args.listing, "w", encoding="utf-8", newline="\n") as f:
             f.write(asm.listing_text())

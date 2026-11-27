@@ -1,8 +1,12 @@
-/* 周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106）の試験の ROM。sdk/c/test_devices.py が組み、エミュレータで
- * 動かして、結果（r_*）、VRAM、Staging RAM、DOC の様子、音を確かめる。
+/* 周辺の関数（acrtc.h・fabric.h・doc.h・adpcm.h。DR-106。video.h・dsp.h。DR-109）の試験の ROM。sdk/c/test_devices.py
+ * が組み、エミュレータで動かして、結果（r_*）、VRAM、Staging RAM、DOC の様子、音、画面を確かめる。
  *
- * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）。試験は v_phase を見張って
- * 区切り、ADPCM の間と DOC の間の音を分けて測る。
+ * 順：ACRTC の図形と打切り → Fabric の写し → ADPCM（v_phase 1→2）→ DOC（v_phase 3）→ 40 フレーム待つ →
+ * HBlank の割込みで色 0 を替える（v_phase 4。その後 10 フレームはそのまま）→ 同じことを DIRECT で（v_phase 5）→
+ * DSP（v_phase 6）。試験は v_phase を見張って区切り、ADPCM の間と DOC の間の音を分けて測り、v_phase 4・5 で
+ * 画面を撮る。
+ *
+ * echo_dsp.h は試験が tests/echo.dsp から dspasm --c-array で作る。
  */
 #include <stdint.h>
 
@@ -10,8 +14,11 @@
 #include "adpcm.h"
 #include "bios.h"
 #include "doc.h"
+#include "dsp.h"
+#include "echo_dsp.h"
 #include "fabric.h"
 #include "fc85.h"
+#include "video.h"
 
 FC85_CART("C DEVICE TEST   ");
 
@@ -21,6 +28,13 @@ uint16_t r_acrtc[16];
 uint16_t r_fab[4];
 uint16_t r_adpcm[6];
 uint16_t r_doc[8];
+uint16_t r_video[6];
+uint16_t r_dsp[8];
+
+/* ラスタの区切り（画面の y＝60 と 120 の辺りのラスタで比べる） */
+#define SPLIT1 (VIDEO_TOP_RASTER + 60U)
+#define SPLIT2 (VIDEO_TOP_RASTER + 120U)
+static volatile uint16_t s_hblanks;
 
 static const char s_text[16] = "FABRIC COPY 0123";
 static const uint16_t s_words[8] = {0x1234, 0xABCD, 0x0F0F, 0xF0F0, 0x0000, 0xFFFF, 0x8001, 0x7FFE};
@@ -164,12 +178,85 @@ static void doc_tests(void)
     v_phase = 3;
 }
 
+/* VBlank：色 0 を青に。HBlank（SPLIT1）：赤にして次は SPLIT2、（SPLIT2）：緑にして次は SPLIT1 */
+static void vbl_hook(void)
+{
+    video_set_color(0, 0x000F);
+}
+
+static void hblank_hook(void)
+{
+    s_hblanks++;
+    if (video_line() < SPLIT2) {
+        video_set_color(0, 0x0F00);
+        video_hblank_at(SPLIT2);
+    } else {
+        video_set_color(0, 0x00F0);
+        video_hblank_at(SPLIT1);
+    }
+}
+
+static void wait_frames(unsigned n)
+{
+    while (n--)
+        bios_wait_vbl();
+}
+
+static void video_tests(void)
+{
+    static const uint16_t pal[3] = {0x0123, 0x0456, 0x0789};
+    video_set_palette(pal, 13, 3);
+    const volatile bios_hook_t *slot = (const volatile bios_hook_t *)(0x100000UL + 6UL * 30U + 2UL);
+    bios_hook_t bios_handler = *slot;
+    bios_vbl_hook = vbl_hook;
+    video_hblank(hblank_hook, (int)SPLIT1);
+    r_video[0] = REG_VIDEO_IRQ & 7U;
+    r_video[1] = *slot != bios_handler;
+    uint32_t f0 = bios_frame;
+    wait_frames(4);
+    r_video[2] = s_hblanks;
+    r_video[3] = (uint16_t)(bios_frame - f0);
+    v_phase = 4;
+    wait_frames(10);
+    video_hblank_off();
+    bios_vbl_hook = 0;
+    r_video[4] = REG_VIDEO_IRQ & 7U;
+    r_video[5] = *slot == bios_handler;
+
+    /* 同じ区切りを DIRECT（Bend）で。色はラスタの途中から変わる */
+    video_set_color(0, 0x0000);
+    video_direct(1);
+    bios_vbl_hook = vbl_hook;
+    video_hblank(hblank_hook, (int)SPLIT1);
+    wait_frames(4);
+    v_phase = 5;
+    wait_frames(10);
+    video_hblank_off();
+    bios_vbl_hook = 0;
+    video_direct(0);
+}
+
+static void dsp_tests(void)
+{
+    r_dsp[0] = (uint16_t)dsp_load(echo_dsp, echo_dsp_WORDS, 1);
+    dsp_start(DSP_CTRL_BIO_INPUT);
+    r_dsp[1] = (uint16_t)dsp_command(0x1234, &r_dsp[2], 1000);
+    r_dsp[3] = (uint16_t)dsp_command(0xFFFF, &r_dsp[4], 1000);
+    r_dsp[5] = dsp_status() & (1U << DSP_ST_RESPONSE_B);
+    dsp_reset();
+    r_dsp[6] = (uint16_t)dsp_command(0x0001, &r_dsp[7], 200);
+    v_phase = 6;
+}
+
 int main(void)
 {
     acrtc_tests();
     fabric_tests();
     adpcm_tests();
     doc_tests();
+    wait_frames(40);
+    video_tests();
+    dsp_tests();
     done = 0xC0DE;
     return 0;
 }
