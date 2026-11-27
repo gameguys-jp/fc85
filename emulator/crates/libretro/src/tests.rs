@@ -1,7 +1,7 @@
 //! libretro のコアの試験。フロントエンドの代わりの呼び返しを渡し、libretro の API の順に呼ぶ。コアは
 //! 大域の状態なので、1 つの試験の中で順に確かめる。Boot ROM・文字 ROM がなければ飛ばす。
 
-use std::ffi::{CStr, CString, c_char, c_uint, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -14,6 +14,8 @@ struct Seen {
     video: Option<(c_uint, c_uint, usize, u64)>,
     videos: usize,
     audio_frames: usize,
+    /// 受けた音の L・R の絶対値の最大。
+    audio_peak: i32,
     geometry: Option<(c_uint, c_uint)>,
     variables: usize,
     descriptors: usize,
@@ -24,6 +26,7 @@ static SEEN: Mutex<Seen> = Mutex::new(Seen {
     video: None,
     videos: 0,
     audio_frames: 0,
+    audio_peak: 0,
     geometry: None,
     variables: 0,
     descriptors: 0,
@@ -38,6 +41,42 @@ static POLLS: AtomicUsize = AtomicUsize::new(0);
 static MIDI_IN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static MIDI_OUT: Mutex<Vec<(u8, u32)>> = Mutex::new(Vec::new());
 static MIDI_FLUSHES: AtomicUsize = AtomicUsize::new(0);
+/// 偽のマイク（DR-130）：選択肢の値、開いた・閉じた数、頼まれた周波数、動いているか、読んだ標本の数。
+static AUDIO_IN: Mutex<&'static CStr> = Mutex::new(c"disabled");
+static MIC_OPENS: AtomicUsize = AtomicUsize::new(0);
+static MIC_CLOSES: AtomicUsize = AtomicUsize::new(0);
+static MIC_RATE: AtomicUsize = AtomicUsize::new(0);
+static MIC_ON: AtomicBool = AtomicBool::new(false);
+static MIC_READ: AtomicUsize = AtomicUsize::new(0);
+static MIC_HANDLE: u8 = 0;
+
+unsafe extern "C" fn mic_open(params: *const RetroMicrophoneParams) -> *mut c_void {
+    MIC_OPENS.fetch_add(1, Ordering::SeqCst);
+    // SAFETY: コアは読める params を渡す
+    MIC_RATE.store(unsafe { (*params).rate } as usize, Ordering::SeqCst);
+    (&raw const MIC_HANDLE).cast_mut().cast()
+}
+
+unsafe extern "C" fn mic_close(_mic: *mut c_void) {
+    MIC_CLOSES.fetch_add(1, Ordering::SeqCst);
+    MIC_ON.store(false, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn mic_set(_mic: *mut c_void, state: bool) -> bool {
+    MIC_ON.store(state, Ordering::SeqCst);
+    true
+}
+
+/// 1 kHz ののこぎり波（±16000）を、続けて読んだ位置から。
+unsafe extern "C" fn mic_read(_mic: *mut c_void, samples: *mut i16, n: usize) -> c_int {
+    let at = MIC_READ.fetch_add(n, Ordering::SeqCst);
+    for i in 0..n {
+        let v = ((at + i) % 48) as i32 * 32000 / 47 - 16000;
+        // SAFETY: コアは n 個書ける領域を渡す
+        unsafe { *samples.add(i) = v as i16 };
+    }
+    n as c_int
+}
 
 unsafe extern "C" fn midi_enabled() -> bool {
     true
@@ -105,12 +144,25 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             }
             RETRO_ENVIRONMENT_GET_VARIABLE => {
                 let v = &mut *data.cast::<RetroVariable>();
-                if CStr::from_ptr(v.key) == c"fc85_area" {
+                let key = CStr::from_ptr(v.key);
+                if key == c"fc85_area" {
                     v.value = lock(&AREA).as_ptr();
+                    true
+                } else if key == c"fc85_audio_in" {
+                    v.value = lock(&AUDIO_IN).as_ptr();
                     true
                 } else {
                     false
                 }
+            }
+            RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE => {
+                let m = &mut *data.cast::<RetroMicrophoneInterface>();
+                assert_eq!(m.interface_version, RETRO_MICROPHONE_INTERFACE_VERSION);
+                m.open_mic = Some(mic_open);
+                m.close_mic = Some(mic_close);
+                m.set_mic_state = Some(mic_set);
+                m.read_mic = Some(mic_read);
+                true
             }
             RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE => {
                 *data.cast::<bool>() = UPDATED.swap(false, Ordering::SeqCst);
@@ -151,10 +203,15 @@ unsafe extern "C" fn video(data: *const c_void, w: c_uint, h: c_uint, pitch: usi
     s.videos += 1;
 }
 
-unsafe extern "C" fn audio_batch(_data: *const i16, frames: usize) -> usize {
+unsafe extern "C" fn audio_batch(data: *const i16, frames: usize) -> usize {
     // 一度に 500 組まで受ける（コアは残りを繰り返して渡す）
     let n = frames.min(500);
-    seen().audio_frames += n;
+    // SAFETY: コアは frames 組（2×frames 個）を渡す
+    let pcm = unsafe { std::slice::from_raw_parts(data, 2 * n) };
+    let peak = pcm.iter().map(|&v| i32::from(v).abs()).max().unwrap_or(0);
+    let mut s = seen();
+    s.audio_frames += n;
+    s.audio_peak = s.audio_peak.max(peak);
     n
 }
 
@@ -207,7 +264,7 @@ fn a_frontend_session() {
 
     assert_eq!(retro_api_version(), 1);
     retro_set_environment(Some(environment));
-    assert_eq!(seen().variables, 3, "選択肢");
+    assert_eq!(seen().variables, 4, "選択肢");
     retro_set_video_refresh(Some(video));
     retro_set_audio_sample_batch(Some(audio_batch));
     retro_set_input_poll(Some(input_poll));
@@ -376,7 +433,39 @@ fn a_frontend_session() {
     let flushes = MIDI_FLUSHES.load(Ordering::SeqCst);
     run(2);
     assert_eq!(MIDI_FLUSHES.load(Ordering::SeqCst), flushes);
+
+    // Audio IN（DR-130）：選択肢を入れるとマイクを 48 kHz で開いて動かし、1 フレームに約 801 標本を読んで
+    // L・R に入れる（送り返す ROM は音を出さないので、LINE OUT はマイクの音だけ）。切ると閉じる
+    assert_eq!(
+        MIC_OPENS.load(Ordering::SeqCst),
+        0,
+        "選択肢を入れるまで開かない"
+    );
+    *lock(&AUDIO_IN) = c"enabled";
+    UPDATED.store(true, Ordering::SeqCst);
+    seen().audio_peak = 0;
+    run(4);
+    assert_eq!(MIC_OPENS.load(Ordering::SeqCst), 1);
+    assert_eq!(MIC_RATE.load(Ordering::SeqCst), 48_000);
+    assert!(MIC_ON.load(Ordering::SeqCst));
+    let read = MIC_READ.load(Ordering::SeqCst);
+    assert!((4 * 800..=4 * 802).contains(&read), "{read}");
+    let peak = seen().audio_peak;
+    // のこぎり波 ±16000（±0.49 V）が利得 1 で LINE OUT に（±2 V が ±32768。出力の分圧で 0.99 倍）
+    assert!((7000..=8500).contains(&peak), "{peak}");
+    *lock(&AUDIO_IN) = c"disabled";
+    UPDATED.store(true, Ordering::SeqCst);
+    run(1);
+    assert_eq!(MIC_CLOSES.load(Ordering::SeqCst), 1);
+    assert_eq!(MIC_READ.load(Ordering::SeqCst), read, "閉じたら読まない");
+    // 入れ直してゲームを閉じると、マイクも閉じる
+    *lock(&AUDIO_IN) = c"enabled";
+    UPDATED.store(true, Ordering::SeqCst);
+    run(1);
     retro_unload_game();
+    assert_eq!(MIC_OPENS.load(Ordering::SeqCst), 2);
+    assert_eq!(MIC_CLOSES.load(Ordering::SeqCst), 2);
+    *lock(&AUDIO_IN) = c"disabled";
 
     // Boot ROM がない：読み込みに失敗し、画面に知らせる
     std::fs::remove_file(dir.join(BOOT_FILE)).unwrap();

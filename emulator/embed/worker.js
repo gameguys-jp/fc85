@@ -11,13 +11,18 @@
 //
 // 受ける知らせ（type）：init（wasm の URL、canvas）、audio（AudioWorklet への MessagePort）、boot（ROM、
 // DOC の子基板）、run（on）、input（pad）、reset、save、load（state）、bench（frames）、bend（cmd。仕様書 §11
-// のベンド点の命令を窓口の JSON の手順の bend で。DR-124）、midi（bytes。MIDI IN。DR-126）。
+// のベンド点の命令を窓口の JSON の手順の bend で。DR-124）、midi（bytes。MIDI IN。DR-126）、audioin（link：
+// マイクの AudioWorklet への MessagePort、pcm：ファイルの音、どちらもなければ止める。Audio IN。DR-129、DR-130）。
 // 送る知らせ：ready、frame（canvas がないとき）、stat（1 秒ごと）、saved、loaded、bench、bent（summary、mode）、
 // midi（msgs：MIDI OUT のメッセージと送る時刻）、error。
 //
 // MIDI（DR-126）：頁から来た MIDI IN の byte は、次のフレームの頭に ACIA の線に置く。ACIA が送り終えた MIDI OUT
 // の byte はメッセージに組み立て（ランニングステータスを開く）、送り終えた時刻の音が鳴るときに送るよう、時刻
 // （performance.timeOrigin からの ms）を付けて頁へ送る。音が鳴っていないときは、計算した時刻から。
+//
+// Audio IN（DR-129、DR-130）：フレームの頭に、仮想機の Audio IN の列に足す。マイクの音（48 kHz、512 組ずつ
+// 届く）は届いた分を足し、仮想機の列が 4 フレーム分を超えたら捨てて無音から（マイクと音の時計のずれを吸う）。
+// ファイルの音は、列が 2 フレーム分を切ったら 3 フレーム分まで足す。
 // ライセンスは MIT（リポジトリの LICENSE）。
 import { load, AREA, FLAGS, MidiAssembler } from "./fc85emu.js";
 
@@ -55,6 +60,13 @@ let busy = 0;
 let midiAsm = new MidiAssembler();
 let midiIn = 0;
 let midiOut = 0;
+// Audio IN：マイクの MessagePort と届いた音、ファイルの音と次に足す位置、足した組の数
+const PAIRS = 801;
+const EMPTY = new Int16Array(0);
+let ainLink = null;
+let ainQueue = [];
+let ainFile = null;
+let ainIn = 0;
 
 const post = (msg, transfer = []) => self.postMessage(msg, transfer);
 
@@ -82,6 +94,8 @@ function build() {
   m = fc85.create({ boot: roms.boot, chars: roms.chars, flags: roms.doc ? 0 : FLAGS.NO_DOC });
   if (roms.cart) m.loadCart(roms.cart);
   flush();
+  // ファイルの Audio IN は、読み込み直した仮想機に頭から入れ直す
+  if (ainFile) ainFile.pos = 0;
 }
 
 /** AudioWorklet の溜まりを捨てる（リセット、状態を戻す、一時停止）。MIDI OUT の組立ても初めから。 */
@@ -91,9 +105,32 @@ function flush() {
   midiAsm = new MidiAssembler();
 }
 
+/** フレームの頭に、Audio IN の音を仮想機の列に足す。 */
+function feedAudioIn() {
+  if (ainFile && ainFile.pos < ainFile.pcm.length) {
+    const have = m.audioIn(EMPTY);
+    if (have < 2 * PAIRS) {
+      const end = Math.min(ainFile.pos + 2 * (3 * PAIRS - have), ainFile.pcm.length);
+      m.audioIn(ainFile.pcm.subarray(ainFile.pos, end));
+      ainIn += (end - ainFile.pos) >> 1;
+      ainFile.pos = end;
+    }
+  }
+  if (ainQueue.length > 0) {
+    let have = 0;
+    for (const c of ainQueue) {
+      have = m.audioIn(c);
+      ainIn += c.length >> 1;
+    }
+    ainQueue = [];
+    if (have > 4 * PAIRS) m.call("audio_in", { clear: true });
+  }
+}
+
 function frame() {
   m.setInput(pad | tapped);
   tapped = 0;
+  if (ainFile || ainQueue.length > 0) feedAudioIn();
   m.runFrames(1);
   const pcm = m.audio();
   if (link && pcm.length > 0) {
@@ -175,6 +212,7 @@ function stat(t) {
     underruns: link ? underruns : null,
     midiIn,
     midiOut,
+    audioIn: ainIn,
   });
   statAt = t;
   statFrames = 0;
@@ -284,6 +322,27 @@ self.onmessage = async (e) => {
         if (m) {
           m.midiIn(d.bytes);
           midiIn += d.bytes.length;
+        }
+        break;
+      case "audioin":
+        // 前の源を止め、仮想機の列も捨てる
+        if (ainLink) {
+          ainLink.onmessage = null;
+          ainLink.close();
+          ainLink = null;
+        }
+        ainQueue = [];
+        ainFile = null;
+        if (m) m.call("audio_in", { clear: true });
+        if (d.link) {
+          ainLink = d.link;
+          ainLink.onmessage = (a) => {
+            if (!running) return;
+            ainQueue.push(a.data.pcm);
+            if (ainQueue.length > 64) ainQueue.shift();
+          };
+        } else if (d.pcm) {
+          ainFile = { pcm: d.pcm, pos: 0 };
         }
         break;
       case "bend": {

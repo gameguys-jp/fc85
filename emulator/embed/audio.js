@@ -7,6 +7,7 @@
 // - 約 21 ms ごとに、取り出した組の数（consumed）と溜まっている組の数（queued）と尽きた回数を Worker に
 //   返す。Worker はこれで進める速さを決める（音の時計に合わせる）。
 // - { flush: true } を受けたら、それより前に受けた音を捨てる（捨てた分も取り出した数に入れる）。
+// 同じファイルの fc85-in は Audio IN（DR-129、DR-130）：頁がつないだマイクの音を Worker へ送る（下）。
 // ライセンスは MIT（リポジトリの LICENSE）。
 
 const RESUME = 1602;
@@ -124,3 +125,60 @@ class Fc85Out extends AudioWorkletProcessor {
 }
 
 registerProcessor("fc85-out", Fc85Out);
+
+/**
+ * Audio IN（DR-129、DR-130）：頁がつないだ音（マイク・ライン入力）を 48 kHz の L・R の Int16Array にして、
+ * 512 組（約 10.7 ms）ごとに Worker へ送る。AudioContext が 48 kHz でなければ、隣り合う標本の間を直線で補う
+ * （ホストの audio_in.rs と同じ）。1 チャネルの入力は L・R の両方に。出力は無音（グラフに残すためにつなぐ）。
+ */
+class Fc85In extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    const o = (options && options.processorOptions) || {};
+    // 出力の 1 標本の間に進む入力の標本の数と、次の出力の位置（前の入力を 0、今の入力を 1）
+    this.step = sampleRate / (o.targetRate || 48000);
+    this.pos = 1;
+    this.prevL = 0;
+    this.prevR = 0;
+    this.buf = new Int16Array(2 * 512);
+    this.n = 0;
+    this.link = null;
+    this.port.onmessage = (e) => {
+      if (e.data && e.data.link) this.link = e.data.link;
+    };
+  }
+
+  emit(l, r) {
+    this.buf[2 * this.n] = Math.max(-32768, Math.min(32767, Math.round(l * 32768)));
+    this.buf[2 * this.n + 1] = Math.max(-32768, Math.min(32767, Math.round(r * 32768)));
+    this.n += 1;
+    if (this.n === 512) {
+      if (this.link) {
+        const pcm = this.buf;
+        this.link.postMessage({ pcm }, [pcm.buffer]);
+        this.buf = new Int16Array(2 * 512);
+      }
+      this.n = 0;
+    }
+  }
+
+  process(inputs) {
+    const inp = inputs[0];
+    if (!inp || inp.length === 0) return true;
+    const l = inp[0];
+    const r = inp[1] || inp[0];
+    for (let i = 0; i < l.length; i++) {
+      while (this.pos <= 1) {
+        const f = this.pos;
+        this.emit(this.prevL + (l[i] - this.prevL) * f, this.prevR + (r[i] - this.prevR) * f);
+        this.pos += this.step;
+      }
+      this.pos -= 1;
+      this.prevL = l[i];
+      this.prevR = r[i];
+    }
+    return true;
+  }
+}
+
+registerProcessor("fc85-in", Fc85In);

@@ -12,7 +12,7 @@
   build/ に Boot ROM・文字 ROM がなければ、下の欄でファイルを選ぶ。カートリッジは、build.py が写した
   サンプル（build/carts.json の一覧。DR-115）から選ぶか、ファイルの欄で選ぶか、頁の URL に ?cart=<URL>
   （この頁からの相対。例 ?cart=build/carts/game.bin）か ?sample=<名前>（例 ?sample=echo）を付ける。
-  ?doc=0 で DOC の子基板を外す。MIDI の装置は Web MIDI で選ぶ（DR-126）。
+  ?doc=0 で DOC の子基板を外す。MIDI の装置は Web MIDI で選ぶ（DR-126）。Audio IN はマイクか音のファイル（DR-130）。
   仮想機は Web Worker（worker.js）で回し、音は AudioWorklet（audio.js）で鳴らす。進める速さは音の時計に
   合わせる（DR-107）。この頁は釦と描画だけ（OffscreenCanvas が使えれば描画も Worker）。
   ライセンスは MIT（リポジトリの LICENSE）。
@@ -86,6 +86,12 @@
       <label>MIDI IN <select id="midiIn" disabled><option value="all">すべて</option><option value="">なし</option></select></label>
       <label>MIDI OUT <select id="midiOut" disabled><option value="">なし</option></select></label>
     </div>
+    <div class="row">
+      <label>Audio IN <select id="ain">
+        <option value="">なし</option><option value="mic">マイク・ライン入力</option><option value="file">音のファイル</option>
+      </select></label>
+      <input type="file" id="ainFile" accept="audio/*,.wav" hidden>
+    </div>
     <p class="help">十字キー、Z = A、X = B、C = C、Enter = START（ホストと同じ）。画面を押してから。
       ゲームパッドは、十字か左の棒、下の釦 = A、右 = B、左 = C、START（つないで釦を押すと読み始める）。
       サンプルを選び直すと、その場で読み込み直す。サンプルの使い方は sdk/samples/&lt;名前&gt;/README.md。
@@ -94,7 +100,9 @@
       「ベンド」は仕様書 §11 のベンド点の命令で、ホストの --bend と同じ書き方（例 mode bend、clock doc 4000000。
       使い方は sdk/samples/bend/README.md）。読み込み直すと通常に戻る。
       「MIDI を使う」で、ブラウザの Web MIDI の装置を選ぶ（ブラウザが許可を求める）。MIDI IN の byte は仮想機の
-      ACIA（31.25 kbit/s）に入り、ROM が送った MIDI OUT は、その時刻の音が鳴るときに送る（SysEx は送らない）。</p>
+      ACIA（31.25 kbit/s）に入り、ROM が送った MIDI OUT は、その時刻の音が鳴るときに送る（SysEx は送らない）。
+      「Audio IN」は背面の音声入力（DR-129）：マイク・ライン入力（ブラウザが許可を求める。エコーの除去と自動の
+      音量は切る）か、音のファイル（ブラウザが読める形式）。0 dBFS が ±1 V で、ミキサと DOC の A/D に入る。</p>
   </section>
 </main>
 <script type="module">
@@ -177,6 +185,7 @@ function onWorker(e) {
               `仮想機の時間 ${Math.round(d.load * 100)}%`;
       if (d.lead !== null) t += `　音の溜まり ${Math.round(d.lead)} ms（目標 ${Math.round(d.target)}）　途切れ ${d.underruns}`;
       if (midi || d.midiIn || d.midiOut) t += `　MIDI 受 ${d.midiIn}・送 ${d.midiOut} byte`;
+      if (d.audioIn) t += `　Audio IN ${(d.audioIn / info.audioRate).toFixed(1)} 秒`;
       s.textContent = t;
       s.classList.toggle("slow", d.speed < 0.97);
       break;
@@ -341,6 +350,67 @@ $("midiOn").onclick = async () => {
   say(`MIDI：IN ${midi.inputs.size} 個、OUT ${midi.outputs.size} 個`);
 };
 $("midiIn").onchange = bindMidiIn;
+
+// Audio IN（DR-129、DR-130）：マイクは AudioWorklet（audio.js の fc85-in）が 48 kHz にして Worker へ送る。
+// ファイルはブラウザで 48 kHz に読み直して Worker へ渡す
+let ain = null;
+function stopAudioIn() {
+  if (ain) {
+    ain.stream.getTracks().forEach((t) => t.stop());
+    ain.src.disconnect();
+    ain.node.disconnect();
+    ain = null;
+  }
+  if (worker) worker.postMessage({ type: "audioin" });
+}
+async function startMic() {
+  if (!audio) throw new Error("先に「始める」で音を鳴らす");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("このブラウザでは録音できない");
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 } });
+  const src = audio.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(audio, "fc85-in", {
+    numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2,
+    channelCountMode: "explicit", processorOptions: { targetRate: info.audioRate } });
+  src.connect(node);
+  node.connect(audio.destination);
+  const ch = new MessageChannel();
+  node.port.postMessage({ link: ch.port1 }, [ch.port1]);
+  worker.postMessage({ type: "audioin", link: ch.port2 }, [ch.port2]);
+  ain = { stream, src, node };
+  const t = stream.getAudioTracks()[0];
+  say(`Audio IN：${t ? t.label : "入力"}`);
+}
+async function fileAudioIn(file) {
+  const bytes = await file.arrayBuffer();
+  const off = new OfflineAudioContext(2, 1, info.audioRate);
+  const buf = await off.decodeAudioData(bytes);
+  const l = buf.getChannelData(0), r = buf.numberOfChannels > 1 ? buf.getChannelData(1) : l;
+  const pcm = new Int16Array(2 * buf.length);
+  const to16 = (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32768)));
+  for (let i = 0; i < buf.length; i++) { pcm[2 * i] = to16(l[i]); pcm[2 * i + 1] = to16(r[i]); }
+  worker.postMessage({ type: "audioin", pcm }, [pcm.buffer]);
+  say(`Audio IN：${file.name}（${buf.duration.toFixed(2)} 秒）`);
+}
+$("ain").onchange = async () => {
+  const v = $("ain").value;
+  stopAudioIn();
+  if (!worker) { if (v) say("先に「始める」"); $("ain").value = ""; return; }
+  try {
+    if (v === "mic") await startMic();
+    else if (v === "file") $("ainFile").click();
+  } catch (e) {
+    say(`Audio IN を使えない：${e.message}`);
+    $("ain").value = "";
+  }
+};
+$("ainFile").onchange = async () => {
+  const f = $("ainFile").files[0];
+  $("ainFile").value = "";
+  if (!f) { $("ain").value = ""; return; }
+  try { await fileAudioIn(f); }
+  catch (e) { say(`読めない：${e.message}`); $("ain").value = ""; }
+};
 
 // 入力：キーボード（画面を押してから）とゲームパッド（標準の配置。DR-116）の OR を PORT_A にする
 let keyPad = 0, gamePad = 0;

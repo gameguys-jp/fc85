@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use std::ffi::{c_char, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 
 pub const RETRO_API_VERSION: c_uint = 1;
 
@@ -37,6 +37,8 @@ pub const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: c_uint = 27;
 pub const RETRO_ENVIRONMENT_SET_GEOMETRY: c_uint = 37;
 pub const RETRO_ENVIRONMENT_EXPERIMENTAL: c_uint = 0x10000;
 pub const RETRO_ENVIRONMENT_GET_MIDI_INTERFACE: c_uint = 48 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+pub const RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE: c_uint = 75 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+pub const RETRO_MICROPHONE_INTERFACE_VERSION: c_uint = 1;
 
 pub const RETRO_PIXEL_FORMAT_XRGB8888: c_uint = 1;
 
@@ -63,6 +65,34 @@ pub struct RetroMidiInterface {
     pub read: Option<MidiReadFn>,
     pub write: Option<MidiWriteFn>,
     pub flush: Option<MidiFlushFn>,
+}
+/// `retro_microphone_params_t`。rate は頼む標本の周波数（0 ならフロントエンドの既定）。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RetroMicrophoneParams {
+    pub rate: c_uint,
+}
+pub type OpenMicFn = unsafe extern "C" fn(params: *const RetroMicrophoneParams) -> *mut c_void;
+pub type CloseMicFn = unsafe extern "C" fn(mic: *mut c_void);
+pub type GetMicParamsFn =
+    unsafe extern "C" fn(mic: *const c_void, params: *mut RetroMicrophoneParams) -> bool;
+pub type SetMicStateFn = unsafe extern "C" fn(mic: *mut c_void, state: bool) -> bool;
+pub type GetMicStateFn = unsafe extern "C" fn(mic: *const c_void) -> bool;
+pub type ReadMicFn =
+    unsafe extern "C" fn(mic: *mut c_void, samples: *mut i16, num_samples: usize) -> c_int;
+
+/// `retro_microphone_interface`（RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE）。interface_version はコアが
+/// 頼む版を入れて渡す。マイクはモノラルの 16 bit で、開いた直後は止まっている（set_mic_state で動かす）。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RetroMicrophoneInterface {
+    pub interface_version: c_uint,
+    pub open_mic: Option<OpenMicFn>,
+    pub close_mic: Option<CloseMicFn>,
+    pub get_params: Option<GetMicParamsFn>,
+    pub set_mic_state: Option<SetMicStateFn>,
+    pub get_mic_state: Option<GetMicStateFn>,
+    pub read_mic: Option<ReadMicFn>,
 }
 pub type AudioSampleBatchFn = unsafe extern "C" fn(data: *const i16, frames: usize) -> usize;
 pub type InputPollFn = unsafe extern "C" fn();

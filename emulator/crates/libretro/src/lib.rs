@@ -15,6 +15,8 @@
 //! - MIDI：フロントエンドの MIDI の口（RETRO_ENVIRONMENT_GET_MIDI_INTERFACE）があれば、MIDI IN の byte を
 //!   フレームの頭に ACIA の線に置き、ACIA が送り終えた byte を、前の byte からの µs（仮想機の時刻の差）を
 //!   付けて MIDI OUT に書く（DR-126）。
+//! - Audio IN：選択肢 `fc85_audio_in` を enabled にすると、フロントエンドのマイクの口
+//!   （RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE）でマイクを開き、背面の Audio IN の L・R に入れる（DR-130）。
 //!
 //! 68000 が止まっても（halt）フレームは進む。中で panic したら、そのゲームを止めて記録に書き、
 //! フロントエンドは止めない。
@@ -52,6 +54,8 @@ struct Callbacks {
     log: Option<LogPrintfFn>,
     /// フロントエンドの MIDI の口（なければ None。DR-126）。
     midi: Option<RetroMidiInterface>,
+    /// フロントエンドのマイクの口（なければ None。DR-130）。
+    mic: Option<RetroMicrophoneInterface>,
 }
 
 static CB: Mutex<Callbacks> = Mutex::new(Callbacks {
@@ -62,7 +66,13 @@ static CB: Mutex<Callbacks> = Mutex::new(Callbacks {
     input: None,
     log: None,
     midi: None,
+    mic: None,
 });
+
+/// 開いたマイク（フロントエンドの持ち物の印）。コアの錠の中でだけ使う。
+struct Mic(*mut c_void);
+// SAFETY: 印を運ぶだけで、使うのは錠を取った retro_run の中（フロントエンドの約束どおり同じスレッド）
+unsafe impl Send for Mic {}
 
 /// 1 フレームに MIDI IN から読む byte の上限（31.25 kbit/s の 1 フレームは約 52 byte）。
 const MIDI_READ_MAX: usize = 1024;
@@ -105,7 +115,7 @@ struct Table<T>(T);
 // SAFETY: 中のポインタは静的な文字列を指し、書き換えない
 unsafe impl<T> Sync for Table<T> {}
 
-static VARIABLES: Table<[RetroVariable; 4]> = Table([
+static VARIABLES: Table<[RetroVariable; 5]> = Table([
     RetroVariable {
         key: c"fc85_area".as_ptr(),
         value: c"Picture area; view|active|raster".as_ptr(),
@@ -117,6 +127,10 @@ static VARIABLES: Table<[RetroVariable; 4]> = Table([
     RetroVariable {
         key: c"fc85_audio_tap".as_ptr(),
         value: c"Audio tap (applies on reset); line|digital".as_ptr(),
+    },
+    RetroVariable {
+        key: c"fc85_audio_in".as_ptr(),
+        value: c"Audio IN from the microphone; disabled|enabled".as_ptr(),
     },
     RetroVariable {
         key: std::ptr::null(),
@@ -179,6 +193,8 @@ struct Options {
     area: Area,
     doc: bool,
     line: bool,
+    /// フロントエンドのマイクを Audio IN に入れる（DR-130）。
+    audio_in: bool,
 }
 
 impl Default for Options {
@@ -187,6 +203,7 @@ impl Default for Options {
             area: Area::View,
             doc: true,
             line: true,
+            audio_in: false,
         }
     }
 }
@@ -216,6 +233,7 @@ fn read_options() -> Options {
     }
     o.doc = variable(c"fc85_doc").as_deref() != Some("disabled");
     o.line = variable(c"fc85_audio_tap").as_deref() != Some("digital");
+    o.audio_in = variable(c"fc85_audio_in").as_deref() == Some("enabled");
     o
 }
 
@@ -242,6 +260,19 @@ struct Core {
     state_size: usize,
     /// MIDI OUT に最後に書いた byte の時刻（仮想機の µs）。write の delta_time の起点。
     midi_last_us: Option<u64>,
+    /// 開いたマイクと、1 フレームに読む標本の数の端数（DR-130）。
+    mic: Option<Mic>,
+    mic_frac: f64,
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        let close = lock(&CB).mic.and_then(|m| m.close_mic);
+        if let (Some(Mic(h)), Some(close)) = (self.mic.take(), close) {
+            // SAFETY: open_mic が返した印を一度だけ返す
+            unsafe { close(h) };
+        }
+    }
 }
 
 /// Main RAM の領域を動かさずに `f` を走らせる（状態を戻す・電源を入れ直すと `Console` ごと作り直すので、
@@ -353,6 +384,8 @@ unsafe fn load(game: *const RetroGameInfo) -> Result<Core, String> {
         pcm: Vec::new(),
         state_size,
         midi_last_us: None,
+        mic: None,
+        mic_frac: 0.0,
     })
 }
 
@@ -372,7 +405,8 @@ impl Core {
             self.opts = o;
         }
         let cb = lock(&CB);
-        let (poll, input, video, batch, midi) = (cb.poll, cb.input, cb.video, cb.batch, cb.midi);
+        let (poll, input, video, batch, midi, mic) =
+            (cb.poll, cb.input, cb.video, cb.batch, cb.midi, cb.mic);
         drop(cb);
         if let Some(poll) = poll {
             // SAFETY: フロントエンドの関数
@@ -392,6 +426,9 @@ impl Core {
         self.m.set_input(ports[0], ports[1]);
         if let Some(mi) = midi {
             self.midi_in(&mi);
+        }
+        if let Some(mi) = mic {
+            self.audio_in(&mi);
         }
         self.m.run_frames(1);
         let out = self.m.take_midi_out();
@@ -441,6 +478,56 @@ impl Core {
         }
         if !buf.is_empty() {
             self.m.midi_in(0, &buf);
+        }
+    }
+
+    /// Audio IN（DR-129、DR-130）：選択肢で入れたときだけ、フロントエンドのマイク（モノラル。48 kHz を頼む）を
+    /// 開いて動かし、フレームの頭に 1 フレームの分（約 801 標本）を読んで L・R の両方に入れる。選択肢を切ると
+    /// 閉じる。仮想機の列が 4 フレーム分を超えたら捨てる（マイクと音の時計のずれ）。開けなければ選択肢を
+    /// 切ったことにして、毎フレームは試さない。
+    fn audio_in(&mut self, mi: &RetroMicrophoneInterface) {
+        if !self.opts.audio_in {
+            if let (Some(Mic(h)), Some(close)) = (self.mic.take(), mi.close_mic) {
+                // SAFETY: open_mic が返した印を一度だけ返す
+                unsafe { close(h) };
+            }
+            return;
+        }
+        let (Some(open), Some(set), Some(read)) = (mi.open_mic, mi.set_mic_state, mi.read_mic)
+        else {
+            return;
+        };
+        if self.mic.is_none() {
+            let p = RetroMicrophoneParams { rate: AUDIO_RATE };
+            // SAFETY: フロントエンドの関数。p は読める
+            let h = unsafe { open(&p) };
+            if h.is_null() {
+                log(RETRO_LOG_WARN, "マイクを開けない（Audio IN は無音）");
+                message("fc85: no microphone for Audio IN");
+                self.opts.audio_in = false;
+                return;
+            }
+            // SAFETY: 開いた印
+            unsafe { set(h, true) };
+            self.mic = Some(Mic(h));
+            self.mic_frac = 0.0;
+        }
+        let Some(Mic(h)) = self.mic.as_ref().map(|m| Mic(m.0)) else {
+            return;
+        };
+        self.mic_frac += f64::from(AUDIO_RATE) / FRAME_RATE;
+        let n = self.mic_frac.floor() as usize;
+        self.mic_frac -= n as f64;
+        let mut buf = vec![0i16; n];
+        // SAFETY: 開いた印。buf は n 個書ける
+        let got = unsafe { read(h, buf.as_mut_ptr(), n) };
+        let Ok(got) = usize::try_from(got) else {
+            return;
+        };
+        let pcm: Vec<(i16, i16)> = buf[..got.min(n)].iter().map(|&s| (s, s)).collect();
+        self.m.audio_in(&pcm);
+        if self.m.audio_in_pending() > 4 * n {
+            self.m.audio_in_clear();
         }
     }
 
@@ -698,6 +785,20 @@ pub unsafe extern "C" fn retro_load_game(game: *const RetroGameInfo) -> bool {
         flush: None,
     };
     lock(&CB).midi = env(RETRO_ENVIRONMENT_GET_MIDI_INTERFACE, (&raw mut mi).cast()).then_some(mi);
+    let mut mic = RetroMicrophoneInterface {
+        interface_version: RETRO_MICROPHONE_INTERFACE_VERSION,
+        open_mic: None,
+        close_mic: None,
+        get_params: None,
+        set_mic_state: None,
+        get_mic_state: None,
+        read_mic: None,
+    };
+    lock(&CB).mic = env(
+        RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE,
+        (&raw mut mic).cast(),
+    )
+    .then_some(mic);
     guarded("load_game", false, |c| {
         // SAFETY: 上の約束
         *c = Some(unsafe { load(game) }?);
