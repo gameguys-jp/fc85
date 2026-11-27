@@ -13,6 +13,7 @@
 | 実行ファイル | `fc85-api`。標準入力から 1 行に 1 つの要求を読み、標準出力に 1 行の答えを書く。知らせは標準エラー |
 | 動かし方 | `emulator/` で `cargo run --release -p fc85-api -- [--mcp | --http] [--cart cart.bin]`。`--mcp` を付けると MCP サーバー、`--http` で Web の GUI（§06）、付けなければ JSON の手順 |
 | ROM | `load` の `boot`・`char` を省くと、リポジトリの `firmware/*/build/` のビルド結果を読む（先に `py firmware/boot/build.py` と `py firmware/charrom/build.py`）。`--root DIR` は探す起点 |
+| Python | `sdk/tools/fc85emu.py` の `Emulator` が窓口のプログラムを子のプロセスで動かし、`call("run", frames=60)` のように手順を呼ぶ。ROM の試験の見本は `sdk/template/test_rom.py`（DR-102） |
 | 決定的 | 同じ ROM・同じ設定・同じ要求の列なら、同じ結果になる。`run` は、止める条件に当たらなければ、ホスト（`fc85`）で同じフレーム数を同じ入力で進めたときと同じ状態になる（試験 `run_ends_in_the_same_state_as_the_host_frame_loop`） |
 | 版 | 手順の版は `info` の `api_version`（今は 0.1）。答えに項目を足すだけなら小さい方の数を上げ、要求や答えの形を変えたら大きい方を上げる |
 
