@@ -1012,12 +1012,12 @@
 | 却下した案 | WebSocket で画面と音を流し続ける：速さは足りており、先に作ると口が増える。遅れが問題になれば足す [O]。画面を生の画素で送る：1 フレーム 147 KB（base64 で約 196 KB）になり、PNG の方が小さい。ブラウザの中だけで動かす（WebAssembly）：実時間に届かない見込み [V]（DR-092）。ほかの番地（0.0.0.0）でも待てるようにする：`/api` はファイルを読み書きする手順を通すので、手元に限る。発音の記録を DOC の中（ES5503 のレジスタを書いたとき）で取る：命令ごとの正確な時刻は取れるが、DOC 自身が止めたときを拾うには DOC の中に記録の道具を足すことになり、試験の写しの部品を変える。8 µs の細かさで足りる。ADPCM の取込みの数を返す：無音でも 8 kHz で数え続けるので、鳴っているかの手掛かりにならない。見張りをバスの書込みで止める（同じ値の書込みと読出しも拾う）：board 層の `Bus` に記録の口を足すことになる。要るとわかれば足す [O] |
 | 影響 | emulator/crates/api/（http.rs、web/index.html、main.rs、lib.rs、protocol.rs、encode.rs、試験）、emulator/crates/chips/src/es5503.rs（レジスタを読む関数）、sdk/docs/emulator-api.md §03・§04・§06・§07、impl/emulator.md（コマンド、§04）、CLAUDE.md |
 
-## DR-102　ROM のひな形と、エージェントの手引き
+## DR-102　ROM のひな形、エージェントの手引き、保証の手引き
 
 | 項目 | 内容 |
 |---|---|
 | 日付 | 2026-11-27 |
-| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。DR-092 (5)(7) のひな形。(1) `sdk/template/` に、1 本の ROM の最小の形を置く：`main.s`（見出し、入口、毎フレームの処理。題・フレームの数・PORT_A を出し、方向キーで四角を動かす）、`build.py`（`build/rom.bin` と `rom.lst`）、`test_rom.py`（見出しの検査と、窓口で動かしてバスエラー・DOC の窓の警告がなく入力に応える試験）、`AGENTS.md`（作り方・試し方・守ることの要点。エージェントに共通）、`CLAUDE.md`（AGENTS.md を読み込むだけ）、`.gitignore` [P]。(2) `sdk/tools/new_rom.py DEST [--title]` がひな形を写し、題を書き換え、リポジトリの根への道 `fc85-root` と MCP の設定 `.mcp.json` を書く。ROM のフォルダはリポジトリの中でも外でもよい [P]。(3) `sdk/tools/fc85emu.py`：窓口（DR-097）を Python から使う小さな道具。根の探し方（FC85_ROOT、上のフォルダ、`fc85-root`）をひな形の `build.py` とそろえる [P]。(4) 言語：ひな形はまずアセンブラだけで作る。C は GCC（m68k-elf）を手元で確かめられるようになってから、同じひな形に足す [O]（DR-092 (3)） |
+| 決定 | エージェントが決めた（ユーザーが方向を承認。細部は要見直し）。DR-092 (5)(7) のひな形。(1) `sdk/template/` に、1 本の ROM の最小の形を置く：`main.s`（見出し、入口、毎フレームの処理。題・フレームの数・PORT_A を出し、方向キーで四角を動かす）、`build.py`（`build/rom.bin` と `rom.lst`）、`test_rom.py`（見出しの検査と、窓口で動かしてバスエラー・DOC の窓の警告がなく入力に応える試験）、`AGENTS.md`（作り方・試し方・守ることの要点。エージェントに共通）、`CLAUDE.md`（AGENTS.md を読み込むだけ）、`.gitignore` [P]。(2) `sdk/tools/new_rom.py DEST [--title]` がひな形を写し、題を書き換え、リポジトリの根への道 `fc85-root` と MCP の設定 `.mcp.json` を書く。ROM のフォルダはリポジトリの中でも外でもよい [P]。(3) `sdk/tools/fc85emu.py`：窓口（DR-097）を Python から使う小さな道具。根の探し方（FC85_ROOT、上のフォルダ、`fc85-root`）をひな形の `build.py` とそろえる [P]。(4) 言語：ひな形はまずアセンブラだけで作る。C は GCC（m68k-elf）を手元で確かめられるようになってから、同じひな形に足す [O]（DR-092 (3)）。(5) 保証の手引き `sdk/docs/guarantees.md`：ROM が守ること、頼ってよいこと・いけないこと、エミュレータが約束すること、確かめ方を 1 か所にまとめる。中身は出典（仕様書、DR、bios-abi.md、emulator-api.md）の要約で、新しい約束を作らない。出典どうしの食い違いは文書に書かず課題にした（OI-097〜OI-101）[P] |
 | 理由 | ROM は複数の人とエージェントが書く（DR-092）。どこに置いても同じ手順で組み、試し、エミュレータで確かめられる最小の形を先に固めると、ROM 作りを並行して始められる。手引きを AGENTS.md にすると、Claude Code 以外の道具も同じ文書を読む。試験は窓口の手順をそのまま使うので、エージェントが MCP で確かめたことを、そのまま試験に書き写せる。カーソルを記号の字ではなく空白を色で塗った四角にしたのは、文字 ROM の記号の字形がまだそろっていないから（OI-048、OI-063） |
 | 却下した案 | サンプル（`sdk/samples/`）をそのままひな形にする：どれも 1 つの機能を見せるために大きく、最初の形に向かない。ひな形をリポジトリの外の別のリポジトリにする：SDK とエミュレータの版と離れる。配る形（版を付けた SDK の束）は後で決める [O] |
-| 影響 | sdk/template/、sdk/tools/（new_rom.py、fc85emu.py、test_new_rom.py）、sdk/docs/emulator-api.md §01、CLAUDE.md |
+| 影響 | sdk/template/、sdk/tools/（new_rom.py、fc85emu.py、test_new_rom.py）、sdk/docs/guarantees.md、sdk/docs/emulator-api.md §01、open-issues.md（OI-097〜OI-101）、CLAUDE.md |
