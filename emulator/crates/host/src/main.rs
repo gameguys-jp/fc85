@@ -13,7 +13,8 @@
 //! [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N]
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]
-//! [--bend CMD] [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one]`
+//! [--bend CMD] [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one] [--audio-in FILE.wav]
+//! [--audio-in-device N|default] [--audio-list]`
 //!
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
@@ -31,7 +32,9 @@
 //! クロックが基板の半分より遅いか止まっていれば 1/60 秒分）ずつ進めるので、映像のクロックを止めても固まらない。
 //! `--audio-tap` は鳴らす音と WAV に書く音：`line`（既定）はアナログの段の LINE OUT（analog.rs）、`digital` は
 //! チップの出力のデジタルの和（DR-054。`sdk/samples/dsp/verify_wav.py` が標本ごとに照合するのはこちら）。
+//! `--audio-in` は背面の Audio IN に WAV を、`--audio-in-device` は録音の装置の音を入れる（DR-129。audio_in.rs）。
 
+mod audio_in;
 mod midi;
 
 use std::collections::VecDeque;
@@ -85,6 +88,9 @@ struct Args {
     midi_out: Option<usize>,
     /// 鳴らして WAV に書く音：true は LINE OUT、false はデジタルの和。
     line: bool,
+    /// Audio IN の源（DR-129）：WAV のパスか、録音の装置（`default` か番号）。
+    audio_in: Option<String>,
+    audio_in_device: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -106,6 +112,8 @@ fn parse_args() -> Args {
         midi_in: None,
         midi_out: None,
         line: true,
+        audio_in: None,
+        audio_in_device: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -126,6 +134,12 @@ fn parse_args() -> Args {
             "--wav" => a.wav = it.next(),
             "--midi-list" => {
                 midi::list();
+                std::process::exit(0);
+            }
+            "--audio-in" => a.audio_in = it.next(),
+            "--audio-in-device" => a.audio_in_device = it.next(),
+            "--audio-list" => {
+                audio_in::list();
                 std::process::exit(0);
             }
             "--midi-in" => a.midi_in = it.next().and_then(|v| v.parse().ok()),
@@ -162,7 +176,7 @@ fn parse_args() -> Args {
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
-                     [--audio-tap digital|line] [--doc-sig both|one]\n\
+                     [--audio-tap digital|line] [--doc-sig both|one] [--audio-in FILE.wav] [--audio-in-device N|default] [--audio-list]\n\
                      --bend CMD：mode normal|bend|toggle、char A1=A2,D6=0,D2=Z、clock doc|dsp|adpcm|audio HZ|off、\
                      clock video HZ|0|off（映像系の 21.47727 MHz、0 で止める）、\
                      fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open、sig both|one、dram unit N|temp C|refresh hsync|auto、\
@@ -737,6 +751,11 @@ fn main() {
     let mut pic = Vec::new();
     // 最初の状態（表示が動き出す前の「同期なし」）は出さない
     let mut tv_seen = (tv.status(&c.sys).summary(), false);
+    let mut line_in = match (&a.audio_in, &a.audio_in_device) {
+        (Some(p), _) => audio_in::Source::file(p),
+        (None, Some(d)) => audio_in::Source::device(d),
+        (None, None) => None,
+    };
 
     if a.headless {
         let n = a.frames.unwrap_or(60);
@@ -745,6 +764,9 @@ fn main() {
             run_bend_script(&mut c, &a, i);
             if let Some(&(_, v)) = a.pad_script.iter().rev().find(|e| e.0 <= i) {
                 c.sys.set_ports(v, 0);
+            }
+            if let Some(s) = &mut line_in {
+                s.feed(&mut c);
             }
             c.run_frame();
             report(&c, &mut seen, i);
@@ -851,6 +873,9 @@ fn main() {
         // MIDI IN はフレームの頭に線に来たとする。MIDI OUT は仮想機の時刻の間隔のまま送る（DR-126）
         let start = c.cpu.clock;
         c.sys.midi_receive(start, &midi.take_received());
+        if let Some(s) = &mut line_in {
+            s.feed(&mut c);
+        }
         c.run_frame();
         let sent: Vec<(u64, u8)> = c.sys.midi_out.drain(..).collect();
         midi.send(&sent, start, std::time::Instant::now());

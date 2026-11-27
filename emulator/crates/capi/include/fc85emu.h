@@ -88,6 +88,9 @@ int32_t fc85_screen(fc85_t *m, int32_t area, uint32_t *out, size_t out_len);
 /* 同じ画面を R・G・B・A（A は 255）の byte の順で（ブラウザの ImageData の形）。out_len は byte の数 */
 int32_t fc85_screen_rgba(fc85_t *m, int32_t area, uint8_t *out, size_t out_len);
 int32_t fc85_audio(fc85_t *m, int16_t *out, size_t max_frames);
+/* Audio IN（背面の RCA。DR-129）：L・R の s16 を交互に frames 組。48 kHz、±32768 が ±1 V。今から順に使い、
+ * ミキサと DOC の A/D の段に入る。溜まりは 1 秒まで。戻り値はまだ使っていない組の数か -1 */
+int32_t fc85_audio_in(fc85_t *m, const int16_t *lr, size_t frames);
 
 /* 状態。fc85_save_state の領域は fc85_free_bytes で返す */
 uint8_t *fc85_save_state(fc85_t *m, size_t *len);

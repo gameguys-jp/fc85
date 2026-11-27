@@ -12,6 +12,7 @@
 //   const pcm = m.audio();                                   // Int16Array（L・R の順、48 kHz）
 //   m.midiIn([0x90, 60, 100]);                               // MIDI IN（ACIA の線）
 //   const { bytes, us } = m.midiOut();                       // MIDI OUT と送り終えた時刻（µs）
+//   m.audioIn(lr);                                           // Audio IN（Int16Array、L・R の順、48 kHz）
 //
 // 誤りは Error を投げる。WebAssembly の中の panic は止まる（RuntimeError）ので、その仮想機は捨てる。
 // ライセンスは MIT（リポジトリの LICENSE）。
@@ -198,6 +199,17 @@ class Machine {
   midiIn(bytes, delayUs = 0) {
     this.mod.withBytes(Uint8Array.from(bytes), (p, n) =>
       this.check(this.x.fc85_midi_in(this.ptr, p, n, delayUs >>> 0), "fc85_midi_in"));
+  }
+
+  /**
+   * Audio IN（背面の RCA。DR-129）に音を足す。lr は L・R を交互に並べた Int16Array（48 kHz、±32768 が ±1 V）。
+   * 今から順に 1 標本ずつ使い、ミキサと DOC の A/D の段に入る。溜まりは 1 秒まで。まだ使っていない組の数を返す。
+   */
+  audioIn(lr) {
+    const s = lr instanceof Int16Array ? lr : Int16Array.from(lr);
+    const bytes = new Uint8Array(s.buffer, s.byteOffset, s.byteLength & ~3);
+    return this.mod.withBytes(bytes, (p, n) =>
+      this.check(this.x.fc85_audio_in(this.ptr, p, n >>> 2), "fc85_audio_in"));
   }
 
   /** MIDI OUT：ACIA が送り終えた byte と、その時刻（µs）。{ bytes: Uint8Array, us: Float64Array }。 */

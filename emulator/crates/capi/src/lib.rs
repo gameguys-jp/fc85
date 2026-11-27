@@ -277,6 +277,34 @@ pub unsafe extern "C" fn fc85_midi_in(
     })
 }
 
+/// Audio IN（背面の RCA）に frames 個の標本を足す（DR-129）。lr は L、R、L、R… の 16 bit で、48 kHz、
+/// ±32768 が ±1 V。今から順に 1 標本ずつ使われ、ミキサと DOC の A/D の段に入る。溜まりは 1 秒まで（古い
+/// ものを捨てる）。まだ使っていない標本の数か -1。
+///
+/// # Safety
+/// `m` は生きている仮想機。lr は NULL か 2×frames 個の i16 を読める（境界にそろっていなくてもよい）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fc85_audio_in(m: *mut Fc85, lr: *const i16, frames: usize) -> i32 {
+    guard(-1, || {
+        if lr.is_null() && frames > 0 {
+            return Err("lr が NULL".into());
+        }
+        let pcm: Vec<(i16, i16)> = (0..frames)
+            // SAFETY: 上の約束
+            .map(|i| unsafe {
+                (
+                    lr.add(2 * i).read_unaligned(),
+                    lr.add(2 * i + 1).read_unaligned(),
+                )
+            })
+            .collect();
+        // SAFETY: 上の約束
+        let mc = unsafe { handle(m) }?.machine()?;
+        mc.audio_in(&pcm);
+        Ok(mc.audio_in_pending().min(i32::MAX as usize) as i32)
+    })
+}
+
 /// MIDI OUT：ACIA が送り終えた byte を古い順に out へ最大 cap 個書き、取り出す。time_us が NULL でなければ、
 /// 送り終えた時刻（電源を入れてからの µs。fc85_time_us と同じ数え方）を同じ順に書く。書いた数か -1。
 /// 残りは次に回す。

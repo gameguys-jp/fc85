@@ -270,6 +270,20 @@ pub fn methods() -> Vec<(&'static str, &'static str, Value)> {
             }}),
         ),
         (
+            "audio_in",
+            "Audio IN（背面の RCA）に音を足す（DR-129）。48 kHz の L・R で、±32768 が ±1 V。今から順に使われ、ミキサ（LINE OUT）と DOC の A/D の段に入る。path は WAV（48 kHz でなければ線形補間で変える）、samples は L・R を交互に並べた数、tone は正弦波。clear で溜まりを捨てる。進めるのは run で",
+            json!({"type": "object", "properties": {
+                "path": {"type": "string"},
+                "samples": {"type": "array", "items": {"type": "integer", "minimum": -32768, "maximum": 32767}, "description": "L、R、L、R…"},
+                "tone": {"type": "object", "required": ["hz", "ms"], "properties": {
+                    "hz": {"type": "number", "minimum": 0, "maximum": 24000},
+                    "amp": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5},
+                    "ms": {"type": "integer", "minimum": 1, "maximum": 1000}
+                }},
+                "clear": {"type": "boolean", "default": false}
+            }}),
+        ),
+        (
             "symbols",
             "ラベルを探す（prefix で始まる名前）か、addr の名前を返す",
             json!({"type": "object", "properties": {"prefix": {"type": "string"}, "addr": addr, "limit": {"type": "integer", "default": 50}}}),
@@ -681,6 +695,59 @@ impl Session {
                     "now_us": m.time_us(),
                     "dropped": m.midi_out_dropped(),
                     "pending_in": m.console.sys.midi_line_pending(),
+                })
+            }
+            "audio_in" => {
+                let mut pcm = Vec::new();
+                if let Some(path) = opt_str(p, "path")? {
+                    pcm.extend(fc85_board::wav::read(&read_file(Path::new(path))?)?);
+                }
+                match p.get("samples") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Array(a)) => {
+                        if a.len() % 2 != 0 {
+                            return Err("samples は L・R の組（偶数個）".into());
+                        }
+                        let v: Vec<i16> = a
+                            .iter()
+                            .map(|x| {
+                                x.as_i64()
+                                    .and_then(|n| i16::try_from(n).ok())
+                                    .ok_or("samples は -32768〜32767 の数")
+                            })
+                            .collect::<Result<_, _>>()?;
+                        pcm.extend(v.chunks(2).map(|c| (c[0], c[1])));
+                    }
+                    Some(_) => return Err("samples は数の配列".into()),
+                }
+                if let Some(t) = p.get("tone").filter(|v| !v.is_null()) {
+                    let hz = t
+                        .get("hz")
+                        .and_then(Value::as_f64)
+                        .ok_or("tone.hz がない")?;
+                    let amp = t.get("amp").and_then(Value::as_f64).unwrap_or(0.5);
+                    let ms = t
+                        .get("ms")
+                        .and_then(Value::as_u64)
+                        .ok_or("tone.ms がない")?;
+                    if !(0.0..=24_000.0).contains(&hz)
+                        || !(0.0..=1.0).contains(&amp)
+                        || !(1..=1000).contains(&ms)
+                    {
+                        return Err("tone は hz 0〜24000、amp 0〜1、ms 1〜1000".into());
+                    }
+                    pcm.extend(fc85_board::wav::tone(hz, amp, ms as u32));
+                }
+                let clear = opt_bool(p, "clear")?.unwrap_or(false);
+                let m = self.machine()?;
+                if clear {
+                    m.audio_in_clear();
+                }
+                m.audio_in(&pcm);
+                json!({
+                    "queued": pcm.len(),
+                    "pending": m.audio_in_pending(),
+                    "dropped": m.audio_in_dropped(),
                 })
             }
             "symbols" => {

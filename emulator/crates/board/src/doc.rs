@@ -65,7 +65,7 @@
 
 use crate::access::{AccessTime, Path};
 use crate::acrtc::T_OUT;
-use crate::analog::{Hold, SigWiring, sh_alpha_q16};
+use crate::analog::{ADC_IDLE_CODE, Hold, SigWiring, sh_alpha_q16};
 use crate::bend::Wire;
 use crate::dram::{Dram, DramEnv};
 use crate::fabric::{Access, Dir, PortReply};
@@ -514,10 +514,12 @@ impl WaveBus for WaveRam<'_> {
 }
 
 impl DocBoard {
-    /// 電源投入時。波形 RAM は 0 [V]。
+    /// 電源投入時。波形 RAM は 0 [V]。A/D の入力は、A/D の段の中央（Audio IN に何もないときの値。DR-129）。
     pub fn new() -> Self {
+        let mut doc = Es5503::new();
+        doc.set_ad_input(ADC_IDLE_CODE);
         Self {
-            doc: Es5503::new(),
+            doc,
             wave: vec![0; WAVE_BYTES],
             fall: Clock::new(PERIOD_DOC_E, 0),
             rise_pending: false,

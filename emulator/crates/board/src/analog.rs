@@ -105,6 +105,22 @@ pub mod parts {
     pub const OUT_R_LOAD: f64 = 10.0e3;
     /// 4558 の出力の飽和（±12 V の電源）[P]。
     pub const V_SAT: f64 = 10.5;
+
+    /// Audio IN（DR-129）：RCA の後の結合容量と入力抵抗（フォロワ 4558 の入力）、ミキサの入力抵抗。
+    pub const LIN_C: f64 = 10.0e-6;
+    pub const LIN_R: f64 = 47.0e3;
+    pub const MIX_R_LIN: f64 = 10.0e3;
+    /// ホストの 16 bit の入力の ±32768 を RCA の ±`LIN_V_FS` V とみる [P]。
+    pub const LIN_V_FS: f64 = 1.0;
+    /// DOC 子基板の A/D の段（DR-129）：L・R を 20 kΩ ずつ反転加算（帰還 10 kΩ）して (L＋R)/2 にし、
+    /// もう 1 段の反転（10 kΩ、10 kΩ。非反転入力に 0.625 V）で中央を `ADC_BIAS` にする。続けて Sallen-Key の
+    /// LPF（利得 1）、1 kΩ とダイオードの挟み。
+    pub const ADC_BIAS: f64 = 1.25;
+    pub const ADC_SK_R: f64 = 10.0e3;
+    pub const ADC_SK_C1: f64 = 2.7e-9;
+    pub const ADC_SK_C2: f64 = 1.5e-9;
+    /// DOC の A/D の入力の範囲（0〜2.5 V。台帳 ES5503.md §2）。
+    pub const ADC_V_FS: f64 = 2.5;
 }
 
 // ---------------------------------------------------------------------- 回路の式
@@ -287,6 +303,10 @@ pub struct Coefs {
     pub mix_doc: f64,
     pub mix_dac: f64,
     pub mix_ad: f64,
+    /// Audio IN：結合容量の HPF、ミキサの利得、A/D の段の LPF（DR-129）。
+    pub lin_hpf: Section,
+    pub mix_lin: f64,
+    pub adc_sk: Section,
 }
 
 impl Coefs {
@@ -312,6 +332,12 @@ impl Coefs {
             mix_doc: -MIX_R_FB / MIX_R_DOC,
             mix_dac: -MIX_R_FB / MIX_R_DAC,
             mix_ad: -MIX_R_FB / MIX_R_AD,
+            lin_hpf: Section::highpass1(rc_corner(LIN_R, LIN_C), fs),
+            mix_lin: -MIX_R_FB / MIX_R_LIN,
+            adc_sk: {
+                let (f, q) = sallen_key(ADC_SK_R, ADC_SK_R, ADC_SK_C1, ADC_SK_C2);
+                Section::lowpass2(f, q, fs)
+            },
         }
     }
 
@@ -400,6 +426,48 @@ pub struct Inputs {
     pub dac_on: bool,
     /// DA OUT の 10 bit の符号（中央からの差）。
     pub da: f64,
+    /// Audio IN の RCA の電圧（L、R）。ホストが入力を渡していなければ `None`（DR-129）。
+    pub line: Option<[f64; 2]>,
+}
+
+// ---------------------------------------------------------------------- Audio IN と DOC の A/D
+
+/// A/D の入力が中央（`ADC_BIAS`）のときの値。
+pub const ADC_IDLE_CODE: u8 = 128;
+
+/// DOC の A/D の入力の電圧を 8 bit にする：0〜2.5 V を 256 に分けて切り捨て、範囲の外は端に寄せる
+/// （ダイオードの挟みと、変換の飽和）[P][V]。
+pub fn adc_code(v: f64) -> u8 {
+    (v / parts::ADC_V_FS * 256.0).floor().clamp(0.0, 255.0) as u8
+}
+
+/// Audio IN の段（DR-129）：本体の結合容量とフォロワ（ミキサへ）、DOC 子基板の A/D の段。
+/// ホストが一度も入力を渡していなければ空のままで、状態の保存に入らない（入力を使わない ROM の状態は変わらない）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineIn {
+    /// 入力を渡されたことがある。
+    pub used: bool,
+    hpf: [State; 2],
+    sk: State,
+    /// A/D の入力の電圧の 8 bit の値（DOC の A/D が変換の終わりに取る）。
+    pub code: u8,
+}
+
+impl LineIn {
+    pub fn is_idle(&self) -> bool {
+        !self.used
+    }
+
+    /// 1 刻み：RCA の電圧から、ミキサに入れる電圧（フォロワの出力）を返し、A/D の値を更新する。
+    fn tick(&mut self, c: &Coefs, v: [f64; 2]) -> [f64; 2] {
+        self.used = true;
+        let l = self.hpf[0].run(&c.lin_hpf, v[0]);
+        let r = self.hpf[1].run(&c.lin_hpf, v[1]);
+        // (L＋R)/2 を 2 段の反転で正に戻し、中央を ADC_BIAS に。LPF は利得 1 なので交流の分だけを通す
+        let ac = self.sk.run(&c.adc_sk, (l + r) * 0.5);
+        self.code = adc_code(parts::ADC_BIAS + ac.clamp(-parts::V_SAT, parts::V_SAT));
+        [l, r]
+    }
 }
 
 /// アナログの段の状態と、48 kHz の LINE OUT の標本を作るところ。
@@ -427,6 +495,9 @@ pub struct Analog {
     pub mixer: [F; 2],
     /// オペアンプの出力が飽和した刻みの数。
     pub clips: u64,
+    /// Audio IN と DOC の A/D の段（DR-129）。使っていなければ保存しない。
+    #[serde(default, skip_serializing_if = "LineIn::is_idle")]
+    pub line: LineIn,
 }
 
 /// 電圧を 16 bit の標本にする（±`LINE_FULL_SCALE` V で切る）。
@@ -466,6 +537,11 @@ impl Analog {
         self.fresh
     }
 
+    /// 次の刻みが、48 kHz の標本の最初の刻みか（始めたばかりの刻みは標本を作らないので含めない）。
+    pub fn starts_sample(&self) -> bool {
+        !self.fresh && self.phase == 0
+    }
+
     /// 刻みを 1 つ進める。48 kHz の標本ができたら返す。
     pub fn tick(&mut self, inp: &Inputs) -> Option<(i16, i16)> {
         let k = self.next.unwrap_or(0);
@@ -491,6 +567,12 @@ impl Analog {
         let a = self.ad_sk.run(&c.ad_sk, inp.da * c.ad_volts);
         let a = self.ad_mfb.run(&c.ad_mfb, a);
         let a = self.ad_hpf.run(&c.ad_hpf, a);
+        // Audio IN：入力を渡されているか、前に渡されて段が動いているときだけ（DR-129）
+        let line = match inp.line {
+            Some(v) => Some(self.line.tick(c, v)),
+            None if self.line.used => Some(self.line.tick(c, [0.0; 2])),
+            None => None,
+        };
         for i in 0..2 {
             // DOC：反転加算 → SK
             let d = clip(self.doc_sum[i].run(&c.doc_sum, inp.doc[i] * c.doc_volts));
@@ -499,7 +581,11 @@ impl Analog {
             let m = self.dac_mfb[i].run(&c.dac_mfb, inp.dac[i] * c.dac_volts);
             let m = if inp.dac_on { m } else { 0.0 };
             // ミキサ → 結合容量
-            let x = clip(c.mix_doc * d + c.mix_dac * m + c.mix_ad * a);
+            let mut sum = c.mix_doc * d + c.mix_dac * m + c.mix_ad * a;
+            if let Some(l) = line {
+                sum += c.mix_lin * l[i];
+            }
+            let x = clip(sum);
             self.mixer[i] = F(x);
             let y = self.out_hpf[i].run(&c.out_hpf, x);
             self.out[i] = F(y);

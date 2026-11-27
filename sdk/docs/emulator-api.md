@@ -57,6 +57,7 @@
 | `bend` | `cmd`（仕様書 §11 のベンド点の命令。`mode bend`、`clock video 18000000` など） | `summary`、`mode` |
 | `symbols` | `prefix`・`limit`、または `addr` | ラベルの一覧、または番地の名前 |
 | `midi` | `in`（MIDI IN の線に置く byte の列。数の配列か 16 進の文字列）、`delay_us`（今から何 µs 後に線に来たとするか。既定 0、最大 10,000,000） | `out`（ACIA が送り終えた MIDI OUT の byte の `us`・`byte` の列。古い順）、`now_us`、`dropped`、`pending_in`（DR-126）。§03 の下の「MIDI」 |
+| `audio_in` | `path`（WAV。PCM の 8〜32 bit か 32 bit の浮動小数点、48 kHz でなければ線形補間で変える）、`samples`（L・R を交互に並べた −32768〜32767 の数）、`tone`（`hz`・`amp`（0〜1、既定 0.5）・`ms`（1〜1000）の正弦波）、`clear`（溜まりを先に捨てる）。どれも省いてよく、この順に足す | `queued`（足した組の数）、`pending`（まだ使っていない組の数）、`dropped`（DR-129）。§03 の下の「Audio IN」 |
 
 `peek`・`poke` の空間：
 
@@ -79,6 +80,12 @@ MIDI（DR-126）[P]：
 - ACIA がマスターリセットの間（電源投入の直後。BIOS が設定するまで）に届いた byte は、実物と同じく捨てられる。BIOS は受けた byte を受信のリング（bios-abi.md §03）に入れる。
 - `out` は、ACIA が送り終えた byte と、その時刻（最後のストップビットの終わり）。取り出すまで 4,096 byte まで溜め、超えると古い方から捨てて `dropped`（電源投入からの合計）に数える。
 - 状態の保存には入れない（線の上の byte と溜めた送信は、保存・復元で消える）。
+
+Audio IN（DR-129）[P]：
+
+- 背面の RCA の L・R に入る音。48 kHz の L・R の組で、±32768 が ±1 V。`run` で進めると、LINE OUT の標本と同じ時刻に 1 組ずつ使う。溜まりが空なら無音。溜まりは 1 秒（48,000 組）までで、超えると古い方から捨てて `dropped` に数える。
+- 本体のミキサに利得 1 で入り（LINE OUT に出る。デジタルの和の `--audio-tap digital` には出ない）、L＋R の半分が DOC の A/D の段（中央 1.25 V、7.9 kHz の LPF）を通って A/D の入力（0〜2.5 V を 256 に分ける）になる。±1 V が値 25〜230。何もつながなければ A/D は 128 を返す。A/D はソフトが 0xE2 を読んで使う（DR-123）。
+- 一度も音を渡していなければ、入力の段は計算せず、状態にも入れない。溜まりは保存に入れない。
 
 ## 04　run の答え
 
@@ -172,6 +179,7 @@ DR-092 (5) のうち、この版にないもの [O]：I/O のレジスタの読�
 | `fc85_peek`・`fc85_poke` | メモリをバスを通さずに読む・書く。空間は `FC85_SPACE_*`（§03 の表と同じ順：CPU、VRAM、WAVE、DSP_PROG、TEMPORAL、CHAR_ROM、PALETTE） |
 | `fc85_midi_in(m, data, len, delay_us)` | MIDI IN の線に `len` byte を置く（今から `delay_us` µs 後に来たとする。§03 の「MIDI」。DR-126） |
 | `fc85_midi_out(m, out, time_us, cap)` | ACIA が送り終えた MIDI OUT の byte を古い順に最大 `cap` 個書き、数を返す。`time_us`（NULL でもよい）には送り終えた時刻（µs）。残りは次に回す |
+| `fc85_audio_in(m, lr, frames)` | Audio IN に L・R を交互に並べた s16 を `frames` 組足し、まだ使っていない組の数を返す（48 kHz、±32768 が ±1 V。§03 の「Audio IN」。DR-129） |
 | `fc85_time_us(m)` | 仮想機の今の時刻（電源を入れてからの µs） |
 | `fc85_call(m, request)` | §02 の JSON の手順の要求を 1 行、同じ仮想機に送り、答えの行を返す（`fc85_free_string` で返す）。ブレークポイント、見張り、ベンド点、レジスタなど、ほかの手順はこちらで使う |
 | `fc85_abi_version`・`fc85_version`・`fc85_audio_rate`・`fc85_frame_rate`・`fc85_last_error` | ABI の版（今は 1）、エミュレータの版、48000、約 59.92、最後の誤りの文 |
@@ -200,6 +208,7 @@ const st = m.saveState(); m.loadState(st);
 m.call("regs");                                  // JSON の手順
 m.midiIn([0x90, 60, 100]);                       // MIDI IN の線へ（DR-126）
 const { bytes, us } = m.midiOut();               // 送り終えた MIDI OUT（Uint8Array、Float64Array の µs）
+m.audioIn(lr);                                   // Audio IN へ（Int16Array、L・R、48 kHz。DR-129）
 ```
 
 - MIDI：`m.timeUs` が仮想機の時刻（µs）。`MidiAssembler`（`fc85emu.js` が出す）は MIDI OUT の byte の列を、ランニングステータスを開いた完全なメッセージに組み立てる（Web MIDI の `send` は完全なメッセージしか受けない）。SysEx は捨てる。

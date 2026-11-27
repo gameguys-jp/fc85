@@ -291,6 +291,42 @@ fn midi_bytes_go_through_the_acia_with_their_times() {
 }
 
 #[test]
+fn the_json_audio_in_method_feeds_the_rca_input() {
+    // DR-129：Audio IN はミキサに利得 1 で入る。±0.5 V の正弦波は LINE OUT で ±8192 の 0.99 倍
+    let mut s = Session::with_machine(
+        Machine::new(Config {
+            boot: Some(midi_echo_rom()),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    call(&mut s, "run", json!({"frames": 1}));
+    call(&mut s, "audio", json!({}));
+    let r = call(
+        &mut s,
+        "audio_in",
+        json!({"tone": {"hz": 1000, "amp": 0.5, "ms": 100}, "samples": [100, -100]}),
+    );
+    assert_eq!(r["queued"], 4801);
+    assert_eq!(r["pending"], 4801);
+    call(&mut s, "run", json!({"frames": 3}));
+    let a = call(&mut s, "audio", json!({}));
+    let peak = a["peak"][0].as_u64().unwrap();
+    assert!((7900..=8300).contains(&peak), "{a}");
+    assert_eq!(a["peak"][1], a["peak"][0]);
+    let r = call(&mut s, "audio_in", json!({"clear": true}));
+    assert!(r["pending"].as_u64().unwrap() == 0, "{r}");
+    for bad in [
+        json!({"samples": [1]}),
+        json!({"samples": [40000, 0]}),
+        json!({"tone": {"hz": 1000, "ms": 5000}}),
+        json!({"path": "no-such.wav"}),
+    ] {
+        assert!(s.call("audio_in", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn the_json_midi_method_sends_and_takes_bytes() {
     let mut s = Session::with_machine(
         Machine::new(Config {

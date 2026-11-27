@@ -657,6 +657,64 @@ fn doc_bus_timeout_counts_from_as() {
 }
 
 #[test]
+fn audio_in_reaches_the_mixer_and_the_doc_ad() {
+    // DOC のレジスタ n は 0x210000＋2n（上位のレーン）。0xE2 が A/D
+    const DOC_ADC: u32 = 0x21_0000 + 2 * 0xE2;
+    // DR-129：Audio IN の ±32768 が RCA の ±1 V。ミキサには利得 1（反転）で入り、DOC の A/D には (L＋R)/2 を
+    // 1.25 V の中央に寄せて入る（0〜2.5 V を 256 に分ける）。0xE2 は前の変換の結果を返して次を始める
+    let mut c = Cpu::new();
+    c.sys.ports.doc = true;
+    let now = c.sys.now();
+    c.sys.ports.doc_board.set_phase(now, 0);
+    // 何もつないでいなければ、A/D の入力は中央（128）
+    c.rd(DOC_ADC, Size::Byte);
+    c.idle(400);
+    assert_eq!(c.rd(DOC_ADC, Size::Byte).data(), Some(128));
+    // 1 kHz、±0.5 V を L だけに。A/D には ±0.25 V（1.0〜1.5 V で 102〜153）
+    let tone: Vec<(i16, i16)> = fc85_board::wav::tone(1000.0, 0.5, 200)
+        .into_iter()
+        .map(|(l, _)| (l, 0))
+        .collect();
+    c.sys.audio_in(&tone);
+    assert_eq!(c.sys.audio_in_pending(), 9600);
+    let (mut lo, mut hi) = (255, 0);
+    for _ in 0..2000 {
+        c.idle(400);
+        let v = c.rd(DOC_ADC, Size::Byte).data().unwrap();
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    assert!((101..=104).contains(&lo), "{lo}");
+    assert!((151..=154).contains(&hi), "{hi}");
+    // LINE OUT：L は ±0.5 V の反転（出力の分圧で 0.99 倍。±8111）、R は 0
+    let out = &c.sys.line_out[c.sys.line_out.len() - 2400..];
+    let peak = |ch: usize| {
+        out.iter()
+            .map(|s| i32::from(if ch == 0 { s.0 } else { s.1 }).abs())
+            .max()
+            .unwrap()
+    };
+    assert!((7900..=8300).contains(&peak(0)), "{}", peak(0));
+    assert!(peak(1) < 50, "{}", peak(1));
+    // 入力を捨てると無音に戻り、A/D は中央に寄る
+    c.sys.audio_in_clear();
+    c.idle(80_000);
+    c.rd(DOC_ADC, Size::Byte);
+    c.idle(400);
+    let v = c.rd(DOC_ADC, Size::Byte).data().unwrap();
+    assert!((127..=128).contains(&v), "{v}");
+}
+
+#[test]
+fn audio_in_keeps_at_most_one_second() {
+    let mut s = System::new();
+    s.audio_in(&vec![(1, 1); 30_000]);
+    s.audio_in(&vec![(2, 2); 30_000]);
+    assert_eq!(s.audio_in_pending(), fc85_board::console::LINE_IN_KEEP);
+    assert_eq!(s.line_in_dropped, 12_000);
+}
+
+#[test]
 fn snapshot_round_trip() {
     let mut c = Cpu::new();
     c.acrtc_case_b();

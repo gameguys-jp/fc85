@@ -1120,6 +1120,27 @@ impl Machine {
         self.console.sys.midi_receive(at, bytes);
     }
 
+    /// Audio IN（背面の RCA）に音を足す（DR-129）。48 kHz の L・R で、±32768 が ±1 V。今から順に 1 標本ずつ
+    /// 使われ、ミキサ（LINE OUT）と DOC の A/D の段に入る。溜まりは 1 秒まで（古いものを捨てる）。
+    pub fn audio_in(&mut self, samples: &[(i16, i16)]) {
+        self.console.sys.audio_in(samples);
+    }
+
+    /// まだ使っていない Audio IN の標本を捨てる。
+    pub fn audio_in_clear(&mut self) {
+        self.console.sys.audio_in_clear();
+    }
+
+    /// まだ使っていない Audio IN の標本の数。
+    pub fn audio_in_pending(&self) -> usize {
+        self.console.sys.audio_in_pending()
+    }
+
+    /// 溜まりの上限を超えて捨てた Audio IN の標本の数。
+    pub fn audio_in_dropped(&self) -> u64 {
+        self.console.sys.line_in_dropped
+    }
+
     /// MIDI OUT：ACIA が送り終えた byte を古い順に取り出す。時刻は送り終えた µs（`time_us` と同じ数え方）。
     pub fn take_midi_out(&mut self) -> Vec<MidiByte> {
         self.console

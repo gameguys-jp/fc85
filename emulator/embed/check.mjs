@@ -54,6 +54,13 @@ m.midiIn([0x90, 60, 100]);
 m.runFrames(1);
 out.midi_ring = Array.from(m.peek(0, 0x100612, 4 + 8));
 out.midi_out_bios = m.midiOut().bytes.length;
+// Audio IN（DR-129）：1 kHz ののこぎり波（±24000）を L に入れて 2 フレーム（test_embed.py と同じ）
+const saw = new Int16Array(2 * 1600);
+for (let i = 0; i < 1600; i++) saw[2 * i] = ((i % 48) - 24) * 1000;
+m.audio();
+out.audio_in_pending = m.audioIn(saw);
+m.runFrames(2);
+out.audio_in = fnv(bytesOf(m.audio()));
 // 来た byte を送り返す小さな Boot ROM：送り終えた時刻が付く
 const echo = new Uint8Array(0x10000).fill(0xff);
 echo.set([0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]);

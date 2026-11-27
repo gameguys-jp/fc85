@@ -162,10 +162,21 @@ pub struct System {
     pub midi_out: VecDeque<(u64, u8)>,
     #[serde(skip)]
     pub midi_out_dropped: u64,
+    /// ホストの Audio IN（48 kHz、L・R、±32768 が RCA の ±`LIN_V_FS` V）。LINE OUT の標本と同じ刻みで
+    /// 1 標本ずつ取り、4 刻みの間保つ。空なら無音。`LINE_IN_KEEP` を超えたら古いものを捨てて数える。
+    /// 外の機器の側の待ちなので、保存には入れない（DR-129）。
+    #[serde(skip)]
+    line_in: VecDeque<(i16, i16)>,
+    #[serde(skip)]
+    line_in_now: Option<(i16, i16)>,
+    #[serde(skip)]
+    pub line_in_dropped: u64,
 }
 
 /// 取り出されない MIDI OUT の byte を溜める上限（31.25 kbit/s で約 1.3 秒）。
 pub const MIDI_OUT_KEEP: usize = 4096;
+/// まだ使っていない Audio IN の標本を溜める上限（48 kHz で 1 秒）。
+pub const LINE_IN_KEEP: usize = 48_000;
 
 impl Default for System {
     fn default() -> Self {
@@ -264,6 +275,9 @@ impl System {
             midi_line: VecDeque::new(),
             midi_out: VecDeque::new(),
             midi_out_dropped: 0,
+            line_in: VecDeque::new(),
+            line_in_now: None,
+            line_in_dropped: 0,
         }
     }
 
@@ -406,6 +420,27 @@ impl System {
     /// まだ受信の線に渡していないホストの MIDI IN の byte の数。
     pub fn midi_line_pending(&self) -> usize {
         self.midi_line.len()
+    }
+
+    /// ホストの Audio IN の標本（48 kHz、L・R）を後ろに足す（DR-129）。次の LINE OUT の標本の刻みから
+    /// 1 つずつ使う。溜まりすぎたら古いものを捨てる。
+    pub fn audio_in(&mut self, samples: &[(i16, i16)]) {
+        self.line_in.extend(samples.iter().copied());
+        let over = self.line_in.len().saturating_sub(LINE_IN_KEEP);
+        if over > 0 {
+            self.line_in.drain(..over);
+            self.line_in_dropped += over as u64;
+        }
+    }
+
+    /// まだ使っていない Audio IN の標本の数。
+    pub fn audio_in_pending(&self) -> usize {
+        self.line_in.len()
+    }
+
+    /// まだ使っていない Audio IN の標本を捨てる（今の標本の残りの刻みは続く）。
+    pub fn audio_in_clear(&mut self) {
+        self.line_in.clear();
     }
 
     // ------------------------------------------------------------------ 割込み
@@ -1053,6 +1088,14 @@ impl System {
             let dac = [a.dac[0].take(t), a.dac[1].take(t)];
             let da = a.da.take(t);
             let span = TICK as f64;
+            // Audio IN：48 kHz の標本の頭の刻みで次を取る（DR-129）
+            if a.starts_sample() {
+                self.line_in_now = self.line_in.pop_front();
+            }
+            let line = self.line_in_now.map(|(l, r)| {
+                let k = analog::parts::LIN_V_FS / 32768.0;
+                [f64::from(l) * k, f64::from(r) * k]
+            });
             let inp = analog::Inputs {
                 doc: if p.doc {
                     [doc[0] as f64 / span, doc[1] as f64 / span]
@@ -1062,9 +1105,14 @@ impl System {
                 dac: [dac[0] as f64 / span, dac[1] as f64 / span],
                 dac_on: !p.doc,
                 da: da as f64 / span,
+                line,
             };
             if let Some(s) = a.tick(&inp) {
                 self.line_out.push(s);
+            }
+            // DOC 子基板の A/D の段の出力を、A/D の入力の線に（変換の終わりに DOC が取る）
+            if a.line.used {
+                p.doc_board.doc.set_ad_input(a.line.code);
             }
         }
     }

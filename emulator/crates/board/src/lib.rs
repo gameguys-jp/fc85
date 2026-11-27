@@ -33,3 +33,4 @@ pub mod sync;
 pub mod tv;
 pub mod vclock;
 pub mod video;
+pub mod wav;

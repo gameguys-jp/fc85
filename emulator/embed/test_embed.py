@@ -91,6 +91,7 @@ class Native:
             "fc85_time_us": ([c.c_void_p], c.c_uint64),
             "fc85_midi_in": ([c.c_void_p, c.c_char_p, c.c_size_t, c.c_uint32], c.c_int32),
             "fc85_midi_out": ([c.c_void_p, c.c_char_p, c.POINTER(c.c_uint64), c.c_size_t], c.c_int32),
+            "fc85_audio_in": ([c.c_void_p, c.POINTER(c.c_int16), c.c_size_t], c.c_int32),
         }
         for name, (args, res) in sig.items():
             f = getattr(lib, name)
@@ -222,6 +223,12 @@ class EmbedTest(unittest.TestCase):
         n.check(n.lib.fc85_peek(n.m, 0, 0x100612, buf, 12), "fc85_peek")
         out["midi_ring"] = list(buf.raw)
         out["midi_out_bios"] = len(n.midi_out()[0])
+        # Audio IN（DR-129）：1 kHz ののこぎり波（±24000）を L に入れて 2 フレーム（check.mjs と同じ）
+        saw = (ctypes.c_int16 * 3200)(*[((i // 2) % 48 - 24) * 1000 if i % 2 == 0 else 0 for i in range(3200)])
+        n.audio()
+        out["audio_in_pending"] = n.check(n.lib.fc85_audio_in(n.m, saw, 1600), "fc85_audio_in")
+        n.check(n.lib.fc85_run_frames(n.m, 2), "fc85_run_frames")
+        out["audio_in"] = fnv(n.audio())
         e = Native(n.lib)
         e.create(midi_echo_rom(), b"")
         e.check(e.lib.fc85_run_frames(e.m, 1), "fc85_run_frames")
@@ -253,6 +260,7 @@ class EmbedTest(unittest.TestCase):
         self.assertEqual((head - tail) % 64, 3, ring)
         self.assertEqual([ring[4 + (tail + i) % 64] for i in range(3)], [0x90, 60, 100], ring)
         self.assertEqual(native["midi_out_bios"], 0)
+        self.assertEqual(native["audio_in_pending"], 1600)
         echo = native["midi_echo"]
         self.assertEqual(echo["bytes"], [0x90, 64, 1, 0x80, 64, 0])
         self.assertTrue(640 <= echo["us"][0] < 660, echo)
@@ -274,7 +282,7 @@ class EmbedTest(unittest.TestCase):
         self.assertEqual(web["rgba_len"], 256 * 192 * 4)
         self.assertTrue(web["rgba_ok"], "fc85_screen_rgba が fc85_screen の並べ替えになっていない（WebAssembly）")
         for k in ("frame", "screen", "audio", "state_len", "after", "peek", "pc", "midi_ring", "midi_out_bios",
-                  "midi_echo"):
+                  "midi_echo", "audio_in_pending", "audio_in"):
             self.assertEqual(web[k], native[k], f"{k} が C の ABI と WebAssembly で違う")
         self.assertEqual(web["midi_assembled"],
                          [[0x90, 60, 100], [0xF8], [0x90, 62, 90], [0xC1, 5], [0xF0, 0x7E, 0xF7], [0xF2, 0x10, 0x20]])
