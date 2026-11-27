@@ -45,6 +45,7 @@
 | ホストを動かす | `cargo run --release -p fc85-host -- [--boot boot.bin] [--char char.bin] [--cart cart.bin]` |
 | 基板の速さ | `cargo run --release -p fc85-board --example bench`（CPU なしで仮想機の 1 秒を進める時間） |
 | 窓口を動かす | `cargo run --release -p fc85-api -- [--mcp] [--cart cart.bin]`（標準入出力。手順は sdk/docs/emulator-api.md） |
+| Web の GUI | `cargo run --release -p fc85-api -- --http [--cart cart.bin]` → http://127.0.0.1:8085/（DR-101） |
 | 書式 | `cargo fmt --all` |
 | lint | `cargo clippy --all-targets -- -D warnings` |
 
@@ -845,3 +846,5 @@ SST と合わない 5735 件の内訳（§03 の [V] の行）：
 | MCP | `the_mcp_server_lists_the_tools_and_returns_images` | `initialize` で相手の版を返す、通知には答えない、`tools/list` の引数が object の Schema、`screenshot` が image の内容、誤りは `isError`、知らない手順は -32601 | 合格 |
 | PNG・WAV・base64 | `encode` の単体試験 | PNG の各チャンクの CRC、zlib を戻した画素が元と同じ。WAV の大きさ。base64 は RFC 4648 の例と往復 | 合格 |
 | ラベル | `symbols` の単体試験 | m68kasm のリストの表から名前と番地、近いラベル＋差（`start.clr+$4`）、I/O の番地には付けない、`ラベル±差` の番地 | 合格 |
+| Web の GUI の口（DR-101） | `the_web_gui_serves_the_page_the_api_and_frames_only_to_this_host`、`http` の単体試験 | ページ、`/api` の info、`/frame` の PNG と `run` の答え。ほかの名前の Host は 403、知らない道は 404。見出しと本文の読み方、Origin が違えば断る | 合格 |
+| Web の GUI（手動） | ブラウザで SAMPLE 1 | 約 59.8 フレーム毎秒で進む（`/frame` の 1 回は約 20 ms）。START で始まり、矢印で自機が動き、点が入る。止める・1 フレーム・保存と復元・ベンド点の命令が効く | 合格 |

@@ -1,6 +1,8 @@
-//! 窓口（DR-097）の試験。Boot ROM を使う試験は、`py firmware/boot/build.py` のビルド結果がなければ飛ばす
-//! （board 層の console_boot.rs と同じ）。
+//! 窓口（DR-097、DR-101）の試験。Boot ROM を使う試験は、`py firmware/boot/build.py` のビルド結果がなければ
+//! 飛ばす（board 層の console_boot.rs と同じ）。
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
 use fc85_api::protocol::{Session, handle_line};
@@ -166,6 +168,56 @@ fn the_json_protocol_runs_peeks_and_restores_slots() {
     .unwrap();
     let png = fc85_api::encode::unbase64(shot["result"]["png_base64"].as_str().unwrap()).unwrap();
     assert_eq!(&png[..4], b"\x89PNG");
+}
+
+/// 1 つの要求を送り、(状態の番号, 本文) を返す（Connection: close）。
+fn http(port: u16, host: &str, method: &str, path: &str, body: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let status = out[9..12].parse().unwrap();
+    let body = out
+        .split_once("\r\n\r\n")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
+    (status, body)
+}
+
+#[test]
+fn the_web_gui_serves_the_page_the_api_and_frames_only_to_this_host() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || fc85_api::http::serve(listener, session()));
+    let host = format!("127.0.0.1:{port}");
+    let (st, page) = http(port, &host, "GET", "/", "");
+    assert_eq!(st, 200);
+    assert!(page.contains("<canvas"));
+    let (st, info) = http(port, &host, "POST", "/api", r#"{"method":"info"}"#);
+    assert_eq!(st, 200);
+    let v: Value = serde_json::from_str(&info).unwrap();
+    assert_eq!(v["result"]["api_version"], fc85_api::API_VERSION);
+    let (st, f) = http(
+        port,
+        &host,
+        "POST",
+        "/frame",
+        r#"{"pad":"START","frames":2}"#,
+    );
+    assert_eq!(st, 200);
+    let v: Value = serde_json::from_str(&f).unwrap();
+    let png = fc85_api::encode::unbase64(v["png"].as_str().unwrap()).unwrap();
+    assert_eq!(&png[..4], b"\x89PNG");
+    assert!(v["report"]["frame"].is_number());
+    // ほかの名前の Host（DNS の付け替え）と、知らない道
+    assert_eq!(http(port, "evil.example", "GET", "/", "").0, 403);
+    assert_eq!(http(port, &host, "GET", "/nothing", "").0, 404);
 }
 
 #[test]

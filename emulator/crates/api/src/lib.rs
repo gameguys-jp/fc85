@@ -11,6 +11,7 @@
 //! 止める条件だけを足す）。
 
 pub mod encode;
+pub mod http;
 pub mod mcp;
 pub mod protocol;
 pub mod symbols;

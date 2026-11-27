@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fc85 エミュレータ</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #d9d9de;
+    --accent: #2f6fdb; --bar: #2f6fdb; --warn: #c0392b; --screen: #000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f23; --ink: #ececef; --muted: #9a9aa3; --line: #34343a;
+      --accent: #6c9cff; --bar: #6c9cff; --warn: #ff6b5e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 system-ui, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
+  main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr); gap: 16px;
+    max-width: 1200px; margin: 0 auto; padding: 16px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  h1 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
+  .screen { background: var(--screen); border-radius: 6px; padding: 8px; }
+  canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated;
+    image-rendering: crisp-edges; outline: none; }
+  canvas:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 12px; }
+  section h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px;
+    letter-spacing: .04em; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px;
+    background: var(--bg); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  input[type=text] { font: inherit; flex: 1; min-width: 0; padding: 4px 6px;
+    border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 7px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--bar); }
+  pre { margin: 0; font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; }
+  #msg { color: var(--warn); min-height: 1.5em; }
+  .help { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>fc85 エミュレータ</h1>
+    <div class="screen"><canvas id="screen" width="256" height="192" tabindex="0"></canvas></div>
+    <p class="help">矢印・Z（A）・X（B）・C（C）・Enter（START）が釦。画面を一度押すとキーを受ける。速さは手元のプログラムが仮想機を回す速さに合わせる（約 59.92 フレーム毎秒）。</p>
+    <div id="msg"></div>
+  </div>
+  <div>
+    <section>
+      <h2>動かす</h2>
+      <div class="row">
+        <button id="run" class="on">動かす</button>
+        <button id="step">1 フレーム</button>
+        <button id="reset">リセット</button>
+        <button id="sound">音を出す</button>
+        <button id="shot">画面を保存</button>
+      </div>
+      <div class="row">
+        <input id="cart" type="text" placeholder="カートリッジの道（例 ../sdk/samples/game/build/game.bin）">
+        <button id="load">読む</button>
+      </div>
+      <div class="row">
+        <button id="save">状態を保存</button>
+        <button id="restore">保存に戻す</button>
+      </div>
+    </section>
+    <section>
+      <h2>状態</h2>
+      <div class="kv">
+        <span>フレーム</span><span id="frame">—</span>
+        <span>速さ</span><span id="fps">—</span>
+        <span>PC</span><span id="pc">—</span>
+        <span>モード</span><span id="mode">—</span>
+        <span>バスエラー</span><span id="berr">0</span>
+        <span>テレビ</span><span id="tv">—</span>
+        <span>ベンド点</span><span id="bends">—</span>
+      </div>
+    </section>
+    <section>
+      <h2>1 フレームの予算（直近）</h2>
+      <div class="kv">
+        <span>CPU</span><span><div class="bar"><i id="b-cpu"></i></div></span>
+        <span>ACRTC</span><span><div class="bar"><i id="b-acrtc"></i></div></span>
+        <span>Fabric</span><span><div class="bar"><i id="b-fabric"></i></div></span>
+      </div>
+    </section>
+    <section>
+      <h2>ベンド点</h2>
+      <div class="row">
+        <button id="bendmode">Bend モード</button>
+      </div>
+      <div class="row">
+        <input id="bend" type="text" placeholder="例 clock video 18000000">
+        <button id="bendgo">実行</button>
+      </div>
+    </section>
+    <section>
+      <h2>68000 のレジスタ</h2>
+      <pre id="regs">—</pre>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const canvas = $("screen");
+const ctx = canvas.getContext("2d");
+const RATE = 59.92;
+const KEYS = { ArrowUp: 0x01, ArrowDown: 0x02, ArrowLeft: 0x04, ArrowRight: 0x08,
+               KeyZ: 0x10, KeyX: 0x20, KeyC: 0x40, Enter: 0x80 };
+const st = { running: true, busy: false, timer: null, pad: 0, audio: null, nextT: 0, t0: 0, done: 0,
+             berr: 0, fpsT: 0, fpsN: 0, sinceRegs: 0 };
+
+const hex = (v, n) => "$" + (v >>> 0).toString(16).toUpperCase().padStart(n, "0");
+function say(text) { $("msg").textContent = text || ""; }
+
+async function api(method, params) {
+  const r = await fetch("/api", { method: "POST", body: JSON.stringify({ method, params: params || {} }) });
+  const v = await r.json();
+  if (v.error) throw new Error(v.error.message);
+  return v.result;
+}
+
+function draw(b64) {
+  const img = new Image();
+  img.onload = () => ctx.drawImage(img, 0, 0);
+  img.src = "data:image/png;base64," + b64;
+}
+
+function play(b64) {
+  const a = st.audio;
+  if (!a || !b64) return;
+  const bin = atob(b64);
+  const n = bin.length >> 2;
+  if (!n) return;
+  const buf = a.createBuffer(2, n, 48000);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    let l = bin.charCodeAt(o) | (bin.charCodeAt(o + 1) << 8);
+    let r = bin.charCodeAt(o + 2) | (bin.charCodeAt(o + 3) << 8);
+    if (l >= 32768) l -= 65536;
+    if (r >= 32768) r -= 65536;
+    L[i] = l / 32768; R[i] = r / 32768;
+  }
+  const now = a.currentTime;
+  if (st.nextT < now + 0.02) st.nextT = now + 0.06;
+  if (st.nextT > now + 0.3) return;            // 遅れが積もったら捨てて追いつく
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  src.connect(a.destination);
+  src.start(st.nextT);
+  st.nextT += n / 48000;
+}
+
+function bar(id, v) { $(id).style.width = Math.round(Math.max(0, Math.min(1, v)) * 100) + "%"; }
+
+function show(rep, mode) {
+  $("frame").textContent = rep.frame;
+  $("pc").textContent = hex(rep.pc, 6) + (rep.pc_label ? "  " + rep.pc_label : "");
+  $("mode").textContent = mode === "bend" ? "Bend" : "通常";
+  $("bendmode").classList.toggle("on", mode === "bend");
+  st.berr += rep.bus_errors;
+  $("berr").textContent = st.berr + (rep.last_bus_error
+    ? "（最後は " + hex(rep.last_bus_error.addr, 6) + (rep.last_bus_error.label ? " " + rep.last_bus_error.label : "") + "）" : "");
+  $("tv").textContent = rep.tv.replace(/^テレビ：/, "");
+  bar("b-cpu", rep.budget.cpu_busy);
+  bar("b-acrtc", rep.budget.acrtc_busy);
+  bar("b-fabric", rep.budget.fabric_busy);
+  if (rep.stop === "halted") say("68000 が止まった（二重バスフォルト）。リセットで戻る");
+}
+
+async function regs() {
+  try {
+    const r = await api("regs");
+    const d = r.d.map((v, i) => "D" + i + " " + hex(v, 8)), a = r.a.map((v, i) => "A" + i + " " + hex(v, 8));
+    let s = "";
+    for (let i = 0; i < 8; i++) s += d[i] + "  " + a[i] + "\n";
+    s += "PC " + hex(r.pc, 6) + (r.pc_label ? " " + r.pc_label : "") + "\nSR " + hex(r.sr, 4) + "  " + r.state;
+    $("regs").textContent = s;
+  } catch (e) { say(e.message); }
+}
+
+async function frame(n) {
+  st.busy = true;
+  try {
+    const r = await fetch("/frame", { method: "POST", body: JSON.stringify({ pad: st.pad, frames: n }) }).then((r) => r.json());
+    if (r.error) throw new Error(r.error);
+    draw(r.png); play(r.pcm); show(r.report, r.mode);
+    st.fpsN += r.report.frames_run;
+    st.sinceRegs += n;
+    if (st.sinceRegs >= 20 || !st.running) { st.sinceRegs = 0; regs(); }
+  } catch (e) { say(e.message); st.running = false; $("run").classList.remove("on"); }
+  st.busy = false;
+}
+
+// 進める速さは時刻で決める（requestAnimationFrame は窓が隠れると間引かれるので使わない）
+function tick() {
+  st.timer = null;
+  if (!st.running) return;
+  const now = performance.now();
+  if (now - st.fpsT >= 1000) {
+    $("fps").textContent = st.fpsT ? (st.fpsN * 1000 / (now - st.fpsT)).toFixed(1) + " フレーム/秒" : "—";
+    st.fpsT = now; st.fpsN = 0;
+  }
+  let due = Math.floor((now - st.t0) * RATE / 1000) - st.done;
+  if (due > 6) { st.done += due - 1; due = 1; }  // 遅れすぎたら飛ばす
+  if (due <= 0) {
+    st.timer = setTimeout(tick, Math.max(1, (st.done + 1) * 1000 / RATE - (now - st.t0)));
+    return;
+  }
+  const n = Math.min(due, 3);
+  st.done += n;
+  frame(n).then(() => { if (!st.timer) st.timer = setTimeout(tick, 0); });
+}
+
+function restart() {
+  st.t0 = performance.now(); st.done = 0;
+  if (st.running && !st.timer && !st.busy) st.timer = setTimeout(tick, 0);
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const b = KEYS[e.code];
+  if (b) { st.pad |= b; e.preventDefault(); }
+});
+window.addEventListener("keyup", (e) => {
+  const b = KEYS[e.code];
+  if (b) { st.pad &= ~b; e.preventDefault(); }
+});
+window.addEventListener("blur", () => { st.pad = 0; });
+
+$("run").onclick = () => {
+  st.running = !st.running;
+  $("run").classList.toggle("on", st.running);
+  $("run").textContent = st.running ? "動かす" : "止めている";
+  if (st.running) restart(); else regs();
+};
+$("step").onclick = () => { if (st.running) $("run").onclick(); if (!st.busy) frame(1); };
+$("reset").onclick = async () => { try { await api("reset"); st.berr = 0; say(""); restart(); regs(); } catch (e) { say(e.message); } };
+$("sound").onclick = () => {
+  if (st.audio) { st.audio.close(); st.audio = null; $("sound").classList.remove("on"); return; }
+  st.audio = new AudioContext(); st.nextT = 0; $("sound").classList.add("on");
+};
+$("shot").onclick = () => canvas.toBlob((b) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b); a.download = "fc85-" + $("frame").textContent + ".png"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("load").onclick = async () => {
+  const p = $("cart").value.trim();
+  try {
+    const r = await api("load", p ? { cart: p } : {});
+    st.berr = 0; restart();
+    say(r.warning || "");
+    try { localStorage.setItem("fc85.cart", p); } catch (_) {}
+  } catch (e) { say(e.message); }
+};
+$("save").onclick = async () => { try { await api("save_state", { slot: "gui" }); say(""); } catch (e) { say(e.message); } };
+$("restore").onclick = async () => { try { await api("load_state", { slot: "gui" }); restart(); regs(); } catch (e) { say(e.message); } };
+$("bendmode").onclick = async () => {
+  try { const r = await api("bend", { cmd: "mode toggle" }); $("bends").textContent = r.summary; } catch (e) { say(e.message); }
+};
+$("bendgo").onclick = async () => {
+  try { const r = await api("bend", { cmd: $("bend").value }); say(""); $("bends").textContent = r.summary; } catch (e) { say(e.message); }
+};
+canvas.addEventListener("click", () => canvas.focus());
+try { $("cart").value = localStorage.getItem("fc85.cart") || ""; } catch (_) {}
+restart();
+canvas.focus();
+</script>
+</body>
+</html>
