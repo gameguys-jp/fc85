@@ -514,11 +514,11 @@ pub const DOC_POINTER: u32 = 0x210100;
 pub const DOC_CONTROL: u32 = 0x210140;
 /// bit 6 BS、bit 5–3 テーブルの大きさ T、bit 2–0 分解能 R（DOC+2*0xC0）
 pub const DOC_SIZE: u32 = 0x210180;
-/// 読むと割込みの要求を 1 つ取る（BIOS だけが読む）（DOC+2*0xE0）
+/// 読むと割込みの要求を 1 つ取る（DOC の割込みを受ける処理だけが、1 回につき 1 回読む。DR-123）（DOC+2*0xE0）
 pub const DOC_IRQ: u32 = 0x2101C0;
 /// (N−1)×2。書くと走査を始める（DOC+2*0xE1）
 pub const DOC_OSC_ENABLE: u32 = 0x2101C2;
-/// 読むと A/D の変換を始める（BIOS だけが読む）（DOC+2*0xE2）
+/// 読むと A/D の変換を始め、前の変換の結果を返す。読んで 30 µs 以上待ってから読み直す（DR-123）（DOC+2*0xE2）
 pub const DOC_ADC: u32 = 0x2101C4;
 
 // オシレータの並び

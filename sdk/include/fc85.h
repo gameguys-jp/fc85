@@ -14,7 +14,8 @@
  *   レジスタがあれば、そのレジスタを読み書きする）。
  * - ACRTC の AR/SR とデータポート、DOC の窓には、CLR・TAS・BSET などの読み書き一体の命令を使わない。
  * - ACRTC の FIFO には、SR の WFR（書込み）・RFR（読出し）を確かめてからアクセスする。
- * - DOC の 0xE0・0xE2 は読むと状態が変わる。BIOS の決まった処理だけが読む。
+ * - DOC の 0xE0・0xE2 は読むと状態が変わる。0xE0 は DOC の割込みを受ける処理（BIOS の既定の処理か、ベクタ 28 を
+ *   書き換えたアプリ）だけが割込み 1 回につき 1 回読み、0xE2 は A/D 変換の手順でだけ読む（DR-123）。
  * 書式：名前と値は fc85.inc と同じ。REG_名前 はそのレジスタ（volatile のポインタを通した左辺値）。
  * 並び（PALETTE、AXIS0、DOC のオシレータ、DSP_PROGRAM）は REG_名前(n)、Data Fabric のチャネルの
  * レジスタは REG_名前(ch)。8 bit の装置は上位バイトレーンの偶数番地を 1 byte で読み書きする（FC85_IO8）。
@@ -229,11 +230,11 @@
 #define REG_DOC_CONTROL(n)     FC85_IO8(DOC_CONTROL + 2UL * (n))
 #define DOC_SIZE               (DOC+2*0xC0)   /* bit 6 BS、bit 5–3 テーブルの大きさ T、bit 2–0 分解能 R */
 #define REG_DOC_SIZE(n)        FC85_IO8(DOC_SIZE + 2UL * (n))
-#define DOC_IRQ                (DOC+2*0xE0)   /* 読むと割込みの要求を 1 つ取る（BIOS だけが読む） */
+#define DOC_IRQ                (DOC+2*0xE0)   /* 読むと割込みの要求を 1 つ取る（DOC の割込みを受ける処理だけが、1 回につき 1 回読む。DR-123） */
 #define REG_DOC_IRQ            FC85_IO8(DOC_IRQ)
 #define DOC_OSC_ENABLE         (DOC+2*0xE1)   /* (N−1)×2。書くと走査を始める */
 #define REG_DOC_OSC_ENABLE     FC85_IO8(DOC_OSC_ENABLE)
-#define DOC_ADC                (DOC+2*0xE2)   /* 読むと A/D の変換を始める（BIOS だけが読む） */
+#define DOC_ADC                (DOC+2*0xE2)   /* 読むと A/D の変換を始め、前の変換の結果を返す。読んで 30 µs 以上待ってから読み直す（DR-123） */
 #define REG_DOC_ADC            FC85_IO8(DOC_ADC)
 
 /* オシレータの並び */
