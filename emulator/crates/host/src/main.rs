@@ -14,7 +14,7 @@
 //! [--pad-script FILE] [--doc-clock HZ] [--dsp-clock HZ] [--adpcm-clock HZ]
 //! [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC]
 //! [--bend CMD] [--bend-script FILE] [--audio-tap digital|line] [--doc-sig both|one] [--audio-in FILE.wav]
-//! [--audio-in-device N|default] [--audio-list]`
+//! [--audio-in-device N|default] [--audio-list] [--no-gamepad]`
 //!
 //! ベンド点（仕様書 §11、DR-065）は `--bend CMD` で設定する。CMD は `Bends::command` の形：
 //! `mode normal|bend|toggle`、`char A1=A2,A2=A1,D6=0,D2=Z`、`clock doc|dsp|adpcm|audio HZ|off`、
@@ -33,8 +33,11 @@
 //! `--audio-tap` は鳴らす音と WAV に書く音：`line`（既定）はアナログの段の LINE OUT（analog.rs）、`digital` は
 //! チップの出力のデジタルの和（DR-054。`sdk/samples/dsp/verify_wav.py` が標本ごとに照合するのはこちら）。
 //! `--audio-in` は背面の Audio IN に WAV を、`--audio-in-device` は録音の装置の音を入れる（DR-129。audio_in.rs）。
+//! ゲームパッドは gilrs で読み、1 台目を PORT_A（キーボードと OR）、2 台目を PORT_B にする。`--no-gamepad` で
+//! 読まない（DR-132。gamepad.rs）。
 
 mod audio_in;
+mod gamepad;
 mod midi;
 
 use std::collections::VecDeque;
@@ -53,7 +56,7 @@ const VIEW_Y: usize = 19;
 const VIEW_W: usize = 320;
 const VIEW_H: usize = 240;
 
-/// PORT_A のビット（DR-055）。
+/// PORT_A・PORT_B のビット（DR-055）。
 const PAD_UP: u16 = 0x01;
 const PAD_DOWN: u16 = 0x02;
 const PAD_LEFT: u16 = 0x04;
@@ -91,6 +94,8 @@ struct Args {
     /// Audio IN の源（DR-129）：WAV のパスか、録音の装置（`default` か番号）。
     audio_in: Option<String>,
     audio_in_device: Option<String>,
+    /// ゲームパッドを読む（DR-132）。
+    gamepad: bool,
 }
 
 fn parse_args() -> Args {
@@ -114,6 +119,7 @@ fn parse_args() -> Args {
         line: true,
         audio_in: None,
         audio_in_device: None,
+        gamepad: true,
     };
     let mut it = std::env::args().skip(1);
     while let Some(s) = it.next() {
@@ -127,6 +133,7 @@ fn parse_args() -> Args {
             }
             "--cart" => a.cart = it.next(),
             "--no-doc" => a.doc = false,
+            "--no-gamepad" => a.gamepad = false,
             "--scale" => a.scale = it.next().and_then(|v| v.parse().ok()).unwrap_or(3),
             "--frames" => a.frames = it.next().and_then(|v| v.parse().ok()),
             "--headless" => a.headless = true,
@@ -176,7 +183,7 @@ fn parse_args() -> Args {
                      [--scale N] [--frames N] [--headless] [--dump out.ppm] [--dump-at F,F..] [--wav out.wav] [--trace N] \
                      [--pad-script FILE] [--doc-clock HZ] \
                      [--dsp-clock HZ] [--adpcm-clock HZ] [--audio-clock HZ] [--video-clock HZ] [--midi-list] [--midi-in N] [--midi-out N] [--char-bend SPEC] [--bend CMD] [--bend-script FILE] \
-                     [--audio-tap digital|line] [--doc-sig both|one] [--audio-in FILE.wav] [--audio-in-device N|default] [--audio-list]\n\
+                     [--audio-tap digital|line] [--doc-sig both|one] [--audio-in FILE.wav] [--audio-in-device N|default] [--audio-list] [--no-gamepad]\n\
                      --bend CMD：mode normal|bend|toggle、char A1=A2,D6=0,D2=Z、clock doc|dsp|adpcm|audio HZ|off、\
                      clock video HZ|0|off（映像系の 21.47727 MHz、0 で止める）、\
                      fifo dac|dsp_in|dsp_out|adpcm empty=0|1|open full=0|1|open、sig both|one、dram unit N|temp C|refresh hsync|auto、\
@@ -255,7 +262,7 @@ fn fmt_hz(f: f64) -> String {
 }
 
 /// 窓を開けたときに出すキーの案内。
-const KEY_HELP: &str = "キー：矢印、Z（A）、X（B）、C（C）、Enter（START）が釦、F2 で Bend モード、F3 でつまみ（クロック）を選ぶ、\
+const KEY_HELP: &str = "キー：矢印、Z（A）、X（B）、C（C）、Enter（START）が釦（ゲームパッドも読む）、F2 で Bend モード、F3 でつまみ（クロック）を選ぶ、\
 PageUp・PageDown（か ]・[）で回す（Shift で細かく）、Home（か \\）で戻す、F5 で保存、F9 で戻す、Esc で終わる";
 /// F3 で出す回し方の案内。
 const KNOB_HELP: &str =
@@ -825,6 +832,7 @@ fn main() {
     w.set_target_fps(0);
     let mut next = std::time::Instant::now();
     let mut midi = midi::Midi::open(a.midi_in, a.midi_out);
+    let mut pads = gamepad::Pads::open(a.gamepad);
     let mut frames = 0u64;
     let mut knob = 0usize;
     let mut knob_pos = [0.0f64; KNOBS.len()];
@@ -869,7 +877,8 @@ fn main() {
             turn_knob(&mut c, knob, &mut knob_pos[knob], None);
         }
         run_bend_script(&mut c, &a, frames);
-        c.sys.set_ports(pad(&w), 0);
+        let gp = pads.read();
+        c.sys.set_ports(pad(&w) | gp[0], gp[1]);
         // MIDI IN はフレームの頭に線に来たとする。MIDI OUT は仮想機の時刻の間隔のまま送る（DR-126）
         let start = c.cpu.clock;
         c.sys.midi_receive(start, &midi.take_received());

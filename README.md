@@ -80,6 +80,7 @@ cargo run --release -p fc85-host -- --cart ../sdk/samples/sampler/build/sampler.
 | 矢印 | 方向（PORT_A の上・下・左・右） |
 | Z・X・C | A・B・C |
 | Enter | START |
+| ゲームパッド | 1 台目は PORT_A（十字か左の棒、下の釦が A、右が B、左が C、START）、2 台目は PORT_B（DR-132。`--no-gamepad` で読まない） |
 | F5・F9 | 状態の保存・復元 |
 | Esc | 終わり |
 
